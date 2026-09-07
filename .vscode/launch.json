@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:TokenBar}",
+            "name": "Debug TokenBar",
+            "target": "TokenBar",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug TokenBar"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:TokenBar}",
+            "name": "Release TokenBar",
+            "target": "TokenBar",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release TokenBar"
+        }
+    ]
+}
