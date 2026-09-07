@@ -7,10 +7,11 @@ public enum LoginProvider {
     case aliyun
 
     var title: String {
+        let isZh = LocalizationManager.shared.effectiveLanguage == "zh"
         switch self {
-        case .claude: return "Claude Code 网页登录授权"
-        case .gemini: return "Gemini 网页登录授权"
-        case .aliyun: return "阿里云百炼控制台网页登录授权"
+        case .claude: return isZh ? "Claude Code 网页登录授权" : "Claude Code Web Login"
+        case .gemini: return isZh ? "Gemini 网页登录授权" : "Gemini Web Login"
+        case .aliyun: return isZh ? "阿里云百炼控制台网页登录授权" : "Aliyun Bailian Console Web Login"
         }
     }
 

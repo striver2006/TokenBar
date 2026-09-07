@@ -21,31 +21,39 @@ namespace TokenBar.Models
 
     public static class ProviderTypeExtensions
     {
-        public static string GetDisplayName(this ProviderType type) => type switch
+        public static string GetDisplayName(this ProviderType type)
         {
-            ProviderType.OpenAI => "OpenAI",
-            ProviderType.ClaudeCode => "Anthropic (Claude)",
-            ProviderType.Gemini => "Google Gemini",
-            ProviderType.DeepSeek => "DeepSeek (深度求索)",
-            ProviderType.Volcengine => "火山方舟 (字节跳动)",
-            ProviderType.Kimi => "KIMI (月之暗面)",
-            ProviderType.GLM => "GLM (智谱清言)",
-            ProviderType.AliyunBailian => "阿里云百炼 (Token Plan)",
-            _ => type.ToString()
-        };
+            var isZh = LocalizationManager.Instance.IsChinese;
+            return type switch
+            {
+                ProviderType.OpenAI => "OpenAI",
+                ProviderType.ClaudeCode => "Anthropic (Claude)",
+                ProviderType.Gemini => "Google Gemini",
+                ProviderType.DeepSeek => isZh ? "DeepSeek (深度求索)" : "DeepSeek",
+                ProviderType.Volcengine => isZh ? "火山方舟 (字节跳动)" : "Volcengine Ark",
+                ProviderType.Kimi => isZh ? "KIMI (月之暗面)" : "KIMI (Moonshot AI)",
+                ProviderType.GLM => isZh ? "GLM (智谱清言)" : "GLM (Zhipu AI)",
+                ProviderType.AliyunBailian => isZh ? "阿里云百炼 (Token Plan)" : "Aliyun Bailian (Token Plan)",
+                _ => type.ToString()
+            };
+        }
 
-        public static string GetShortName(this ProviderType type) => type switch
+        public static string GetShortName(this ProviderType type)
         {
-            ProviderType.OpenAI => "OpenAI",
-            ProviderType.ClaudeCode => "Anthropic",
-            ProviderType.Gemini => "Gemini",
-            ProviderType.DeepSeek => "DeepSeek",
-            ProviderType.Volcengine => "火山方舟",
-            ProviderType.Kimi => "KIMI",
-            ProviderType.GLM => "GLM",
-            ProviderType.AliyunBailian => "百炼",
-            _ => type.ToString()
-        };
+            var isZh = LocalizationManager.Instance.IsChinese;
+            return type switch
+            {
+                ProviderType.OpenAI => "OpenAI",
+                ProviderType.ClaudeCode => "Anthropic",
+                ProviderType.Gemini => "Gemini",
+                ProviderType.DeepSeek => "DeepSeek",
+                ProviderType.Volcengine => isZh ? "火山方舟" : "Ark",
+                ProviderType.Kimi => "KIMI",
+                ProviderType.GLM => "GLM",
+                ProviderType.AliyunBailian => isZh ? "百炼" : "Bailian",
+                _ => type.ToString()
+            };
+        }
 
         public static Color GetThemeColor(this ProviderType type) => type switch
         {

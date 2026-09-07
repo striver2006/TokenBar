@@ -51,10 +51,10 @@
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                         <Button x:Name="BtnSettings" Content="⚙" Width="26" Height="26" Margin="0,0,6,0"
                                 Background="Transparent" BorderThickness="0" FontSize="13" Foreground="#4B5563"
-                                Cursor="Hand" Click="BtnSettings_Click" ToolTip="偏好设置... / Settings"/>
+                                Cursor="Hand" Click="BtnSettings_Click" ToolTip="偏好设置..."/>
                         <Button x:Name="BtnClose" Content="✕" Width="26" Height="26"
                                 Background="Transparent" BorderThickness="0" FontSize="12" Foreground="#9CA3AF"
-                                Cursor="Hand" Click="BtnClose_Click" ToolTip="关闭浮窗 / Close"/>
+                                Cursor="Hand" Click="BtnClose_Click" ToolTip="关闭浮窗"/>
                     </StackPanel>
                 </DockPanel>
             </Border>

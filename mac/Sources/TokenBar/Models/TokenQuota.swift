@@ -18,24 +18,25 @@ public enum ProviderType: String, CaseIterable, Identifiable, Codable {
         case .openAI: return "OpenAI"
         case .claudeCode: return "Anthropic (Claude)"
         case .gemini: return "Google Gemini"
-        case .deepseek: return "DeepSeek (深度求索)"
-        case .volcengine: return "火山方舟 (字节跳动)"
-        case .kimi: return "KIMI (月之暗面)"
-        case .glm: return "GLM (智谱清言)"
-        case .aliyunBailian: return "阿里云百炼 (Token Plan)"
+        case .deepseek: return LocalizationManager.shared.effectiveLanguage == "zh" ? "DeepSeek (深度求索)" : "DeepSeek"
+        case .volcengine: return I18n(.volcengineTitle)
+        case .kimi: return I18n(.kimiTitle)
+        case .glm: return I18n(.glmTitle)
+        case .aliyunBailian: return I18n(.aliyunTitle)
         }
     }
 
     public var shortName: String {
+        let isZh = LocalizationManager.shared.effectiveLanguage == "zh"
         switch self {
         case .openAI: return "OpenAI"
         case .claudeCode: return "Anthropic"
         case .gemini: return "Gemini"
         case .deepseek: return "DeepSeek"
-        case .volcengine: return "火山方舟"
+        case .volcengine: return isZh ? "火山方舟" : "Ark"
         case .kimi: return "KIMI"
         case .glm: return "GLM"
-        case .aliyunBailian: return "百炼"
+        case .aliyunBailian: return isZh ? "百炼" : "Bailian"
         }
     }
 
@@ -206,10 +207,14 @@ public enum ApiProtocol: String, CaseIterable, Identifiable, Codable {
     public var id: String { rawValue }
 
     public var displayName: String {
+        let isZh = LocalizationManager.shared.effectiveLanguage == "zh"
         switch self {
-        case .openAIChat: return "OpenAI Chat Completions 协议 (/v1/chat/completions)"
-        case .openAIResponses: return "OpenAI Response 协议 (/v1/responses 等)"
-        case .anthropic: return "Anthropic 兼容协议 (/v1/messages 等)"
+        case .openAIChat:
+            return isZh ? "OpenAI Chat Completions 协议 (/v1/chat/completions)" : "OpenAI Chat Completions Protocol (/v1/chat/completions)"
+        case .openAIResponses:
+            return isZh ? "OpenAI Response 协议 (/v1/responses 等)" : "OpenAI Response Protocol (/v1/responses, etc.)"
+        case .anthropic:
+            return isZh ? "Anthropic 兼容协议 (/v1/messages 等)" : "Anthropic Compatible Protocol (/v1/messages, etc.)"
         }
     }
 

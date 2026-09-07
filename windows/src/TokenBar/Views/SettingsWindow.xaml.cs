@@ -26,14 +26,17 @@ namespace TokenBar.Views
     public partial class SettingsWindow : Window
     {
         private Guid? _editingCustomId;
+        private SettingsTab _currentTab = SettingsTab.OpenAI;
 
         public SettingsWindow(SettingsTab initialTab = SettingsTab.OpenAI)
         {
             InitializeComponent();
-            PopulatePresets();
+            _currentTab = initialTab;
+            UpdateLocalization();
             LoadFromSettings();
             SelectTab(initialTab);
 
+            LocalizationManager.Instance.PropertyChanged += (s, e) => Dispatcher.Invoke(UpdateLocalization);
             RefreshManager.Instance.OnQuotasUpdated += () => Dispatcher.Invoke(UpdateStatuses);
             UpdateStatuses();
         }
@@ -57,6 +60,9 @@ namespace TokenBar.Views
 
         private void SwitchToTab(SettingsTab tab)
         {
+            _currentTab = tab;
+            UpdateTitle();
+
             PnlOpenAI.Visibility = tab == SettingsTab.OpenAI ? Visibility.Visible : Visibility.Collapsed;
             PnlAnthropic.Visibility = tab == SettingsTab.Anthropic ? Visibility.Visible : Visibility.Collapsed;
             PnlGemini.Visibility = tab == SettingsTab.Gemini ? Visibility.Visible : Visibility.Collapsed;
@@ -74,15 +80,107 @@ namespace TokenBar.Views
             }
         }
 
+        private void UpdateTitle()
+        {
+            var i18n = LocalizationManager.Instance;
+            var tabName = _currentTab switch
+            {
+                SettingsTab.OpenAI => "OpenAI",
+                SettingsTab.Anthropic => "Anthropic (Claude)",
+                SettingsTab.Gemini => "Google Gemini",
+                SettingsTab.DeepSeek => ProviderType.DeepSeek.GetDisplayName(),
+                SettingsTab.Volcengine => ProviderType.Volcengine.GetDisplayName(),
+                SettingsTab.Kimi => ProviderType.Kimi.GetDisplayName(),
+                SettingsTab.GLM => ProviderType.GLM.GetDisplayName(),
+                SettingsTab.Aliyun => ProviderType.AliyunBailian.GetDisplayName(),
+                SettingsTab.Custom => i18n.CustomProviders,
+                SettingsTab.General => i18n.GeneralSettings,
+                _ => i18n.GeneralSettings
+            };
+            this.Title = $"TokenBar - {tabName}";
+        }
+
+        private void UpdateLocalization()
+        {
+            var i18n = LocalizationManager.Instance;
+            UpdateTitle();
+
+            // Left Navigation
+            TxtNavSubtitle.Text = i18n.OpenSettings.TrimEnd('.');
+            TxtNavOpenAI.Text = "OpenAI";
+            TxtNavClaude.Text = "Anthropic (Claude)";
+            TxtNavGemini.Text = "Google Gemini";
+            TxtNavDeepSeek.Text = ProviderType.DeepSeek.GetDisplayName();
+            TxtNavVolcengine.Text = ProviderType.Volcengine.GetDisplayName();
+            TxtNavKimi.Text = ProviderType.Kimi.GetDisplayName();
+            TxtNavGLM.Text = ProviderType.GLM.GetDisplayName();
+            TxtNavAliyun.Text = ProviderType.AliyunBailian.GetDisplayName();
+            TxtNavCustom.Text = i18n.CustomProviders;
+            TxtNavGeneral.Text = i18n.GeneralSettings;
+
+            // Tab 8 Custom
+            TxtCustomTitle.Text = i18n.CustomTitle;
+            TxtCustomSubtitle.Text = i18n.CustomSubtitle;
+            BtnAddCustom.Content = $"＋ {i18n.AddProvider}";
+            TxtQuickFillPresets.Text = i18n.QuickFillPresets;
+            PopulatePresets();
+
+            // Tab 9 General
+            TxtGeneralTitle.Text = i18n.GeneralPreferencesTitle;
+            TxtGeneralSubtitle.Text = i18n.GeneralSubtitle;
+            TxtLanguageLabel.Text = i18n.InterfaceLanguage;
+            CmbItemSystem.Content = i18n.LanguageSystem;
+            TxtIntervalLabel.Text = i18n.RefreshInterval;
+            ChkHoverPreview.Content = i18n.EnableHoverTitle;
+            TxtHoverDesc.Text = i18n.EnableHoverSubtitle;
+            ChkLaunchAtLogin.Content = i18n.LaunchAtLoginTitle;
+            TxtLaunchDesc.Text = i18n.LaunchAtLoginSubtitle;
+
+            // Footer
+            TxtAppAboutFooter.Text = i18n.AppAboutFooter;
+            BtnSaveAll.Content = i18n.SaveAllSettings;
+            BtnCloseWindow.Content = i18n.Close;
+
+            // Repopulate CmbInterval while preserving selected interval
+            int selectedInterval = 5;
+            if (CmbInterval.SelectedItem is ComboBoxItem curItem && int.TryParse(curItem.Tag?.ToString(), out int val))
+            {
+                selectedInterval = val;
+            }
+            else if (RefreshManager.Instance.Settings != null)
+            {
+                selectedInterval = RefreshManager.Instance.Settings.RefreshIntervalMinutes;
+            }
+
+            CmbInterval.Items.Clear();
+            CmbInterval.Items.Add(new ComboBoxItem { Content = i18n.Refresh1Min, Tag = "1" });
+            CmbInterval.Items.Add(new ComboBoxItem { Content = i18n.Refresh5Min, Tag = "5" });
+            CmbInterval.Items.Add(new ComboBoxItem { Content = i18n.Refresh15Min, Tag = "15" });
+            CmbInterval.Items.Add(new ComboBoxItem { Content = i18n.Refresh30Min, Tag = "30" });
+            CmbInterval.Items.Add(new ComboBoxItem { Content = i18n.Refresh60Min, Tag = "60" });
+
+            CmbInterval.SelectedIndex = selectedInterval switch
+            {
+                1 => 0,
+                15 => 2,
+                30 => 3,
+                60 => 4,
+                _ => 1
+            };
+
+            UpdateStatuses();
+        }
+
         private void PopulatePresets()
         {
+            var oldIndex = CmbPresets.SelectedIndex;
             CmbPresets.Items.Clear();
-            CmbPresets.Items.Add(new ComboBoxItem { Content = "-- 选择预设模板快速添加 --" });
+            CmbPresets.Items.Add(new ComboBoxItem { Content = LocalizationManager.Instance.SelectPresetPrompt });
             foreach (var preset in DomesticProviderPreset.AllPresets)
             {
                 CmbPresets.Items.Add(new ComboBoxItem { Content = preset.Name, Tag = preset });
             }
-            CmbPresets.SelectedIndex = 0;
+            CmbPresets.SelectedIndex = (oldIndex >= 0 && oldIndex < CmbPresets.Items.Count) ? oldIndex : 0;
         }
 
         private void LoadFromSettings()
@@ -228,14 +326,14 @@ namespace TokenBar.Views
                     {
                         dot.Text = "●";
                         dot.Foreground = new SolidColorBrush(Color.FromRgb(34, 197, 94));
-                        status.Text = "已连接并可用";
+                        status.Text = LocalizationManager.Instance.StatusConnected;
                         account.Text = !string.IsNullOrEmpty(q.AccountInfo) ? $"({q.AccountInfo})" : "";
                     }
                     else
                     {
                         dot.Text = "●";
                         dot.Foreground = new SolidColorBrush(Color.FromRgb(245, 158, 11));
-                        status.Text = q.ErrorMessage ?? "未授权连接";
+                        status.Text = q.ErrorMessage ?? LocalizationManager.Instance.StatusNotConnected;
                         account.Text = "";
                     }
                 }
@@ -718,7 +816,12 @@ namespace TokenBar.Views
         private void BtnSaveAll_Click(object sender, RoutedEventArgs e)
         {
             SyncToSettings();
-            MessageBox.Show("设置已保存并生效！", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+            var i18n = LocalizationManager.Instance;
+            MessageBox.Show(
+                i18n.IsChinese ? "设置已保存并生效！" : "Settings saved and applied!",
+                i18n.AlertNotice,
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
             _ = RefreshManager.Instance.RefreshAllAsync();
         }
 

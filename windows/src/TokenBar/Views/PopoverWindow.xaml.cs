@@ -23,6 +23,7 @@ namespace TokenBar.Views
         {
             InitializeComponent();
             UpdateTexts();
+            LocalizationManager.Instance.PropertyChanged += (s, e) => Dispatcher.Invoke(UpdateTexts);
             RefreshManager.Instance.OnQuotasUpdated += () => Dispatcher.Invoke(UpdateTexts);
             Closing += (s, e) =>
             {
@@ -37,6 +38,8 @@ namespace TokenBar.Views
             TxtSubtitle.Text = i18n.Subtitle;
             BtnRefresh.Content = RefreshManager.Instance.IsRefreshing ? i18n.Refreshing : i18n.Refresh;
             BtnRefresh.IsEnabled = !RefreshManager.Instance.IsRefreshing;
+            BtnSettings.ToolTip = i18n.OpenSettings;
+            BtnClose.ToolTip = i18n.Close;
 
             if (RefreshManager.Instance.LastRefreshDate.HasValue)
             {
@@ -429,7 +432,7 @@ namespace TokenBar.Views
             {
                 if (quota.PrimaryWindow != null)
                 {
-                    stack.Children.Add(CreateWindowQuotaRow(quota.PrimaryWindow, "配额"));
+                    stack.Children.Add(CreateWindowQuotaRow(quota.PrimaryWindow, LocalizationManager.Instance.QuotaBadge));
                 }
                 if (quota.PrimaryWindow != null && quota.SecondaryWindow != null)
                 {
@@ -443,7 +446,7 @@ namespace TokenBar.Views
                 }
                 if (quota.SecondaryWindow != null)
                 {
-                    stack.Children.Add(CreateWindowQuotaRow(quota.SecondaryWindow, "速率"));
+                    stack.Children.Add(CreateWindowQuotaRow(quota.SecondaryWindow, LocalizationManager.Instance.RateBadge));
                 }
             }
 

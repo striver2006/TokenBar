@@ -36,6 +36,15 @@ namespace TokenBar.Tray
 
             BuildContextMenu();
 
+            LocalizationManager.Instance.PropertyChanged += (s, e) =>
+            {
+                if (_notifyIcon != null)
+                {
+                    _notifyIcon.Text = $"{LocalizationManager.Instance.AppName} - {LocalizationManager.Instance.Subtitle}";
+                    BuildContextMenu();
+                }
+            };
+
             _notifyIcon.MouseClick += (s, e) =>
             {
                 if (e.Button == MouseButtons.Left)

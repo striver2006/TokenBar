@@ -263,6 +263,9 @@ final class TokenBarTests: XCTestCase {
         XCTAssertEqual(I18n(.subtitle), "模型额度监控")
         XCTAssertEqual(I18n(.refresh), "刷新")
         XCTAssertEqual(I18n(.generalSettings), "通用设置")
+        XCTAssertEqual(I18n(.interfaceLanguage), "界面语言")
+        XCTAssertEqual(AppLanguage.system.displayName, "跟随系统")
+        XCTAssertEqual(ProviderType.deepseek.displayName, "DeepSeek (深度求索)")
         XCTAssertEqual(I18n(.fiveHourWindow), "5小时")
 
         // Test English
@@ -270,6 +273,9 @@ final class TokenBarTests: XCTestCase {
         XCTAssertEqual(I18n(.subtitle), "Model Quota Monitor")
         XCTAssertEqual(I18n(.refresh), "Refresh")
         XCTAssertEqual(I18n(.generalSettings), "General")
+        XCTAssertEqual(I18n(.interfaceLanguage), "Language")
+        XCTAssertEqual(AppLanguage.system.displayName, "System")
+        XCTAssertEqual(ProviderType.deepseek.displayName, "DeepSeek")
         XCTAssertEqual(I18n(.fiveHourWindow), "5-Hour")
 
         // Test Settings serialization with appLanguage

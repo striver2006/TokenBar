@@ -246,11 +246,15 @@ public final class MenuBarController: NSObject {
         NSApp.terminate(nil)
     }
 
+    public func updateSettingsTitle(tab: SettingsTab) {
+        settingsWindow?.title = "TokenBar - \(tab.title)"
+    }
+
     public func openSettings(tab: SettingsTab = .openAI) {
         closePopover()
 
         if let existing = settingsWindow {
-            existing.title = "TokenBar - \(I18n(.generalSettings))"
+            existing.title = "TokenBar - \(tab.title)"
             existing.contentView = NSHostingView(rootView: SettingsView(refreshManager: .shared, initialTab: tab))
             existing.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
@@ -264,7 +268,7 @@ public final class MenuBarController: NSObject {
             defer: false
         )
         window.center()
-        window.title = "TokenBar - \(I18n(.generalSettings))"
+        window.title = "TokenBar - \(tab.title)"
         window.contentView = NSHostingView(rootView: SettingsView(refreshManager: .shared, initialTab: tab))
         window.isReleasedWhenClosed = false
 

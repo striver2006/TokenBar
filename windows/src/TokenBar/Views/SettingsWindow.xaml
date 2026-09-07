@@ -1,7 +1,7 @@
 <Window x:Class="TokenBar.Views.SettingsWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="TokenBar - 设置 / Settings" Height="620" Width="760"
+        Title="TokenBar - 设置" Height="620" Width="760"
         WindowStartupLocation="CenterScreen" Background="#F9FAFB" MinWidth="700" MinHeight="550">
     <Grid>
         <Grid.RowDefinitions>
@@ -26,7 +26,7 @@
                             </Border>
                             <StackPanel VerticalAlignment="Center">
                                 <TextBlock Text="TokenBar" FontWeight="Bold" FontSize="14" Foreground="#111827"/>
-                                <TextBlock Text="偏好设置" FontSize="10" Foreground="#6B7280"/>
+                                <TextBlock x:Name="TxtNavSubtitle" Text="偏好设置" FontSize="10" Foreground="#6B7280"/>
                             </StackPanel>
                         </StackPanel>
                     </Border>
@@ -62,61 +62,61 @@
                         <ListBoxItem Tag="0">
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock Text="🟢" FontSize="11" Margin="0,0,8,0"/>
-                                <TextBlock Text="OpenAI" FontWeight="Medium" FontSize="12"/>
+                                <TextBlock x:Name="TxtNavOpenAI" Text="OpenAI" FontWeight="Medium" FontSize="12"/>
                             </StackPanel>
                         </ListBoxItem>
                         <ListBoxItem Tag="1">
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock Text="🟠" FontSize="11" Margin="0,0,8,0"/>
-                                <TextBlock Text="Anthropic (Claude)" FontWeight="Medium" FontSize="12"/>
+                                <TextBlock x:Name="TxtNavClaude" Text="Anthropic (Claude)" FontWeight="Medium" FontSize="12"/>
                             </StackPanel>
                         </ListBoxItem>
                         <ListBoxItem Tag="2">
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock Text="🔵" FontSize="11" Margin="0,0,8,0"/>
-                                <TextBlock Text="Google Gemini" FontWeight="Medium" FontSize="12"/>
+                                <TextBlock x:Name="TxtNavGemini" Text="Google Gemini" FontWeight="Medium" FontSize="12"/>
                             </StackPanel>
                         </ListBoxItem>
                         <ListBoxItem Tag="3">
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock Text="🔷" FontSize="11" Margin="0,0,8,0"/>
-                                <TextBlock Text="DeepSeek (深度求索)" FontWeight="Medium" FontSize="12"/>
+                                <TextBlock x:Name="TxtNavDeepSeek" Text="DeepSeek (深度求索)" FontWeight="Medium" FontSize="12"/>
                             </StackPanel>
                         </ListBoxItem>
                         <ListBoxItem Tag="4">
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock Text="🔴" FontSize="11" Margin="0,0,8,0"/>
-                                <TextBlock Text="火山方舟 (字节跳动)" FontWeight="Medium" FontSize="12"/>
+                                <TextBlock x:Name="TxtNavVolcengine" Text="火山方舟 (字节跳动)" FontWeight="Medium" FontSize="12"/>
                             </StackPanel>
                         </ListBoxItem>
                         <ListBoxItem Tag="5">
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock Text="🟣" FontSize="11" Margin="0,0,8,0"/>
-                                <TextBlock Text="KIMI (月之暗面)" FontWeight="Medium" FontSize="12"/>
+                                <TextBlock x:Name="TxtNavKimi" Text="KIMI (月之暗面)" FontWeight="Medium" FontSize="12"/>
                             </StackPanel>
                         </ListBoxItem>
                         <ListBoxItem Tag="6">
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock Text="🌿" FontSize="11" Margin="0,0,8,0"/>
-                                <TextBlock Text="GLM (智谱清言)" FontWeight="Medium" FontSize="12"/>
+                                <TextBlock x:Name="TxtNavGLM" Text="GLM (智谱清言)" FontWeight="Medium" FontSize="12"/>
                             </StackPanel>
                         </ListBoxItem>
                         <ListBoxItem Tag="7">
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock Text="⚡" FontSize="11" Margin="0,0,8,0"/>
-                                <TextBlock Text="阿里云百炼" FontWeight="Medium" FontSize="12"/>
+                                <TextBlock x:Name="TxtNavAliyun" Text="阿里云百炼" FontWeight="Medium" FontSize="12"/>
                             </StackPanel>
                         </ListBoxItem>
                         <ListBoxItem Tag="8">
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock Text="🌐" FontSize="11" Margin="0,0,8,0"/>
-                                <TextBlock Text="国内厂商 / 自定义" FontWeight="Medium" FontSize="12"/>
+                                <TextBlock x:Name="TxtNavCustom" Text="国内厂商 / 自定义" FontWeight="Medium" FontSize="12"/>
                             </StackPanel>
                         </ListBoxItem>
                         <ListBoxItem Tag="9">
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock Text="⚙️" FontSize="11" Margin="0,0,8,0"/>
-                                <TextBlock Text="通用设置" FontWeight="Medium" FontSize="12"/>
+                                <TextBlock x:Name="TxtNavGeneral" Text="通用设置" FontWeight="Medium" FontSize="12"/>
                             </StackPanel>
                         </ListBoxItem>
                     </ListBox>
@@ -415,16 +415,16 @@
                     <StackPanel x:Name="PnlCustom" Visibility="Collapsed">
                         <DockPanel Margin="0,0,0,14">
                             <StackPanel>
-                                <TextBlock Text="国内厂商 / 自定义接口" FontSize="16" FontWeight="Bold" Foreground="#111827"/>
-                                <TextBlock Text="支持 OpenAI Chat、OpenAI Response 或 Anthropic 兼容协议" FontSize="11" Foreground="#6B7280" Margin="0,3,0,0"/>
+                                <TextBlock x:Name="TxtCustomTitle" Text="国内厂商 / 自定义接口" FontSize="16" FontWeight="Bold" Foreground="#111827"/>
+                                <TextBlock x:Name="TxtCustomSubtitle" Text="支持 OpenAI Chat、OpenAI Response 或 Anthropic 兼容协议" FontSize="11" Foreground="#6B7280" Margin="0,3,0,0"/>
                             </StackPanel>
-                            <Button Content="＋ 添加新厂商" Padding="10,5" Background="#2563EB" Foreground="White" BorderThickness="0" HorizontalAlignment="Right" VerticalAlignment="Center" Cursor="Hand" Click="BtnAddCustomProvider_Click"/>
+                            <Button x:Name="BtnAddCustom" Content="＋ 添加新厂商" Padding="10,5" Background="#2563EB" Foreground="White" BorderThickness="0" HorizontalAlignment="Right" VerticalAlignment="Center" Cursor="Hand" Click="BtnAddCustomProvider_Click"/>
                         </DockPanel>
 
                         <!-- Presets Dropdown -->
                         <Border Background="#F3F4F6" CornerRadius="8" Padding="12,10" Margin="0,0,0,16">
                             <DockPanel>
-                                <TextBlock Text="快捷预填常用国内厂商:" FontWeight="Medium" FontSize="11" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                <TextBlock x:Name="TxtQuickFillPresets" Text="快捷预填常用国内厂商:" FontWeight="Medium" FontSize="11" VerticalAlignment="Center" Margin="0,0,10,0"/>
                                 <ComboBox x:Name="CmbPresets" Width="220" HorizontalAlignment="Left" SelectionChanged="CmbPresets_SelectionChanged">
                                     <ComboBoxItem Content="-- 选择预设模板快速添加 --"/>
                                 </ComboBox>
@@ -468,32 +468,26 @@
 
                     <!-- Tab 9: General Settings -->
                     <StackPanel x:Name="PnlGeneral" Visibility="Collapsed">
-                        <TextBlock Text="通用偏好设置" FontSize="16" FontWeight="Bold" Foreground="#111827" Margin="0,0,0,4"/>
-                        <TextBlock Text="应用基础偏好与自启动配置" FontSize="11" Foreground="#6B7280" Margin="0,0,0,16"/>
+                        <TextBlock x:Name="TxtGeneralTitle" Text="通用偏好设置" FontSize="16" FontWeight="Bold" Foreground="#111827" Margin="0,0,0,4"/>
+                        <TextBlock x:Name="TxtGeneralSubtitle" Text="应用基础偏好与自启动配置" FontSize="11" Foreground="#6B7280" Margin="0,0,0,16"/>
 
                         <Border Background="#F9FAFB" BorderBrush="#E5E7EB" BorderThickness="1" CornerRadius="8" Padding="16" Margin="0,0,0,16">
                             <StackPanel>
-                                <TextBlock Text="界面语言 / Language" FontWeight="SemiBold" FontSize="12" Margin="0,0,0,6"/>
+                                <TextBlock x:Name="TxtLanguageLabel" Text="界面语言" FontWeight="SemiBold" FontSize="12" Margin="0,0,0,6"/>
                                 <ComboBox x:Name="CmbLanguage" Width="220" HorizontalAlignment="Left" Margin="0,0,0,16" SelectionChanged="CmbLanguage_SelectionChanged">
-                                    <ComboBoxItem Content="跟随系统 / System"/>
+                                    <ComboBoxItem x:Name="CmbItemSystem" Content="跟随系统"/>
                                     <ComboBoxItem Content="简体中文"/>
                                     <ComboBoxItem Content="English"/>
                                 </ComboBox>
 
-                                <TextBlock Text="定期主动刷新周期" FontWeight="SemiBold" FontSize="12" Margin="0,0,0,6"/>
-                                <ComboBox x:Name="CmbInterval" Width="220" HorizontalAlignment="Left" Margin="0,0,0,16">
-                                    <ComboBoxItem Content="1 分钟" Tag="1"/>
-                                    <ComboBoxItem Content="5 分钟 (推荐)" Tag="5"/>
-                                    <ComboBoxItem Content="15 分钟" Tag="15"/>
-                                    <ComboBoxItem Content="30 分钟" Tag="30"/>
-                                    <ComboBoxItem Content="60 分钟" Tag="60"/>
-                                </ComboBox>
+                                <TextBlock x:Name="TxtIntervalLabel" Text="定期主动刷新周期" FontWeight="SemiBold" FontSize="12" Margin="0,0,0,6"/>
+                                <ComboBox x:Name="CmbInterval" Width="220" HorizontalAlignment="Left" Margin="0,0,0,16"/>
 
                                 <CheckBox x:Name="ChkHoverPreview" Content="鼠标悬停自动显示小提示浮窗" FontSize="12" Margin="0,0,0,8" IsChecked="True"/>
-                                <TextBlock Text="鼠标移动到托盘图标上方时自动展示额度卡片" FontSize="10" Foreground="#6B7280" Margin="22,0,0,14"/>
+                                <TextBlock x:Name="TxtHoverDesc" Text="鼠标移动到托盘图标上方时自动展示额度卡片" FontSize="10" Foreground="#6B7280" Margin="22,0,0,14"/>
 
                                 <CheckBox x:Name="ChkLaunchAtLogin" Content="开机自动启动" FontSize="12" Margin="0,0,0,8"/>
-                                <TextBlock Text="登录 Windows 时自动在系统托盘运行 TokenBar" FontSize="10" Foreground="#6B7280" Margin="22,0,0,0"/>
+                                <TextBlock x:Name="TxtLaunchDesc" Text="登录 Windows 时自动在系统托盘运行 TokenBar" FontSize="10" Foreground="#6B7280" Margin="22,0,0,0"/>
                             </StackPanel>
                         </Border>
                     </StackPanel>
@@ -504,10 +498,10 @@
         <!-- Bottom Footer Bar -->
         <Border Grid.Row="1" Background="#FFFFFF" BorderBrush="#E5E7EB" BorderThickness="0,1,0,0" Padding="20,12">
             <DockPanel>
-                <TextBlock Text="TokenBar v1.0.0 • 模型额度监控" FontSize="11" Foreground="#9CA3AF" VerticalAlignment="Center"/>
+                <TextBlock x:Name="TxtAppAboutFooter" Text="TokenBar v1.0.0 • 模型额度监控" FontSize="11" Foreground="#9CA3AF" VerticalAlignment="Center"/>
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                    <Button Content="保存全部设置" Width="110" Height="30" Margin="0,0,10,0" Background="#2563EB" Foreground="White" BorderThickness="0" Cursor="Hand" Click="BtnSaveAll_Click"/>
-                    <Button Content="关闭" Width="70" Height="30" Background="#F3F4F6" BorderBrush="#D1D5DB" Cursor="Hand" Click="BtnClose_Click"/>
+                    <Button x:Name="BtnSaveAll" Content="保存全部设置" Width="110" Height="30" Margin="0,0,10,0" Background="#2563EB" Foreground="White" BorderThickness="0" Cursor="Hand" Click="BtnSaveAll_Click"/>
+                    <Button x:Name="BtnCloseWindow" Content="关闭" Width="70" Height="30" Background="#F3F4F6" BorderBrush="#D1D5DB" Cursor="Hand" Click="BtnClose_Click"/>
                 </StackPanel>
             </DockPanel>
         </Border>

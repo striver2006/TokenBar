@@ -121,6 +121,7 @@ public struct SettingsView: View {
                 }
                 .pickerStyle(.menu)
                 .frame(width: 250)
+                .id(i18n.currentLanguage)
 
                 Spacer()
             }
@@ -162,6 +163,13 @@ public struct SettingsView: View {
         .frame(width: 580, height: 520)
         .onAppear {
             syncFromSettings()
+            MenuBarController.shared.updateSettingsTitle(tab: selectedTab)
+        }
+        .onChange(of: selectedTab) { newTab in
+            MenuBarController.shared.updateSettingsTitle(tab: newTab)
+        }
+        .onChange(of: i18n.currentLanguage) { _ in
+            MenuBarController.shared.updateSettingsTitle(tab: selectedTab)
         }
         .onChange(of: refreshManager.settings.openAIApiKey) { openAIKeyInput = $0 }
         .onChange(of: refreshManager.settings.openAIEndpoint) { openAIEndpointInput = $0 }
@@ -188,9 +196,9 @@ public struct SettingsView: View {
         .onChange(of: refreshManager.settings.aliyunCookie) { aliyunCookieInput = $0 }
         .alert(isPresented: $showStatusAlert) {
             Alert(
-                title: Text("提示"),
+                title: Text(I18n(.alertNotice)),
                 message: Text(statusAlertMessage ?? ""),
-                dismissButton: .default(Text("好的"))
+                dismissButton: .default(Text(I18n(.alertOk)))
             )
         }
     }
@@ -229,9 +237,9 @@ public struct SettingsView: View {
                     .font(.system(size: 24))
                     .foregroundColor(ProviderType.openAI.themeColor)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("OpenAI API 授权")
+                    Text(I18n(.openAITitle))
                         .font(.system(size: 15, weight: .bold))
-                    Text("配置官方或代理 API KEY，监控 TPM/RPM 速率限制与可用模型")
+                    Text(I18n(.openAISubtitle))
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
                 }
@@ -250,7 +258,7 @@ public struct SettingsView: View {
                 let isAuth = refreshManager.quotas[.openAI]?.isAuthorized == true
                 Image(systemName: isAuth ? "checkmark.circle.fill" : "xmark.circle.fill")
                     .foregroundColor(isAuth ? .green : .secondary)
-                Text(isAuth ? "已连接并可用" : "未授权连接")
+                Text(isAuth ? I18n(.statusConnected) : I18n(.statusNotConnected))
                     .font(.system(size: 12, weight: .semibold))
 
                 if let acc = refreshManager.quotas[.openAI]?.accountInfo {
@@ -267,7 +275,7 @@ public struct SettingsView: View {
 
             // OpenAI API Key
             VStack(alignment: .leading, spacing: 6) {
-                Text("OpenAI API KEY")
+                Text(I18n(.apiKeyLabel))
                     .font(.system(size: 12, weight: .medium))
 
                 HStack {
@@ -294,7 +302,7 @@ public struct SettingsView: View {
 
             // Endpoint
             VStack(alignment: .leading, spacing: 6) {
-                Text("API 接入端点")
+                Text(I18n(.apiEndpointLabel))
                     .font(.system(size: 12, weight: .medium))
 
                 TextField("https://api.openai.com/v1", text: $openAIEndpointInput)
@@ -308,7 +316,7 @@ public struct SettingsView: View {
 
             // Organization ID (Optional)
             VStack(alignment: .leading, spacing: 6) {
-                Text("组织 ID (OpenAI-Organization, 可选)")
+                Text(I18n(.orgIdLabel))
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
 
@@ -337,7 +345,7 @@ public struct SettingsView: View {
                 } label: {
                     HStack {
                         Image(systemName: "checkmark.shield")
-                        Text("保存并测试连接")
+                        Text(I18n(.saveAndTest))
                     }
                 }
                 .buttonStyle(.borderedProminent)
@@ -357,9 +365,9 @@ public struct SettingsView: View {
                     .font(.system(size: 24))
                     .foregroundColor(ProviderType.claudeCode.themeColor)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Anthropic (Claude) 统一授权")
+                    Text(I18n(.anthropicTitle))
                         .font(.system(size: 15, weight: .bold))
-                    Text("同时支持 Anthropic API Key (官方/代理) 与 Claude Code 订阅授权 (网页/本地)")
+                    Text(I18n(.anthropicSubtitle))
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
                 }
@@ -378,7 +386,7 @@ public struct SettingsView: View {
                 let isAuth = refreshManager.quotas[.claudeCode]?.isAuthorized == true
                 Image(systemName: isAuth ? "checkmark.circle.fill" : "xmark.circle.fill")
                     .foregroundColor(isAuth ? .green : .secondary)
-                Text(isAuth ? "已授权连接" : "未授权")
+                Text(isAuth ? I18n(.statusConnected) : I18n(.statusNotConnected))
                     .font(.system(size: 12, weight: .semibold))
 
                 if let acc = refreshManager.quotas[.claudeCode]?.accountInfo {
@@ -442,7 +450,7 @@ public struct SettingsView: View {
                     } label: {
                         HStack(spacing: 4) {
                             Image(systemName: "checkmark.shield")
-                            Text("保存并测试 API Key")
+                            Text(I18n(.saveAndTest))
                         }
                     }
                     .buttonStyle(.bordered)
@@ -505,7 +513,7 @@ public struct SettingsView: View {
                         .textFieldStyle(.roundedBorder)
                         .font(.system(size: 11))
 
-                    Button("保存") {
+                    Button(I18n(.save)) {
                         refreshManager.settings.claudeToken = claudeTokenInput
                         refreshManager.saveSettings()
                         Task {
@@ -534,9 +542,9 @@ public struct SettingsView: View {
                     .font(.system(size: 24))
                     .foregroundColor(ProviderType.gemini.themeColor)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Google Gemini 授权")
+                    Text(I18n(.geminiTitle))
                         .font(.system(size: 15, weight: .bold))
-                    Text("支持 Google AI Studio API Key (永久有效) 或 Google 账号网页/本地凭证")
+                    Text(I18n(.geminiSubtitle))
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
                 }
@@ -555,7 +563,7 @@ public struct SettingsView: View {
                 let isAuth = refreshManager.quotas[.gemini]?.isAuthorized == true
                 Image(systemName: isAuth ? "checkmark.circle.fill" : "xmark.circle.fill")
                     .foregroundColor(isAuth ? .green : .secondary)
-                Text(isAuth ? "已授权连接" : "未授权")
+                Text(isAuth ? I18n(.statusConnected) : I18n(.statusNotConnected))
                     .font(.system(size: 12, weight: .semibold))
 
                 if let acc = refreshManager.quotas[.gemini]?.accountInfo {
@@ -622,7 +630,7 @@ public struct SettingsView: View {
                             .font(.system(size: 11))
                         Spacer()
 
-                        Button("保存并测试连接") {
+                        Button(I18n(.saveAndTest)) {
                             refreshManager.settings.geminiApiKey = geminiApiKeyInput
                             refreshManager.settings.geminiEndpoint = geminiEndpointInput
                             refreshManager.saveSettings()
@@ -639,7 +647,7 @@ public struct SettingsView: View {
                         .buttonStyle(.borderedProminent)
 
                         if !geminiApiKeyInput.isEmpty {
-                            Button("清除 Key") {
+                            Button(I18n(.clearKey)) {
                                 geminiApiKeyInput = ""
                                 refreshManager.settings.geminiApiKey = ""
                                 refreshManager.saveSettings()
@@ -737,9 +745,9 @@ public struct SettingsView: View {
                     .font(.system(size: 24))
                     .foregroundColor(ProviderType.deepseek.themeColor)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("DeepSeek (深度求索) 授权")
+                    Text(I18n(.deepseekTitle))
                         .font(.system(size: 15, weight: .bold))
-                    Text("配置 DeepSeek API Key，自动查询账户可用余额与 TPM/RPM 速率限制")
+                    Text(I18n(.deepseekSubtitle))
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
                 }
@@ -758,7 +766,7 @@ public struct SettingsView: View {
                 let isAuth = refreshManager.quotas[.deepseek]?.isAuthorized == true
                 Image(systemName: isAuth ? "checkmark.circle.fill" : "xmark.circle.fill")
                     .foregroundColor(isAuth ? .green : .secondary)
-                Text(isAuth ? "已连接" : "未授权")
+                Text(isAuth ? I18n(.statusConnected) : I18n(.statusNotConnected))
                     .font(.system(size: 12, weight: .semibold))
 
                 if let acc = refreshManager.quotas[.deepseek]?.accountInfo {
@@ -775,7 +783,7 @@ public struct SettingsView: View {
 
             // DeepSeek API Key
             VStack(alignment: .leading, spacing: 6) {
-                Text("DeepSeek API KEY")
+                Text(I18n(.apiKeyLabel))
                     .font(.system(size: 12, weight: .medium))
 
                 HStack {
@@ -803,7 +811,7 @@ public struct SettingsView: View {
             // Endpoint & Model
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("接入端点")
+                    Text(I18n(.apiEndpointLabel))
                         .font(.system(size: 12, weight: .medium))
                     TextField("https://api.deepseek.com/v1", text: $deepseekEndpointInput)
                         .textFieldStyle(.roundedBorder)
@@ -811,7 +819,7 @@ public struct SettingsView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("默认模型")
+                    Text(I18n(.defaultModelLabel))
                         .font(.system(size: 12, weight: .medium))
                     TextField("deepseek-chat", text: $deepseekModelInput)
                         .textFieldStyle(.roundedBorder)
@@ -839,7 +847,7 @@ public struct SettingsView: View {
                 } label: {
                     HStack {
                         Image(systemName: "checkmark.shield")
-                        Text("保存并测试连接")
+                        Text(I18n(.saveAndTest))
                     }
                 }
                 .buttonStyle(.borderedProminent)
@@ -859,9 +867,9 @@ public struct SettingsView: View {
                     .font(.system(size: 24))
                     .foregroundColor(ProviderType.volcengine.themeColor)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("火山方舟 (字节跳动) 授权")
+                    Text(I18n(.volcengineTitle))
                         .font(.system(size: 15, weight: .bold))
-                    Text("配置火山引擎大模型服务平台 API Key (Bearer Token) 与推理接入点")
+                    Text(I18n(.volcengineSubtitle))
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
                 }
@@ -880,7 +888,7 @@ public struct SettingsView: View {
                 let isAuth = refreshManager.quotas[.volcengine]?.isAuthorized == true
                 Image(systemName: isAuth ? "checkmark.circle.fill" : "xmark.circle.fill")
                     .foregroundColor(isAuth ? .green : .secondary)
-                Text(isAuth ? "已连接" : "未授权")
+                Text(isAuth ? I18n(.statusConnected) : I18n(.statusNotConnected))
                     .font(.system(size: 12, weight: .semibold))
 
                 if let acc = refreshManager.quotas[.volcengine]?.accountInfo {
@@ -897,7 +905,7 @@ public struct SettingsView: View {
 
             // Volcengine API Key
             VStack(alignment: .leading, spacing: 6) {
-                Text("火山方舟 API KEY (Bearer Token)")
+                Text(I18n(.apiKeyLabel))
                     .font(.system(size: 12, weight: .medium))
 
                 HStack {
@@ -925,7 +933,7 @@ public struct SettingsView: View {
             // Endpoint & Endpoint ID
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("接入端点 (API v3)")
+                    Text(I18n(.apiEndpointLabel))
                         .font(.system(size: 12, weight: .medium))
                     TextField("https://ark.cn-beijing.volces.com/api/v3", text: $volcengineEndpointInput)
                         .textFieldStyle(.roundedBorder)
@@ -961,7 +969,7 @@ public struct SettingsView: View {
                 } label: {
                     HStack {
                         Image(systemName: "checkmark.shield")
-                        Text("保存并测试连接")
+                        Text(I18n(.saveAndTest))
                     }
                 }
                 .buttonStyle(.borderedProminent)
@@ -981,9 +989,9 @@ public struct SettingsView: View {
                     .font(.system(size: 24))
                     .foregroundColor(ProviderType.kimi.themeColor)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("KIMI (月之暗面) 授权")
+                    Text(I18n(.kimiTitle))
                         .font(.system(size: 15, weight: .bold))
-                    Text("配置 Moonshot API Key，自动查询账户可用余额与模型速率限制")
+                    Text(I18n(.kimiSubtitle))
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
                 }
@@ -1002,7 +1010,7 @@ public struct SettingsView: View {
                 let isAuth = refreshManager.quotas[.kimi]?.isAuthorized == true
                 Image(systemName: isAuth ? "checkmark.circle.fill" : "xmark.circle.fill")
                     .foregroundColor(isAuth ? .green : .secondary)
-                Text(isAuth ? "已连接" : "未授权")
+                Text(isAuth ? I18n(.statusConnected) : I18n(.statusNotConnected))
                     .font(.system(size: 12, weight: .semibold))
 
                 if let acc = refreshManager.quotas[.kimi]?.accountInfo {
@@ -1019,7 +1027,7 @@ public struct SettingsView: View {
 
             // KIMI API Key
             VStack(alignment: .leading, spacing: 6) {
-                Text("KIMI / Moonshot API KEY")
+                Text(I18n(.apiKeyLabel))
                     .font(.system(size: 12, weight: .medium))
 
                 HStack {
@@ -1047,7 +1055,7 @@ public struct SettingsView: View {
             // Endpoint & Model
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("接入端点")
+                    Text(I18n(.apiEndpointLabel))
                         .font(.system(size: 12, weight: .medium))
                     TextField("https://api.moonshot.cn/v1", text: $kimiEndpointInput)
                         .textFieldStyle(.roundedBorder)
@@ -1055,7 +1063,7 @@ public struct SettingsView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("默认模型")
+                    Text(I18n(.defaultModelLabel))
                         .font(.system(size: 12, weight: .medium))
                     TextField("moonshot-v1-8k", text: $kimiModelInput)
                         .textFieldStyle(.roundedBorder)
@@ -1083,7 +1091,7 @@ public struct SettingsView: View {
                 } label: {
                     HStack {
                         Image(systemName: "checkmark.shield")
-                        Text("保存并测试连接")
+                        Text(I18n(.saveAndTest))
                     }
                 }
                 .buttonStyle(.borderedProminent)
@@ -1103,9 +1111,9 @@ public struct SettingsView: View {
                     .font(.system(size: 24))
                     .foregroundColor(ProviderType.glm.themeColor)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("GLM 智谱清言 API 授权")
+                    Text(I18n(.glmTitle))
                         .font(.system(size: 15, weight: .bold))
-                    Text("通过 BigModel 平台 API KEY 授权监控 5小时与每周配额")
+                    Text(I18n(.glmSubtitle))
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
                 }
@@ -1124,7 +1132,7 @@ public struct SettingsView: View {
                 let isAuth = refreshManager.quotas[.glm]?.isAuthorized == true
                 Image(systemName: isAuth ? "checkmark.circle.fill" : "xmark.circle.fill")
                     .foregroundColor(isAuth ? .green : .secondary)
-                Text(isAuth ? "已授权连接" : "未授权")
+                Text(isAuth ? I18n(.statusConnected) : I18n(.statusNotConnected))
                     .font(.system(size: 12, weight: .semibold))
 
                 if let acc = refreshManager.quotas[.glm]?.accountInfo {
@@ -1141,7 +1149,7 @@ public struct SettingsView: View {
 
             // GLM API Key Field
             VStack(alignment: .leading, spacing: 6) {
-                Text("GLM API KEY")
+                Text(I18n(.apiKeyLabel))
                     .font(.system(size: 12, weight: .medium))
 
                 HStack {
@@ -1168,18 +1176,20 @@ public struct SettingsView: View {
 
             // Platform Endpoint
             VStack(alignment: .leading, spacing: 6) {
-                Text("接入协议与端点 (OpenAI Response 协议)")
+                let isZh = LocalizationManager.shared.effectiveLanguage == "zh"
+                Text(isZh ? "接入协议与端点 (OpenAI Response 协议)" : "API Protocol & Endpoint (OpenAI Response Protocol)")
                     .font(.system(size: 12, weight: .medium))
 
                 Picker("", selection: $glmEndpointInput) {
-                    Text("OpenAI Response 协议 (https://open.bigmodel.cn/api/v1)").tag("https://open.bigmodel.cn/api/v1")
-                    Text("PaaS v4 协议 (https://open.bigmodel.cn/api/paas/v4)").tag("https://open.bigmodel.cn/api/paas/v4")
-                    Text("国际站 (https://api.z.ai/api/v1)").tag("https://api.z.ai/api/v1")
+                    Text(isZh ? "OpenAI Response 协议 (https://open.bigmodel.cn/api/v1)" : "OpenAI Response Protocol (https://open.bigmodel.cn/api/v1)").tag("https://open.bigmodel.cn/api/v1")
+                    Text(isZh ? "PaaS v4 协议 (https://open.bigmodel.cn/api/paas/v4)" : "PaaS v4 Protocol (https://open.bigmodel.cn/api/paas/v4)").tag("https://open.bigmodel.cn/api/paas/v4")
+                    Text(isZh ? "国际站 (https://api.z.ai/api/v1)" : "International (https://api.z.ai/api/v1)").tag("https://api.z.ai/api/v1")
                 }
                 .pickerStyle(.radioGroup)
+                .id(i18n.currentLanguage)
 
                 HStack {
-                    Text("自定义端点:")
+                    Text(isZh ? "自定义端点:" : "Custom Endpoint:")
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
                     TextField("https://open.bigmodel.cn/api/v1", text: $glmEndpointInput)
@@ -1208,7 +1218,7 @@ public struct SettingsView: View {
                 } label: {
                     HStack {
                         Image(systemName: "checkmark.shield")
-                        Text("保存并测试连接")
+                        Text(I18n(.saveAndTest))
                     }
                 }
                 .buttonStyle(.borderedProminent)
@@ -1228,9 +1238,9 @@ public struct SettingsView: View {
                     .font(.system(size: 24))
                     .foregroundColor(ProviderType.aliyunBailian.themeColor)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("阿里云百炼 (Token Plan) 授权")
+                    Text(I18n(.aliyunTitle))
                         .font(.system(size: 15, weight: .bold))
-                    Text("监控 7 天周期额度与 5 小时额度")
+                    Text(I18n(.aliyunSubtitle))
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
                 }
@@ -1249,7 +1259,7 @@ public struct SettingsView: View {
                 let isAuth = refreshManager.quotas[.aliyunBailian]?.isAuthorized == true
                 Image(systemName: isAuth ? "checkmark.circle.fill" : "xmark.circle.fill")
                     .foregroundColor(isAuth ? .green : .secondary)
-                Text(isAuth ? "已授权连接" : "未授权")
+                Text(isAuth ? I18n(.statusConnected) : I18n(.statusNotConnected))
                     .font(.system(size: 12, weight: .semibold))
 
                 if let acc = refreshManager.quotas[.aliyunBailian]?.accountInfo {
@@ -1323,7 +1333,7 @@ public struct SettingsView: View {
 
             // Aliyun API Key Field (Optional)
             VStack(alignment: .leading, spacing: 6) {
-                Text("Token Plan 专属 API KEY (可选)")
+                Text(I18n(.apiKeyLabel))
                     .font(.system(size: 12, weight: .medium))
 
                 HStack {
@@ -1350,7 +1360,7 @@ public struct SettingsView: View {
 
             // Platform Endpoint
             VStack(alignment: .leading, spacing: 6) {
-                Text("接入端点 (兼容 OpenAI 接口协议)")
+                Text(I18n(.apiEndpointLabel))
                     .font(.system(size: 12, weight: .medium))
 
                 TextField("https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1", text: $aliyunEndpointInput)
@@ -1409,9 +1419,9 @@ public struct SettingsView: View {
                     .font(.system(size: 24))
                     .foregroundColor(.indigo)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("国内厂商 / 自定义接口")
+                    Text(I18n(.customTitle))
                         .font(.system(size: 15, weight: .bold))
-                    Text("支持 OpenAI Chat Completions、OpenAI Response 或 Anthropic 协议")
+                    Text(I18n(.customSubtitle))
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
                 }
@@ -1437,7 +1447,7 @@ public struct SettingsView: View {
                     } label: {
                         HStack(spacing: 4) {
                             Image(systemName: "plus.circle.fill")
-                            Text("添加新厂商")
+                            Text(I18n(.addProvider))
                         }
                     }
                     .buttonStyle(.borderedProminent)
@@ -1450,10 +1460,10 @@ public struct SettingsView: View {
                 // Inline Add / Edit Card
                 VStack(alignment: .leading, spacing: 12) {
                     HStack {
-                        Text(editingProviderId == nil ? "添加模型厂商" : "编辑模型厂商")
+                        Text(editingProviderId == nil ? I18n(.addProvider) : I18n(.editProvider))
                             .font(.system(size: 13, weight: .bold))
                         Spacer()
-                        Button("关闭") {
+                        Button(I18n(.close)) {
                             isAddingProvider = false
                         }
                         .buttonStyle(.borderless)
@@ -1462,7 +1472,7 @@ public struct SettingsView: View {
 
                     // Presets quick fill
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("快捷预填常用国内厂商:")
+                        Text(I18n(.quickFillPresets))
                             .font(.system(size: 11, weight: .medium))
                             .foregroundColor(.secondary)
 
@@ -1489,7 +1499,7 @@ public struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         HStack(spacing: 12) {
                             VStack(alignment: .leading, spacing: 4) {
-                                Text("厂商名称")
+                                Text(I18n(.providerNameLabel))
                                     .font(.system(size: 11, weight: .medium))
                                 TextField("例如: OpenAI 兼容代理", text: $customNameInput)
                                     .textFieldStyle(.roundedBorder)
@@ -1497,7 +1507,7 @@ public struct SettingsView: View {
                             }
 
                             VStack(alignment: .leading, spacing: 4) {
-                                Text("接口协议类型 (区分 OpenAI 两类协议)")
+                                Text(I18n(.protocolTypeLabel))
                                     .font(.system(size: 11, weight: .medium))
                                 Picker("", selection: $customProtocolInput) {
                                     ForEach(ApiProtocol.allCases) { proto in
@@ -1506,11 +1516,12 @@ public struct SettingsView: View {
                                 }
                                 .pickerStyle(.menu)
                                 .font(.system(size: 11))
+                                .id(i18n.currentLanguage)
                             }
                         }
 
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("接入端点 (API Endpoint)")
+                            Text(I18n(.apiEndpointLabel))
                                 .font(.system(size: 11, weight: .medium))
                             TextField("http://localhost:3000/v1", text: $customEndpointInput)
                                 .textFieldStyle(.roundedBorder)
@@ -1518,7 +1529,7 @@ public struct SettingsView: View {
                         }
 
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("API KEY")
+                            Text(I18n(.apiKeyLabel))
                                 .font(.system(size: 11, weight: .medium))
                             HStack {
                                 if isCustomKeyVisible {
@@ -1540,7 +1551,7 @@ public struct SettingsView: View {
                         }
 
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("默认模型 (可选)")
+                            Text(I18n(.defaultModelLabel))
                                 .font(.system(size: 11, weight: .medium))
                             TextField("例如: deepseek-chat 或 claude-3-5-sonnet", text: $customModelInput)
                                 .textFieldStyle(.roundedBorder)
@@ -1582,12 +1593,12 @@ public struct SettingsView: View {
                         } label: {
                             HStack {
                                 Image(systemName: "checkmark")
-                                Text("保存并连接")
+                                Text(I18n(.saveAndConnect))
                             }
                         }
                         .buttonStyle(.borderedProminent)
 
-                        Button("取消") {
+                        Button(I18n(.cancel)) {
                             isAddingProvider = false
                         }
                         .buttonStyle(.bordered)
@@ -1605,10 +1616,10 @@ public struct SettingsView: View {
                     Image(systemName: "square.dashed")
                         .font(.system(size: 28))
                         .foregroundColor(.secondary)
-                    Text("暂未添加任何国内或自定义厂商")
+                    Text(I18n(.noCustomProviders))
                         .font(.system(size: 12))
                         .foregroundColor(.secondary)
-                    Text("点击上方「＋ 添加新厂商」可添加硅基流动、MiniMax、通义千问等自定义端点。")
+                    Text(I18n(.noCustomProvidersHint))
                         .font(.system(size: 10))
                         .foregroundColor(.secondary)
                 }
@@ -1718,6 +1729,7 @@ public struct SettingsView: View {
                     }
                 }
                 .frame(width: 180)
+                .id(i18n.currentLanguage)
                 .onChange(of: refreshManager.settings.appLanguage) { newLang in
                     refreshManager.saveSettings()
                 }
@@ -1736,6 +1748,7 @@ public struct SettingsView: View {
                     Text(I18n(.refresh60Min)).tag(60)
                 }
                 .frame(width: 180)
+                .id(i18n.currentLanguage)
                 .onChange(of: refreshManager.settings.refreshIntervalMinutes) { _ in
                     refreshManager.saveSettings()
                 }

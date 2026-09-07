@@ -11,9 +11,12 @@ public enum AppLanguage: String, CaseIterable, Identifiable, Codable {
 
     public var displayName: String {
         switch self {
-        case .system: return "跟随系统 / System"
-        case .zhHans: return "简体中文"
-        case .en: return "English"
+        case .system:
+            return LocalizationManager.shared.effectiveLanguage == "zh" ? "跟随系统" : "System"
+        case .zhHans:
+            return "简体中文"
+        case .en:
+            return "English"
         }
     }
 }
@@ -104,6 +107,7 @@ public enum I18nKey: String {
     case defaultModelLabel
     case noCustomProviders
     case noCustomProvidersHint
+    case enableMonitoring
     case alertNotice
     case alertOk
 
@@ -157,9 +161,15 @@ public final class LocalizationManager: ObservableObject {
         cachedLanguage = lang
         lock.unlock()
 
-        Task { @MainActor in
+        if Thread.isMainThread {
             if self.currentLanguage != lang {
                 self.currentLanguage = lang
+            }
+        } else {
+            Task { @MainActor in
+                if self.currentLanguage != lang {
+                    self.currentLanguage = lang
+                }
             }
         }
     }
@@ -221,7 +231,7 @@ public final class LocalizationManager: ObservableObject {
         case .generalPreferencesTitle:
             return isZh ? "通用偏好设置" : "General Preferences"
         case .interfaceLanguage:
-            return isZh ? "界面语言 / Language" : "Language"
+            return isZh ? "界面语言" : "Language"
         case .refreshInterval:
             return isZh ? "定期主动刷新周期" : "Auto-Refresh Interval"
         case .refresh1Min:
@@ -324,6 +334,8 @@ public final class LocalizationManager: ObservableObject {
             return isZh ? "提示" : "Notice"
         case .alertOk:
             return isZh ? "好的" : "OK"
+        case .enableMonitoring:
+            return isZh ? "启用监控" : "Enable Monitoring"
 
         case .menuAbout:
             return isZh ? "关于 TokenBar" : "About TokenBar"

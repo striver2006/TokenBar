@@ -1,6 +1,9 @@
 import Cocoa
+import Combine
 
 public final class AppDelegate: NSObject, NSApplicationDelegate {
+    private var cancellables = Set<AnyCancellable>()
+
     public func applicationDidFinishLaunching(_ notification: Notification) {
         // Ensure app runs as an accessory menu bar application without Dock icon
         NSApp.setActivationPolicy(.accessory)
@@ -10,6 +13,13 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Setup the Menu Bar status item and popover
         MenuBarController.shared.setup()
+
+        LocalizationManager.shared.$currentLanguage
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.setupMainMenu()
+            }
+            .store(in: &cancellables)
     }
 
     public func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

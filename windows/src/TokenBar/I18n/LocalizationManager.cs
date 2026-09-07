@@ -80,7 +80,9 @@ namespace TokenBar.I18n
         public string GeneralSettings => IsChinese ? "通用设置" : "General";
         public string CustomProviders => IsChinese ? "国内厂商 / 自定义" : "Custom Providers";
         public string GeneralPreferencesTitle => IsChinese ? "通用偏好设置" : "General Preferences";
-        public string InterfaceLanguage => IsChinese ? "界面语言 / Language" : "Language";
+        public string GeneralSubtitle => IsChinese ? "应用基础偏好与自启动配置" : "General runtime preferences & interface";
+        public string InterfaceLanguage => IsChinese ? "界面语言" : "Language";
+        public string LanguageSystem => IsChinese ? "跟随系统" : "System";
         public string RefreshInterval => IsChinese ? "定期主动刷新周期" : "Auto-Refresh Interval";
         public string Refresh1Min => IsChinese ? "1 分钟" : "1 Minute";
         public string Refresh5Min => IsChinese ? "5 分钟 (推荐)" : "5 Minutes (Recommended)";
@@ -92,6 +94,11 @@ namespace TokenBar.I18n
         public string LaunchAtLoginTitle => IsChinese ? "开机自动启动" : "Launch at Login";
         public string LaunchAtLoginSubtitle => IsChinese ? "登录 Windows 时自动在系统托盘运行 TokenBar" : "Automatically launch TokenBar when logging into Windows";
         public string AppAboutFooter => IsChinese ? "TokenBar v1.0.0 • 模型额度监控" : "TokenBar v1.0.0 • Model Quota Monitor";
+        public string SaveAllSettings => IsChinese ? "保存全部设置" : "Save All Settings";
+        public string SelectPresetPrompt => IsChinese ? "选择常用厂商配置..." : "Select preset...";
+        public string QuotaBadge => IsChinese ? "配额" : "Quota";
+        public string RateBadge => IsChinese ? "速率" : "Rate";
+        public string EnableMonitoring => IsChinese ? "启用监控" : "Enable Monitoring";
 
         // Provider Titles & Subtitles
         public string OpenAITitle => "OpenAI API";
