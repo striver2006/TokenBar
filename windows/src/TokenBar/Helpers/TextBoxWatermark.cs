@@ -1,3 +1,4 @@
+using System;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
@@ -37,6 +38,7 @@ namespace TokenBar.Helpers
             box.GotKeyboardFocus -= OnFocusChanged;
             box.LostKeyboardFocus -= OnFocusChanged;
             box.Unloaded -= OnBoxUnloaded;
+            box.IsVisibleChanged -= OnVisibilityChanged;
 
             var hasPlaceholder = e.NewValue is string text && !string.IsNullOrEmpty(text);
             if (hasPlaceholder)
@@ -45,6 +47,7 @@ namespace TokenBar.Helpers
                 box.GotKeyboardFocus += OnFocusChanged;
                 box.LostKeyboardFocus += OnFocusChanged;
                 box.Unloaded += OnBoxUnloaded;
+                box.IsVisibleChanged += OnVisibilityChanged;
             }
 
             UpdateAdorner(box);
@@ -56,6 +59,13 @@ namespace TokenBar.Helpers
         }
 
         private static void OnFocusChanged(object sender, KeyboardFocusChangedEventArgs e)
+        {
+            if (sender is TextBox box) UpdateAdorner(box);
+        }
+
+        // 设置窗口各厂商页面共用一个 AdornerLayer（ScrollViewer 内置），页面折叠后
+        // Adorner 不会随之消失，会残留在旧坐标叠到新页面上，必须在可见性变化时摘除
+        private static void OnVisibilityChanged(object sender, DependencyPropertyChangedEventArgs e)
         {
             if (sender is TextBox box) UpdateAdorner(box);
         }
@@ -82,6 +92,7 @@ namespace TokenBar.Helpers
         {
             var placeholder = GetPlaceholder(box);
             var show = !string.IsNullOrEmpty(placeholder) &&
+                       box.IsVisible &&
                        string.IsNullOrEmpty(box.Text) &&
                        !box.IsKeyboardFocusWithin;
 
@@ -154,14 +165,18 @@ namespace TokenBar.Helpers
             protected override Size MeasureOverride(Size constraint)
             {
                 _hint.Measure(constraint);
-                return base.MeasureOverride(constraint);
+                // AdornerLayer 以 DesiredSize 安排 Adorner；返回基类的 0x0 会让
+                // ArrangeOverride 收到 0 宽度，进而按负尺寸构造 Rect 抛异常并中断布局。
+                return _hint.DesiredSize;
             }
 
             protected override Size ArrangeOverride(Size finalSize)
             {
                 var x = _box.Padding.Left + 2;
                 var y = (finalSize.Height - _hint.DesiredSize.Height) / 2;
-                _hint.Arrange(new Rect(new Point(x, Math.Max(0, y)), new Size(finalSize.Width - x, _hint.DesiredSize.Height)));
+                var width = Math.Max(0, finalSize.Width - x);
+                var height = Math.Max(0, Math.Min(finalSize.Height, _hint.DesiredSize.Height));
+                _hint.Arrange(new Rect(new Point(x, Math.Max(0, y)), new Size(width, height)));
                 return finalSize;
             }
         }
