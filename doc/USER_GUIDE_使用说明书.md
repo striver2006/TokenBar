@@ -68,20 +68,53 @@ TokenBar 独家支持双重模式：
   - **自动读取本地**：若您在终端中已登录过 Claude Code CLI，点击「读取本地 CLI 授权」按钮，TokenBar 将自动读取 `~/.claude.json` 中的会话凭据。
   - **网页登录授权**：点击「网站登录授权」，在弹出窗口完成登录即可完成绑定。
 
-### 3.3 Google Gemini 配置
+### 3.3 Google Gemini / Google One 配置
 - **方式一：Google AI Studio API Key (永久有效，推荐)**：
-  - 前往 [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey) 获取免费密钥并填入。
-- **方式二：Google 账号网页/本地授权**：
-  - 支持直接读取 `~/.gemini/` 配置或通过浏览器进行 OAuth 网页认证。
+  - 前往 [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey) 获取免费密钥并填入，支持监控 Gemini 模型的 RPM 速率配额与连接状态。
+- **方式二：Google 账号授权 / 本地凭证 (Google One / Antigravity)**：
+  - **Google 网站登录授权**：点击设置页面的「Google 网站登录授权」按钮，若本地已登录 Google 账号将一键无缝绑定；若未检测到，将引导通过浏览器完成 OAuth 认证。
+  - **自动读取本地 / Antigravity 凭证**：
+    - **Windows**：TokenBar 原生集成 Windows 凭据管理器（Credential Manager），可自动识别并提取 Antigravity CLI (`agy`) / Antigravity IDE 登录的 Google One PRO 凭据（`gemini:antigravity`），并自动请求 UserInfo 接口解析个人 Google 邮箱地址，即时呈现 **5小时滚动算力额度** 与 **每周额度**。同时兼容读取 `%USERPROFILE%\.gemini\` 下的本地凭证。
+    - **macOS**：支持从 Keychain 以及 `~/.gemini/` 自动读取凭证。
 
 ### 3.4 国内主流厂商配置
 - **DeepSeek (深度求索)**：在 [platform.deepseek.com](https://platform.deepseek.com) 获取 API Key，填入后将自动同步账户可用余额。
 - **火山方舟 (字节跳动)**：前往火山引擎大模型控制台获取 API Key，支持自定义 Endpoint。
 - **月之暗面 KIMI**：在 [platform.moonshot.cn](https://platform.moonshot.cn) 获取 Key，支持监测 RPM/TPM 限额。
 - **智谱清言 GLM**：在 [open.bigmodel.cn](https://open.bigmodel.cn) 获取 API Key。
-- **阿里云百炼**：支持输入 DashScope API Key 或专属 Token Plan 充值计划兼容接口。
 
-### 3.5 国内第三方厂商与自定义端点
+### 3.5 阿里云百炼 (Token Plan) 专属配置与多端同步
+
+TokenBar 支持实时监控阿里云百炼的 **5 小时滚动滑动窗口** 与 **7 天周期额度**。
+
+#### 1. 额度获取机制说明
+- 阿里云百炼的官方 API Key（包括兼容 OpenAI 的端点）仅用于模型对话与推理，**服务端未开放通过 API Key 查询 Token Plan 额度的接口**。
+- 配额查询必须通过百炼控制台网关接口（即官方 CLI 的 `bl usage token-plan` 命令）或控制台网页会话获取。
+
+#### 2. 授权方式与多设备（macOS / Windows）并发指南
+
+- **方式一：OpenAPI AK/SK 认证（最推荐，支持 Mac 与 Windows 同时在线）**：
+  - **原理**：阿里云 AccessKey (AK/SK) 为服务端调用凭证，**不受浏览器单点登录 (SSO) 会话互踢限制**。百炼 CLI 原生支持在控制台 Token 过期时利用 AK/SK 自动调用 `GenerateCLIAccessToken` 无感换取控制台凭证。
+  - **操作步骤**：
+    1. 前往 [阿里云 RAM 控制台 AccessKey 页面](https://ram.console.aliyun.com/manage/ak) 创建 AccessKey（建议创建专用的 RAM 子用户并授予百炼工作空间权限）。
+    2. 分别在 Mac 和 Windows 终端执行一次：
+       ```bash
+       bl auth login --open-api --access-key-id <你的AccessKey_ID> --access-key-secret <你的AccessKey_Secret>
+       ```
+    3. 在 TokenBar 设置中开启「阿里云百炼 (Token Plan)」，点击「保存并刷新检测额度」即可。
+    4. **两台设备可共用同一对 AK/SK（或各自使用独立的子账号 AK/SK），永久稳定并发监控，互不下线**。
+
+- **方式二：控制台浏览器登录（`bl auth login --console`）**：
+  - **适用**：仅单台设备使用的场景。
+  - **注意**：同一主账号若在 Mac 和 Windows 上分别通过浏览器登录，后登录的设备会将前一设备的 Web 会话注销（触发单点登录互踢）。
+  - **多端共用技巧**：在其中一台设备完成浏览器登录后，直接将生成的配置文件同步至另一台设备，两端共用同一个有效 Token：
+    - Windows 路径：`C:\Users\<用户名>\.bailian\config.json`
+    - macOS 路径：`~/.bailian/config.json`
+
+- **方式三：控制台网页 Cookie 授权**：
+  - 在 TokenBar 偏好设置的百炼选项卡中，点击「网站登录授权」，在弹出的 WebView 中登录阿里云账号，应用将自动捕获登录 Cookie 并直调网关查询。
+
+### 3.6 国内第三方厂商与自定义端点
 在「国内厂商 / 自定义」标签页，点击「＋ 添加新厂商」：
 - 提供丰富的快捷预填：**硅基流动 (SiliconFlow)、MiniMax、阶跃星辰 (StepFun)、零一万物 (01.AI)、百度千帆、腾讯混元、小米 MiMo** 等。
 - 支持指定协议：`OpenAI Chat`、`OpenAI Response` 或 `Anthropic` 兼容格式。
@@ -109,3 +142,12 @@ A：刷新频率在设置中调整后会立即重置定时器并生效。推荐�
 
 **Q3：我的 API Key 会被上传到别人的服务器吗？**  
 A：**绝对不会**。TokenBar 是纯粹的开源单机客户端，所有网络请求均为本机直接请求对应厂商官方 API，没有中间商，代码完全透明开放。
+
+**Q4：为什么 Mac 和 Windows 两台主机一个登录了百炼，另一个就下线了？**  
+A：这是因为阿里云控制台采用网页单点登录（Web SSO）会话保护机制。如果在两台机器上分别执行 `bl auth login --console`，后登录的设备会将上一台设备的 Web 会话注销，导致原设备的 `access_token` 失效。  
+**最佳解决方案**：改用 OpenAPI 凭证进行认证，两台机器终端分别执行：  
+`bl auth login --open-api --access-key-id <AK_ID> --access-key-secret <AK_SECRET>`  
+AK/SK 为服务端凭据，不受网页端单点登录互踢限制，且百炼 CLI 会在后台自动无感续期令牌。或者将一台机器登录生成的 `config.json` 直接拷贝至另一台机器共用同一个会话。
+
+**Q5：我已经在百炼控制台创建并输入了 API Key，为什么百炼还是无法获取额度？**  
+A：阿里云百炼的官方 API Key（包括兼容 OpenAI 的端点）仅用于模型对话与推理，服务端并未开放通过 API Key 查询 Token Plan 额度的 API。监控 5 小时与每周额度必须依赖百炼控制台权限，请在终端配置 OpenAPI AK/SK 或使用网页登录授权。

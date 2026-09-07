@@ -58,7 +58,7 @@
   - 鼠标悬停在状态栏图标上 0.15 秒即可自动弹出用量面板，无需额外点击。
   - 单击图标可锁定面板，方便长时间对照或查阅。
 - 🌐 **广泛的模型厂商生态**：
-  - **海外主流**：OpenAI (TPM/RPM)、Anthropic (Claude Code 5h/每周双窗口)、Google Gemini (AI Studio/OAuth)。
+  - **海外主流**：OpenAI (TPM/RPM)、Anthropic (Claude Code 5h/每周双窗口)、Google Gemini / Google One (AI Studio / OAuth 网页授权 / Antigravity 凭据管理器)。
   - **国内前沿**：DeepSeek (余额/速率)、火山方舟 (Ark 接入点)、月之暗面 KIMI、智谱清言 GLM、阿里云百炼 (Token Plan)。
   - **开放生态**：支持通过 OpenAI Chat、OpenAI Response 或 Anthropic 协议自定义任意端点（如 OneAPI、NewAPI、硅基流动、MiniMax、阶跃星辰等）。
 - 🌍 **动态中英文双语**：

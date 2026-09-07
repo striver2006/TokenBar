@@ -1,0 +1,130 @@
+using System;
+using System.Linq;
+using System.Net.Http;
+using System.Text.Json;
+using System.Threading.Tasks;
+using TokenBar.Models;
+
+namespace TokenBar.Services
+{
+    public class VolcengineService
+    {
+        public static VolcengineService Instance { get; } = new VolcengineService();
+
+        private static readonly HttpClient HttpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+
+        private VolcengineService() { }
+
+        public async Task<(TokenWindow? FiveHour, TokenWindow? Weekly, string? Account)> FetchQuotaAsync(
+            string apiKey,
+            string endpoint = "https://ark.cn-beijing.volces.com/api/v3",
+            string model = "")
+        {
+            var cleanKey = apiKey.Trim();
+            if (string.IsNullOrEmpty(cleanKey))
+            {
+                throw new ArgumentException("请输入火山方舟 API Key");
+            }
+
+            var baseEndpoint = endpoint.Trim().TrimEnd('/');
+            if (string.IsNullOrEmpty(baseEndpoint))
+            {
+                baseEndpoint = "https://ark.cn-beijing.volces.com/api/v3";
+            }
+
+            var modelsUrl = baseEndpoint.EndsWith("/models", StringComparison.OrdinalIgnoreCase)
+                ? baseEndpoint
+                : $"{baseEndpoint}/models";
+
+            using var req = new HttpRequestMessage(HttpMethod.Get, modelsUrl);
+            req.Headers.Add("Authorization", $"Bearer {cleanKey}");
+            req.Headers.Add("Accept", "application/json");
+
+            var resp = await HttpClient.SendAsync(req);
+            var body = await resp.Content.ReadAsStringAsync();
+
+            if (resp.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+            {
+                throw new Exception("火山方舟 API Key 无效或未授权 (HTTP 401)");
+            }
+
+            if ((int)resp.StatusCode == 429)
+            {
+                throw new Exception("火山方舟并发或速率超限 (HTTP 429)");
+            }
+
+            if (!resp.IsSuccessStatusCode)
+            {
+                var snippet = body.Length > 100 ? body.Substring(0, 100) : body;
+                throw new Exception($"火山方舟响应异常 ({(int)resp.StatusCode}): {snippet}");
+            }
+
+            string? GetHeader(string name)
+            {
+                if (resp.Headers.TryGetValues(name, out var values))
+                    return values.FirstOrDefault();
+                if (resp.Content.Headers.TryGetValues(name, out var cv))
+                    return cv.FirstOrDefault();
+                return null;
+            }
+
+            var limitTokensStr = GetHeader("x-ratelimit-limit-tokens");
+            var remainingTokensStr = GetHeader("x-ratelimit-remaining-tokens");
+            var resetTokensStr = GetHeader("x-ratelimit-reset-tokens");
+
+            TokenWindow? primaryWindow = null;
+
+            if (double.TryParse(limitTokensStr, out var limitTokens) &&
+                double.TryParse(remainingTokensStr, out var remainingTokens) &&
+                limitTokens > 0)
+            {
+                var used = Math.Max(0.0, limitTokens - remainingTokens);
+                var usedPct = Math.Clamp((used / limitTokens) * 100.0, 0.0, 100.0);
+                var duration = OpenAIService.Instance.ParseDurationString(resetTokensStr ?? "1s");
+                var now = DateTime.Now;
+
+                primaryWindow = new TokenWindow
+                {
+                    Title = "TPM 速率配额",
+                    UsedPercentage = usedPct,
+                    StartTime = now,
+                    EndTime = now.Add(duration),
+                    UsedAmount = used,
+                    TotalLimit = limitTokens,
+                    Unit = "tokens",
+                    IsIdle = used == 0.0
+                };
+            }
+
+            int modelCount = 0;
+            try
+            {
+                using var doc = JsonDocument.Parse(body);
+                if (doc.RootElement.TryGetProperty("data", out var dataArr) && dataArr.ValueKind == JsonValueKind.Array)
+                {
+                    modelCount = dataArr.GetArrayLength();
+                }
+            }
+            catch { }
+
+            if (primaryWindow == null)
+            {
+                primaryWindow = new TokenWindow
+                {
+                    Title = "接入点连接正常",
+                    UsedPercentage = 0.0,
+                    StartTime = DateTime.Now,
+                    EndTime = DateTime.Now.AddDays(1),
+                    Unit = "%",
+                    IsIdle = true
+                };
+            }
+
+            var keySuffix = cleanKey.Length > 6 ? cleanKey[^4..] : cleanKey;
+            var modelLabel = !string.IsNullOrEmpty(model) ? model : $"模型数: {modelCount}";
+            var account = $"火山方舟 ({modelLabel} • 尾号 {keySuffix})";
+
+            return (primaryWindow, null, account);
+        }
+    }
+}

@@ -36,7 +36,7 @@ As AI-assisted programming tools like Claude Code, Cursor, and Continue gain wid
   - Automatically pops up the quota card panel after hovering over the tray icon for 0.15s.
   - Click the icon to pin the panel open for continuous reference during coding sessions.
 - 🌐 **Extensive AI Provider Ecosystem**:
-  - **Global**: OpenAI (TPM/RPM rate limits), Anthropic (Claude Code 5-hour rolling window & weekly quota), Google Gemini (AI Studio / OAuth).
+  - **Global**: OpenAI (TPM/RPM rate limits), Anthropic (Claude Code 5-hour rolling window & weekly quota), Google Gemini / Google One (AI Studio / OAuth / Antigravity Credential Manager).
   - **Domestic**: DeepSeek, Volcengine Ark, Moonshot KIMI, Zhipu GLM, Aliyun Bailian (Token Plan).
   - **Custom Endpoints**: Supports custom OpenAI Chat, OpenAI Response, and Anthropic protocols (OneAPI, NewAPI, SiliconFlow, MiniMax, StepFun, etc.).
 - 🌍 **Dynamic Bilingual Interface (i18n)**:

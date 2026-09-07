@@ -98,6 +98,9 @@ Windows 客户端采用轻量现代的 **.NET 8 WPF** 架构，利用 Windows �
 4. **`RefreshManager`**：
    - 基于 `System.Threading.Timer` 运行异步定时调度。
    - 配置通过 `System.Text.Json` 本地持久化到 `%AppData%\TokenBar\settings.json`。
+5. **凭据安全与系统集成 (`GeminiService` / `Advapi32`)**：
+   - 原生 P/Invoke 调用 Windows 凭据管理器 (`advapi32.dll` `CredReadW`)，安全提取 Antigravity CLI (`agy`) 及 Antigravity IDE 托管的 Google One PRO 凭证（目标名 `gemini:antigravity`）。
+   - 自动请求 Google UserInfo 接口解析用户邮箱，支持 5 小时滚动算力与每周额度监控，实现与 macOS Keychain/CLI 凭证管理完全同构。
 
 ---
 
@@ -119,9 +122,22 @@ Windows 客户端采用轻量现代的 **.NET 8 WPF** 架构，利用 Windows �
 | Claude Code       | 本地读取 ~/.claude.json 会话配置与 OAuth 令牌，             |
 |                   | 解析 5 小时滚动滑动窗口百分比与每周额度配额                 |
 +-------------------+-------------------------------------------------------------+
+| Google Gemini /   | 1. API Key 模式：直连 Generative Language API 探测配额状态；|
+| Google One /      | 2. 账号授权 / Antigravity 模式：                             |
+| Antigravity       |    - Windows: 原生 P/Invoke 调用 Windows 凭据管理器          |
+|                   |      (`advapi32.dll` `CredReadW`) 安全读取 `gemini:antigravity`|
+|                   |      Generic Credential，无感换取 OAuth 访问令牌与用户信息；  |
+|                   |      同时兼容读取 `%USERPROFILE%\.gemini\` 凭证文件；        |
+|                   |    - macOS: 读取系统钥匙串与 `~/.gemini/` 会话；             |
+|                   |    - 支持内置 OAuth 2.0 Web 回环授权，展示 5h 及周配额。     |
++-------------------+-------------------------------------------------------------+
 | DeepSeek          | 查询 /user/balance 接口获取实时账户余额与赠送金额           |
 +-------------------+-------------------------------------------------------------+
-| 阿里云百炼         | 查询 Token Plan 专属端点，获取已用与剩余 Token 账单         |
+| 阿里云百炼         | 1. 优先调用官方 CLI (`bl usage token-plan --output json`)   |
+|                   |    获取 5 小时滚动窗口与 7 天周期额度剩余百分比及重置时间；  |
+|                   | 2. 支持配置 OpenAPI AK/SK 实现双端（macOS/Windows）自动无感   |
+|                   |    续期，彻底规避浏览器 Web SSO 单点登录互踢；               |
+|                   | 3. 备用通道支持通过 Console Cookie 直调网关查询接口。        |
 +-------------------+-------------------------------------------------------------+
 ```
 
