@@ -13,8 +13,108 @@ public final class GeminiService {
         return []
     }
 
+    // Antigravity (Google Code Assist) quota backend.
+    private static let cloudCodeQuotaBase = "https://cloudcode-pa.googleapis.com"
+
+    // The OAuth client pair used for token refresh is the public "installed app" client that
+    // Google ships inside the agy CLI / Antigravity IDE binaries. Nothing is embedded here:
+    // candidates are discovered at runtime from the local installation (or the
+    // ANTIGRAVITY_CLIENT_ID / ANTIGRAVITY_CLIENT_SECRET environment variables), and the
+    // pair that successfully refreshes the stored token is cached for the session.
+    private static let clientIdRegex = try! NSRegularExpression(pattern: "[0-9]{6,}-[a-z0-9]{10,}\\.apps\\.googleusercontent\\.com")
+    private static let clientSecretRegex = try! NSRegularExpression(pattern: "GOCSPX-[A-Za-z0-9_-]{28}")
+
+    private var antigravityClientCandidates: [(id: String, secret: String)]?
+
+    private func getAntigravityClientCandidates() -> [(id: String, secret: String)] {
+        if let cached = antigravityClientCandidates {
+            return cached
+        }
+
+        var list: [(id: String, secret: String)] = []
+        let env = ProcessInfo.processInfo.environment
+        if let envId = env["ANTIGRAVITY_CLIENT_ID"], !envId.isEmpty,
+           let envSecret = env["ANTIGRAVITY_CLIENT_SECRET"], !envSecret.isEmpty {
+            list.append((envId, envSecret))
+            antigravityClientCandidates = list
+            return list
+        }
+
+        // Legacy override: TokenBar's own web-login client (GOOGLE_CLIENT_ID/SECRET).
+        if !googleClientId.isEmpty {
+            for secret in googleClientSecrets {
+                list.append((googleClientId, secret))
+            }
+        }
+
+        var ids = Set<String>()
+        var secrets = Set<String>()
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        var targets = [
+            home.appendingPathComponent(".gemini/bin/agy").path,
+            "/usr/local/bin/agy",
+            "/opt/homebrew/bin/agy"
+        ]
+        let languageServerDir = "/Applications/Antigravity.app/Contents/Resources/bin"
+        if let names = try? FileManager.default.contentsOfDirectory(atPath: languageServerDir) {
+            for name in names where name.hasPrefix("language_server") {
+                targets.append((languageServerDir as NSString).appendingPathComponent(name))
+            }
+        }
+        for target in targets {
+            if !ids.isEmpty && !secrets.isEmpty { break }
+            if FileManager.default.fileExists(atPath: target) {
+                scanFileForClientPatterns(target, ids: &ids, secrets: &secrets)
+            }
+        }
+        for id in ids {
+            for secret in secrets {
+                guard list.count < 8 else { break }
+                list.append((id, secret))
+            }
+        }
+
+        antigravityClientCandidates = list
+        return list
+    }
+
+    /// Scans a large binary in overlapping chunks for the embedded OAuth client patterns.
+    private func scanFileForClientPatterns(_ path: String, ids: inout Set<String>, secrets: inout Set<String>) {
+        let chunkSize = 4 * 1024 * 1024
+        let overlap = 1024
+        guard let handle = FileHandle(forReadingAtPath: path) else { return }
+        defer { try? handle.close() }
+
+        var carryOver = Data()
+        while true {
+            guard let chunk = try? handle.read(upToCount: chunkSize), !chunk.isEmpty else { break }
+            let data = carryOver + chunk
+            if let text = String(data: data, encoding: .isoLatin1) {
+                Self.extractMatches(text, regex: Self.clientIdRegex, into: &ids)
+                Self.extractMatches(text, regex: Self.clientSecretRegex, into: &secrets)
+            }
+            carryOver = data.suffix(overlap)
+            if chunk.count < chunkSize { break }
+        }
+    }
+
+    private static func extractMatches(_ text: String, regex: NSRegularExpression, into set: inout Set<String>) {
+        let nsText = text as NSString
+        for match in regex.matches(in: text, range: NSRange(location: 0, length: nsText.length)) {
+            set.insert(nsText.substring(with: match.range))
+        }
+    }
+
+    // Refreshed access tokens are short-lived (~1h); cache in memory instead of refreshing on every poll.
+    private var cachedAccessToken: String?
+    private var cachedAccessTokenExpiry = Date.distantPast
+
+    private struct QuotaAuthError: Error {}
+
+    private var isZh: Bool { LocalizationManager.shared.effectiveLanguage == "zh" }
+
     /// Read local Gemini config from ~/.gemini (checking both jetski token and oauth_creds)
-    public func readLocalGeminiConfig() -> (token: String?, refreshToken: String?, account: String?) {
+    public func readLocalGeminiConfig() -> (token: String?, refreshToken: String?, account: String?, expiry: Date?) {
         let homeDir = FileManager.default.homeDirectoryForCurrentUser
         let jetskiTokenPath = homeDir.appendingPathComponent(".gemini/jetski-standalone-oauth-token")
         let oauthCredsPath = homeDir.appendingPathComponent(".gemini/oauth_creds.json")
@@ -23,6 +123,7 @@ public final class GeminiService {
         var token: String? = nil
         var refreshToken: String? = nil
         var account: String? = nil
+        var expiry: Date? = nil
 
         // 1. Check jetski-standalone-oauth-token first (newer)
         if FileManager.default.fileExists(atPath: jetskiTokenPath.path) {
@@ -32,6 +133,7 @@ public final class GeminiService {
                    let tokDict = json["token"] as? [String: Any] {
                     token = tokDict["access_token"] as? String
                     refreshToken = tokDict["refresh_token"] as? String
+                    expiry = parseServerDate(tokDict["expiry"])
                 }
             } catch {}
         }
@@ -61,21 +163,39 @@ public final class GeminiService {
             } catch {}
         }
 
-        return (token, refreshToken, account)
+        return (token, refreshToken, account, expiry)
     }
 
-    /// Refresh Google OAuth access token using refresh_token
+    /// Parses ISO-8601 strings (with or without fractional seconds) or epoch seconds into a Date.
+    private func parseServerDate(_ any: Any?) -> Date? {
+        if let s = any as? String {
+            let fractional = ISO8601DateFormatter()
+            fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            if let d = fractional.date(from: s) { return d }
+            let plain = ISO8601DateFormatter()
+            return plain.date(from: s)
+        }
+        if let n = any as? NSNumber {
+            return Date(timeIntervalSince1970: n.doubleValue)
+        }
+        return nil
+    }
+
+    /// Refresh Google OAuth access token using refresh_token.
+    /// Tries every discovered OAuth client pair until one is accepted (the binaries contain
+    /// more than one client); on success the pair is moved to the front and the token is
+    /// cached in memory for its lifetime (~1h).
     public func refreshGoogleAccessToken(refreshToken: String) async -> String? {
         guard let tokenUrl = URL(string: "https://oauth2.googleapis.com/token") else { return nil }
 
-        for secret in googleClientSecrets {
+        for client in getAntigravityClientCandidates() {
             var request = URLRequest(url: tokenUrl)
             request.httpMethod = "POST"
             request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
 
             let params = [
-                "client_id": googleClientId,
-                "client_secret": secret,
+                "client_id": client.id,
+                "client_secret": client.secret,
                 "grant_type": "refresh_token",
                 "refresh_token": refreshToken
             ]
@@ -88,7 +208,13 @@ public final class GeminiService {
                 guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { continue }
                 if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                    let newAccessToken = json["access_token"] as? String {
-                    // Update in-memory / local jetski cache if possible
+                    let expiresIn = (json["expires_in"] as? NSNumber)?.doubleValue ?? 3600
+                    // Cache the working pair first so later refreshes skip the trial-and-error.
+                    antigravityClientCandidates?.removeAll { $0.id == client.id && $0.secret == client.secret }
+                    antigravityClientCandidates?.insert(client, at: 0)
+                    cachedAccessToken = newAccessToken
+                    cachedAccessTokenExpiry = Date().addingTimeInterval(max(60, expiresIn - 120))
+                    // Update local jetski cache if possible
                     updateLocalAccessToken(newAccessToken)
                     return newAccessToken
                 }
@@ -113,92 +239,187 @@ public final class GeminiService {
         }
     }
 
-    /// Fetch Gemini usage quota and window limits
+    /// Fetch Gemini usage quota and window limits from the Antigravity (Google Code Assist)
+    /// quota API — the same source the Antigravity IDE's usage panel displays.
     public func fetchQuota(token: String?) async throws -> (fiveHour: TokenWindow?, weekly: TokenWindow?, account: String?) {
-        let isZh = LocalizationManager.shared.effectiveLanguage == "zh"
         let local = readLocalGeminiConfig()
-        var activeToken = token?.isEmpty == false ? token : local.token
         let refreshToken = local.refreshToken
         var detectedAccount = local.account
 
-        if activeToken == nil && refreshToken == nil {
+        // Resolve an access token: explicit setting > cached refresh result > stored token (if not near expiry) > refreshed.
+        let accessToken: String
+        if let cached = cachedAccessToken, Date() < cachedAccessTokenExpiry {
+            accessToken = cached
+        } else if let stored = (token?.isEmpty == false ? token : local.token),
+                  local.expiry == nil || local.expiry! > Date().addingTimeInterval(120) {
+            accessToken = stored
+        } else if let refreshToken {
+            guard let refreshed = await refreshGoogleAccessToken(refreshToken: refreshToken) else {
+                throw NSError(domain: "GeminiService", code: 401, userInfo: [NSLocalizedDescriptionKey: isZh ? "Google 凭证刷新失败，请重新运行 agy 登录或在设置中更新凭证" : "Failed to refresh Google credentials. Please log in again via agy or update credentials in Settings"])
+            }
+            accessToken = refreshed
+        } else if let stored = (token?.isEmpty == false ? token : local.token) {
+            // No expiry info and no refresh token: try it, auth errors surface a clear message below.
+            accessToken = stored
+        } else {
             throw NSError(domain: "GeminiService", code: 401, userInfo: [NSLocalizedDescriptionKey: isZh ? "请在设置中通过网站登录授权 Gemini" : "Please authorize Gemini via web login in settings"])
         }
 
-        // Test activeToken or refresh if needed
-        var isValid = false
-        if let currentTok = activeToken {
-            if let email = await fetchUserInfo(token: currentTok) {
-                detectedAccount = email
-                isValid = true
-            }
+        let (fiveHour, weekly) = try await fetchQuotaWithAuthRetry(accessToken, refreshToken: refreshToken)
+
+        if detectedAccount == nil {
+            detectedAccount = await fetchUserInfo(token: accessToken)
         }
-
-        // If current token is expired or invalid, try auto-refreshing
-        if !isValid, let rToken = refreshToken {
-            if let refreshedToken = await refreshGoogleAccessToken(refreshToken: rToken) {
-                activeToken = refreshedToken
-                isValid = true
-                if let email = await fetchUserInfo(token: refreshedToken) {
-                    detectedAccount = email
-                }
-            }
-        }
-
-        guard isValid, let validToken = activeToken else {
-            throw NSError(domain: "GeminiService", code: 401, userInfo: [NSLocalizedDescriptionKey: isZh ? "Gemini 凭证已过期，请重新登录授权" : "Gemini credentials expired. Please log in and authorize again"])
-        }
-
-        // Query Gemini API / models to check quota & rate limits
-        var usedPct5h = 15.0
-        let usedPctWeek = 8.0
-
-        if let qUrl = URL(string: "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1") {
-            var req = URLRequest(url: qUrl)
-            req.setValue("Bearer \(validToken)", forHTTPHeaderField: "Authorization")
-            req.setValue("application/json", forHTTPHeaderField: "Accept")
-
-            if let (_, resp) = try? await URLSession.shared.data(for: req),
-               let http = resp as? HTTPURLResponse {
-                if let rpmLimit = http.value(forHTTPHeaderField: "x-ratelimit-remaining-requests"),
-                   let remaining = Double(rpmLimit) {
-                    usedPct5h = max(0, min(100, 100 - remaining))
-                }
-            }
-        }
-
-        let now = Date()
-        let calendar = Calendar.current
-
-        // 1. Calculate 5-hour rolling compute window
-        let currentHour = calendar.component(.hour, from: now)
-        let slotIndex = currentHour / 5
-        let startOfSlotHour = slotIndex * 5
-        let windowStart = calendar.date(bySettingHour: startOfSlotHour, minute: 0, second: 0, of: now) ?? now.addingTimeInterval(-2 * 3600)
-        let windowEnd = windowStart.addingTimeInterval(5 * 3600)
-
-        let fiveHour = TokenWindow(
-            title: "5小时算力额度",
-            usedPercentage: usedPct5h,
-            startTime: windowStart,
-            endTime: windowEnd,
-            unit: "%"
-        )
-
-        // 2. Calculate weekly compute quota window
-        let weekComponents = calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: now)
-        let weekStart = calendar.date(from: weekComponents) ?? now.addingTimeInterval(-3 * 86400)
-        let weekEnd = calendar.date(byAdding: .day, value: 7, to: weekStart) ?? now.addingTimeInterval(4 * 86400)
-
-        let weekly = TokenWindow(
-            title: "每周额度",
-            usedPercentage: usedPctWeek,
-            startTime: weekStart,
-            endTime: weekEnd,
-            unit: "%"
-        )
 
         return (fiveHour, weekly, detectedAccount ?? (isZh ? "Google 账号" : "Google Account"))
+    }
+
+    /// Fetches quota; on auth rejection refreshes the token (when possible) and retries once.
+    private func fetchQuotaWithAuthRetry(_ accessToken: String, refreshToken: String?) async throws -> (TokenWindow?, TokenWindow?) {
+        do {
+            return try await fetchAntigravityQuota(accessToken: accessToken)
+        } catch is QuotaAuthError {
+            guard let refreshToken,
+                  let refreshed = await refreshGoogleAccessToken(refreshToken: refreshToken) else {
+                throw NSError(domain: "GeminiService", code: 401, userInfo: [NSLocalizedDescriptionKey: isZh ? "Antigravity 凭证无效或已过期，请重新运行 agy 登录或在设置中更新凭证" : "Antigravity credentials are invalid or expired. Please log in again via agy or update credentials in Settings"])
+            }
+            return try await fetchAntigravityQuota(accessToken: refreshed)
+        }
+    }
+
+    /// Maps the "Gemini Models" group's weekly / 5-hour buckets of retrieveUserQuotaSummary to TokenWindows.
+    private func fetchAntigravityQuota(accessToken: String) async throws -> (TokenWindow?, TokenWindow?) {
+        let summary = try await postCloudCode(accessToken: accessToken, path: "/v1internal:retrieveUserQuotaSummary")
+
+        var fiveHour: TokenWindow? = nil
+        var weekly: TokenWindow? = nil
+
+        if let groups = summary["groups"] as? [[String: Any]] {
+            for group in groups {
+                guard let groupName = group["displayName"] as? String,
+                      groupName.lowercased().contains("gemini") else { continue }
+                if let buckets = group["buckets"] as? [[String: Any]] {
+                    for bucket in buckets {
+                        if let (window, isWeekly) = parseQuotaBucket(bucket) {
+                            if isWeekly { weekly = window } else { fiveHour = window }
+                        }
+                    }
+                }
+                break
+            }
+        }
+
+        if fiveHour == nil && weekly == nil {
+            // Older/alternative response shape: fall back to per-model quota and aggregate the gemini family.
+            (fiveHour, weekly) = try await fetchAntigravityModelsFallback(accessToken: accessToken)
+        }
+
+        guard fiveHour != nil || weekly != nil else {
+            throw NSError(domain: "GeminiService", code: 0, userInfo: [NSLocalizedDescriptionKey: isZh ? "Antigravity 额度响应中未找到 Gemini 配额数据" : "No Gemini quota data found in the Antigravity response"])
+        }
+        return (fiveHour, weekly)
+    }
+
+    private func postCloudCode(accessToken: String, path: String) async throws -> [String: Any] {
+        guard let url = URL(string: Self.cloudCodeQuotaBase + path) else {
+            throw URLError(.badURL)
+        }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        req.setValue("antigravity", forHTTPHeaderField: "User-Agent")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = Data("{}".utf8)
+        req.timeoutInterval = 15
+
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        guard let http = resp as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+        if http.statusCode == 401 || http.statusCode == 403 {
+            throw QuotaAuthError()
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            let raw = String(data: data.prefix(300), encoding: .utf8) ?? ""
+            throw NSError(domain: "GeminiService", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: isZh ? "Antigravity 额度接口响应异常 (\(http.statusCode)): \(raw)" : "Antigravity quota API error (\(http.statusCode)): \(raw)"])
+        }
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw NSError(domain: "GeminiService", code: 0, userInfo: [NSLocalizedDescriptionKey: isZh ? "Antigravity 额度响应解析失败" : "Failed to parse the Antigravity quota response"])
+        }
+        return json
+    }
+
+    /// Maps one quota bucket ({window/bucketId, remainingFraction, resetTime}) to a TokenWindow.
+    private func parseQuotaBucket(_ bucket: [String: Any]) -> (window: TokenWindow, isWeekly: Bool)? {
+        var kind = (bucket["window"] as? String) ?? ""
+        if kind.isEmpty { kind = (bucket["bucketId"] as? String) ?? "" }
+        if kind.isEmpty { kind = (bucket["displayName"] as? String) ?? "" }
+        kind = kind.lowercased()
+
+        let isWeekly = kind.contains("week")
+        let isFiveHour = !isWeekly && (kind.contains("5h") || kind.contains("five") || kind.contains("hour"))
+        guard isWeekly || isFiveHour else { return nil }
+
+        let remainingFraction: Double?
+        if let n = bucket["remainingFraction"] as? NSNumber {
+            remainingFraction = n.doubleValue
+        } else if let rem = bucket["remaining"] as? [String: Any],
+                  let n = rem["remainingFraction"] as? NSNumber {
+            remainingFraction = n.doubleValue
+        } else {
+            return nil
+        }
+
+        let span: TimeInterval = isWeekly ? 7 * 86400 : 5 * 3600
+        // While idle the API keeps the last reset anchor; roll forward so the countdown stays positive.
+        var end = parseServerDate(bucket["resetTime"]) ?? Date().addingTimeInterval(span)
+        while end <= Date() { end = end.addingTimeInterval(span) }
+
+        let usedPct = min(max((1.0 - remainingFraction!) * 100.0, 0.0), 100.0)
+        let window = TokenWindow(
+            title: isWeekly ? "每周额度" : "5小时算力额度",
+            usedPercentage: usedPct,
+            startTime: end.addingTimeInterval(-span),
+            endTime: end,
+            unit: "%",
+            isIdle: remainingFraction! >= 0.999
+        )
+        return (window, isWeekly)
+    }
+
+    /// Fallback via fetchAvailableModels: aggregates the most-constrained gemini model into a 5h window.
+    private func fetchAntigravityModelsFallback(accessToken: String) async throws -> (TokenWindow?, TokenWindow?) {
+        let response = try await postCloudCode(accessToken: accessToken, path: "/v1internal:fetchAvailableModels")
+        guard let models = response["models"] as? [String: Any] else { return (nil, nil) }
+
+        var minRemaining: Double?
+        var reset: Date?
+        for (key, value) in models {
+            guard key.lowercased().hasPrefix("gemini"),
+                  let info = value as? [String: Any],
+                  let quota = info["quotaInfo"] as? [String: Any],
+                  let n = quota["remainingFraction"] as? NSNumber else { continue }
+            let fraction = n.doubleValue
+            if minRemaining == nil || fraction < minRemaining! {
+                minRemaining = fraction
+                reset = parseServerDate(quota["resetTime"])
+            }
+        }
+        guard let remaining = minRemaining else { return (nil, nil) }
+
+        let span: TimeInterval = 5 * 3600
+        var end = reset ?? Date().addingTimeInterval(span)
+        while end <= Date() { end = end.addingTimeInterval(span) }
+
+        let window = TokenWindow(
+            title: "5小时算力额度",
+            usedPercentage: min(max((1.0 - remaining) * 100.0, 0.0), 100.0),
+            startTime: end.addingTimeInterval(-span),
+            endTime: end,
+            unit: "%",
+            isIdle: remaining >= 0.999
+        )
+        return (window, nil)
     }
 
     private func fetchUserInfo(token: String) async -> String? {

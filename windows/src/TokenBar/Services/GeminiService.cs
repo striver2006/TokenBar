@@ -1,3 +1,4 @@
+using TokenBar.I18n;
 using System;
 using System.IO;
 using System.Linq;
@@ -16,6 +17,108 @@ namespace TokenBar.Services
         private static readonly HttpClient HttpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
 
         private GeminiService() { }
+
+        // Antigravity (Google Code Assist) quota backend.
+        private const string CloudCodeQuotaBase = "https://cloudcode-pa.googleapis.com";
+
+        // The OAuth client pair used for token refresh is the public "installed app" client that
+        // Google ships inside the agy CLI / Antigravity IDE binaries. Nothing is embedded here:
+        // candidates are discovered at runtime from the local installation (or the
+        // ANTIGRAVITY_CLIENT_ID / ANTIGRAVITY_CLIENT_SECRET environment variables), and the
+        // pair that successfully refreshes the stored token is cached for the session.
+        private static readonly System.Text.RegularExpressions.Regex ClientIdRegex = new(
+            "[0-9]{6,}-[a-z0-9]{10,}\\.apps\\.googleusercontent\\.com",
+            System.Text.RegularExpressions.RegexOptions.Compiled);
+        private static readonly System.Text.RegularExpressions.Regex ClientSecretRegex = new(
+            "GOCSPX-[A-Za-z0-9_-]{28}",
+            System.Text.RegularExpressions.RegexOptions.Compiled);
+
+        private static List<(string Id, string Secret)>? _antigravityClientCandidates;
+
+        private static List<(string Id, string Secret)> GetAntigravityClientCandidates()
+        {
+            if (_antigravityClientCandidates != null)
+                return _antigravityClientCandidates;
+
+            var list = new List<(string Id, string Secret)>();
+            var envId = Environment.GetEnvironmentVariable("ANTIGRAVITY_CLIENT_ID");
+            var envSecret = Environment.GetEnvironmentVariable("ANTIGRAVITY_CLIENT_SECRET");
+            if (!string.IsNullOrWhiteSpace(envId) && !string.IsNullOrWhiteSpace(envSecret))
+            {
+                list.Add((envId!.Trim(), envSecret!.Trim()));
+                _antigravityClientCandidates = list;
+                return list;
+            }
+
+            var ids = new HashSet<string>();
+            var secrets = new HashSet<string>();
+            var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            var scanTargets = new[]
+            {
+                Path.Combine(localAppData, "agy", "bin", "agy.exe"),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".gemini", "bin", "agy.exe"),
+                Path.Combine(localAppData, "Programs", "Antigravity", "resources", "bin", "language_server.exe"),
+            };
+            foreach (var target in scanTargets)
+            {
+                if (ids.Count > 0 && secrets.Count > 0)
+                    break;
+                if (File.Exists(target))
+                    ScanFileForClientPatterns(target, ids, secrets);
+            }
+
+            foreach (var id in ids)
+            {
+                foreach (var secret in secrets)
+                {
+                    list.Add((id, secret));
+                    if (list.Count >= 8)
+                        break;
+                }
+            }
+
+            _antigravityClientCandidates = list;
+            return list;
+        }
+
+        /// <summary>Scans a large binary in overlapping chunks for the embedded OAuth client patterns.</summary>
+        private static void ScanFileForClientPatterns(string path, HashSet<string> ids, HashSet<string> secrets)
+        {
+            const int chunkSize = 4 * 1024 * 1024;
+            const int overlap = 1024;
+            try
+            {
+                using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, chunkSize);
+                var buffer = new byte[chunkSize + overlap];
+                int carryOver = 0;
+                while (true)
+                {
+                    var read = fs.Read(buffer, carryOver, chunkSize);
+                    if (read == 0)
+                        break;
+                    var len = carryOver + read;
+                    var text = System.Text.Encoding.Latin1.GetString(buffer, 0, len);
+                    foreach (System.Text.RegularExpressions.Match m in ClientIdRegex.Matches(text))
+                        ids.Add(m.Value);
+                    foreach (System.Text.RegularExpressions.Match m in ClientSecretRegex.Matches(text))
+                        secrets.Add(m.Value);
+                    carryOver = Math.Min(overlap, len);
+                    Array.Copy(buffer, len - carryOver, buffer, 0, carryOver);
+                    if (read < chunkSize)
+                        break;
+                }
+            }
+            catch { }
+        }
+
+        // Refreshed access tokens are short-lived (~1h); cache in memory instead of refreshing on every poll.
+        private static string? _cachedAccessToken;
+        private static DateTime _cachedAccessTokenExpiryUtc = DateTime.MinValue;
+
+        private sealed class QuotaAuthException : Exception
+        {
+            public QuotaAuthException() : base("quota auth rejected") { }
+        }
 
         [DllImport("advapi32.dll", EntryPoint = "CredReadW", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern bool CredRead(string target, int type, int reservedFlag, out IntPtr credentialPtr);
@@ -66,7 +169,7 @@ namespace TokenBar.Services
             return null;
         }
 
-        public (string? Token, string? RefreshToken, string? Account) ReadLocalGeminiConfig()
+        public (string? Token, string? RefreshToken, string? Account, DateTime? Expiry) ReadLocalGeminiConfig()
         {
             var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             var geminiDir = Path.Combine(userProfile, ".gemini");
@@ -78,6 +181,7 @@ namespace TokenBar.Services
             string? token = null;
             string? refreshToken = null;
             string? account = null;
+            DateTime? expiry = null;
 
             // 0. Check Windows Credential Manager (gemini:antigravity)
             var credBlob = ReadCredential("gemini:antigravity");
@@ -92,6 +196,8 @@ namespace TokenBar.Services
                             token = ap.GetString();
                         if (tokObj.TryGetProperty("refresh_token", out var rp))
                             refreshToken = rp.GetString();
+                        if (tokObj.TryGetProperty("expiry", out var ep) && ep.ValueKind == JsonValueKind.String)
+                            expiry = ParseTokenExpiry(ep.GetString());
                     }
                     else if (doc.RootElement.TryGetProperty("access_token", out var ap2))
                     {
@@ -115,6 +221,8 @@ namespace TokenBar.Services
                             token = ap.GetString();
                         if (tokObj.TryGetProperty("refresh_token", out var rp))
                             refreshToken = rp.GetString();
+                        if (tokObj.TryGetProperty("expiry", out var ep) && ep.ValueKind == JsonValueKind.String)
+                            expiry = ParseTokenExpiry(ep.GetString());
                     }
                 }
                 catch { }
@@ -146,7 +254,20 @@ namespace TokenBar.Services
                 catch { }
             }
 
-            return (token, refreshToken, account);
+            return (token, refreshToken, account, expiry);
+        }
+
+        /// <summary>Parses the RFC3339 expiry written by agy/Gemini CLI, e.g. "2026-09-08T01:23:12.8592338+08:00".</summary>
+        private static DateTime? ParseTokenExpiry(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return null;
+            if (DateTime.TryParse(value, System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.None, out var parsed))
+            {
+                return parsed;
+            }
+            return null;
         }
 
         public async Task<(TokenWindow? FiveHour, TokenWindow? Weekly, string? Account)> FetchQuotaWithApiKeyAsync(
@@ -279,67 +400,319 @@ namespace TokenBar.Services
         public async Task<(TokenWindow? FiveHour, TokenWindow? Weekly, string? Account)> FetchQuotaAsync(string? token)
         {
             var local = ReadLocalGeminiConfig();
-            var activeToken = !string.IsNullOrWhiteSpace(token) ? token : local.Token;
+            var refreshToken = local.RefreshToken;
             var detectedAccount = local.Account;
 
-            if (string.IsNullOrEmpty(activeToken))
+            // Resolve an access token: explicit setting > cached refresh result > stored token (if not near expiry) > refreshed.
+            string accessToken;
+            var cached = (_cachedAccessToken != null && DateTime.UtcNow < _cachedAccessTokenExpiryUtc) ? _cachedAccessToken : null;
+            var stored = !string.IsNullOrWhiteSpace(token) ? token : local.Token;
+            if (cached != null)
+            {
+                accessToken = cached;
+            }
+            else if (!string.IsNullOrWhiteSpace(stored) && (local.Expiry == null || local.Expiry > DateTime.Now.AddMinutes(2)))
+            {
+                accessToken = stored!;
+            }
+            else if (!string.IsNullOrWhiteSpace(refreshToken))
+            {
+                accessToken = await RefreshAntigravityTokenAsync(refreshToken!);
+            }
+            else if (!string.IsNullOrWhiteSpace(stored))
+            {
+                // No expiry info and no refresh token: try it, auth errors surface a clear message below.
+                accessToken = stored!;
+            }
+            else
             {
                 throw new Exception(LocalizationManager.Instance.IsChinese ? "请在设置中配置 Google AI Studio Key 或检测 Google 本地登录凭证" : "Please configure a Google AI Studio Key in Settings, or detect local Google credentials");
             }
 
-            // Query models
-            double usedPct5h = 15.0;
-            double usedPctWeek = 8.0;
+            var (fiveHour, weekly) = await FetchQuotaWithAuthRetryAsync(accessToken, refreshToken);
 
-            try
+            if (string.IsNullOrEmpty(detectedAccount))
             {
-                using var req = new HttpRequestMessage(HttpMethod.Get, "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1");
-                req.Headers.Add("Authorization", $"Bearer {activeToken}");
-                req.Headers.Add("Accept", "application/json");
-
-                var resp = await HttpClient.SendAsync(req);
-                if (resp.Headers.TryGetValues("x-ratelimit-remaining-requests", out var vals) &&
-                    double.TryParse(vals.FirstOrDefault(), out var rem))
-                {
-                    usedPct5h = Math.Clamp(100.0 - rem, 0.0, 100.0);
-                }
-            }
-            catch { }
-
-            var now = DateTime.Now;
-            int currentHour = now.Hour;
-            int slotStartHour = (currentHour / 5) * 5;
-            var windowStart = new DateTime(now.Year, now.Month, now.Day, slotStartHour, 0, 0);
-            var windowEnd = windowStart.AddHours(5);
-
-            var fiveHour = new TokenWindow
-            {
-                Title = "5小时算力额度",
-                UsedPercentage = usedPct5h,
-                StartTime = windowStart,
-                EndTime = windowEnd,
-                Unit = "%"
-            };
-
-            int diffToMonday = (7 + (now.DayOfWeek - DayOfWeek.Monday)) % 7;
-            var weekStart = now.Date.AddDays(-diffToMonday);
-            var weekEnd = weekStart.AddDays(7);
-
-            var weekly = new TokenWindow
-            {
-                Title = "每周额度",
-                UsedPercentage = usedPctWeek,
-                StartTime = weekStart,
-                EndTime = weekEnd,
-                Unit = "%"
-            };
-
-            if (string.IsNullOrEmpty(detectedAccount) && !string.IsNullOrEmpty(activeToken))
-            {
-                detectedAccount = await FetchUserInfoAsync(activeToken);
+                detectedAccount = await FetchUserInfoAsync(accessToken);
             }
 
             return (fiveHour, weekly, detectedAccount ?? (LocalizationManager.Instance.IsChinese ? "Google 账号" : "Google Account"));
+        }
+
+        /// <summary>Fetches quota; on auth rejection refreshes the token (when possible) and retries once.</summary>
+        private async Task<(TokenWindow? FiveHour, TokenWindow? Weekly)> FetchQuotaWithAuthRetryAsync(string accessToken, string? refreshToken)
+        {
+            try
+            {
+                return await FetchAntigravityQuotaCoreAsync(accessToken);
+            }
+            catch (QuotaAuthException)
+            {
+                if (string.IsNullOrWhiteSpace(refreshToken))
+                {
+                    throw new Exception(LocalizationManager.Instance.IsChinese
+                        ? "Antigravity 凭证无效或已过期，请重新运行 agy 登录或在设置中更新凭证"
+                        : "Antigravity credentials are invalid or expired. Please log in again via agy or update credentials in Settings");
+                }
+                var refreshed = await RefreshAntigravityTokenAsync(refreshToken!);
+                return await FetchAntigravityQuotaCoreAsync(refreshed);
+            }
+        }
+
+        /// <summary>
+        /// Exchanges the stored refresh_token for a fresh access token. Tries every discovered
+        /// OAuth client pair until one is accepted (the binaries contain more than one client),
+        /// then caches the working pair for the session.
+        /// </summary>
+        private async Task<string> RefreshAntigravityTokenAsync(string refreshToken)
+        {
+            var candidates = GetAntigravityClientCandidates();
+            string? lastDetail = null;
+
+            foreach (var client in candidates)
+            {
+                using var resp = await HttpClient.PostAsync("https://oauth2.googleapis.com/token",
+                    new FormUrlEncodedContent(new[]
+                    {
+                        new System.Collections.Generic.KeyValuePair<string, string>("client_id", client.Id),
+                        new System.Collections.Generic.KeyValuePair<string, string>("client_secret", client.Secret),
+                        new System.Collections.Generic.KeyValuePair<string, string>("grant_type", "refresh_token"),
+                        new System.Collections.Generic.KeyValuePair<string, string>("refresh_token", refreshToken)
+                    }));
+
+                var body = await resp.Content.ReadAsStringAsync();
+                if (!resp.IsSuccessStatusCode)
+                {
+                    lastDetail = $"{(int)resp.StatusCode}";
+                    continue;
+                }
+
+                using var doc = JsonDocument.Parse(body);
+                if (!doc.RootElement.TryGetProperty("access_token", out var at) || at.GetString() is not { Length: > 0 })
+                {
+                    lastDetail = LocalizationManager.Instance.IsChinese ? "响应缺少 access_token" : "missing access_token";
+                    continue;
+                }
+
+                // Cache the working pair first so later refreshes skip the trial-and-error.
+                _antigravityClientCandidates?.Remove(client);
+                _antigravityClientCandidates?.Insert(0, client);
+
+                _cachedAccessToken = at.GetString();
+                var expiresIn = 3600;
+                if (doc.RootElement.TryGetProperty("expires_in", out var ei) && ei.ValueKind == JsonValueKind.Number && ei.TryGetInt32(out var secs))
+                {
+                    expiresIn = secs;
+                }
+                _cachedAccessTokenExpiryUtc = DateTime.UtcNow.AddSeconds(Math.Max(60, expiresIn - 120));
+                return _cachedAccessToken!;
+            }
+
+            var hint = LocalizationManager.Instance.IsChinese
+                ? $"Google 凭证刷新失败{(_antigravityClientCandidates is { Count: 0 } ? "（未在本机找到 Antigravity/agy 安装，可设置环境变量 ANTIGRAVITY_CLIENT_ID / ANTIGRAVITY_CLIENT_SECRET）" : $"（HTTP {lastDetail}）")}，请重新运行 agy 登录"
+                : $"Failed to refresh Google credentials{(_antigravityClientCandidates is { Count: 0 } ? " (no local Antigravity/agy installation found; set ANTIGRAVITY_CLIENT_ID / ANTIGRAVITY_CLIENT_SECRET)" : $" (HTTP {lastDetail})")}. Please log in again via agy";
+            throw new Exception(hint);
+        }
+
+        /// <summary>
+        /// Fetches the real Antigravity quota (same source as the IDE's usage panel) and maps the
+        /// "Gemini Models" group's weekly / 5-hour buckets to TokenWindows.
+        /// Throws QuotaAuthException on 401/403 so the caller can refresh and retry.
+        /// </summary>
+        private async Task<(TokenWindow? FiveHour, TokenWindow? Weekly)> FetchAntigravityQuotaCoreAsync(string accessToken)
+        {
+            TokenWindow? fiveHour = null;
+            TokenWindow? weekly = null;
+
+            var summaryBody = await PostCloudCodeAsync(accessToken, "/v1internal:retrieveUserQuotaSummary");
+
+            using (var doc = JsonDocument.Parse(summaryBody))
+            {
+                if (doc.RootElement.TryGetProperty("groups", out var groups) && groups.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var group in groups.EnumerateArray())
+                    {
+                        if (!group.TryGetProperty("displayName", out var gName) || gName.ValueKind != JsonValueKind.String)
+                            continue;
+                        var name = gName.GetString() ?? "";
+                        // "Gemini Models" group (skip "Claude and GPT models")
+                        if (name.Contains("gemini", StringComparison.OrdinalIgnoreCase))
+                        {
+                            if (group.TryGetProperty("buckets", out var buckets) && buckets.ValueKind == JsonValueKind.Array)
+                            {
+                                foreach (var bucket in buckets.EnumerateArray())
+                                {
+                                    var window = ParseQuotaBucket(bucket, out var isWeekly);
+                                    if (window == null)
+                                        continue;
+                                    if (isWeekly)
+                                        weekly = window;
+                                    else
+                                        fiveHour = window;
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (fiveHour == null && weekly == null)
+            {
+                // Older/alternative response shape: fall back to per-model quota and aggregate the gemini family.
+                (fiveHour, weekly) = await FetchAntigravityModelsFallbackAsync(accessToken);
+            }
+
+            if (fiveHour == null && weekly == null)
+            {
+                throw new Exception(LocalizationManager.Instance.IsChinese
+                    ? "Antigravity 额度响应中未找到 Gemini 配额数据"
+                    : "No Gemini quota data found in the Antigravity response");
+            }
+
+            return (fiveHour, weekly);
+        }
+
+        private async Task<string> PostCloudCodeAsync(string accessToken, string path)
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Post, CloudCodeQuotaBase + path);
+            req.Headers.TryAddWithoutValidation("Authorization", $"Bearer {accessToken}");
+            req.Headers.TryAddWithoutValidation("User-Agent", "antigravity");
+            req.Content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
+
+            var resp = await HttpClient.SendAsync(req);
+            var body = await resp.Content.ReadAsStringAsync();
+
+            if ((int)resp.StatusCode == 401 || (int)resp.StatusCode == 403)
+            {
+                throw new QuotaAuthException();
+            }
+            if (!resp.IsSuccessStatusCode)
+            {
+                var trimmed = body.Length > 300 ? body[..300] : body;
+                throw new Exception(LocalizationManager.Instance.IsChinese
+                    ? $"Antigravity 额度接口响应异常 ({(int)resp.StatusCode}): {trimmed}"
+                    : $"Antigravity quota API error ({(int)resp.StatusCode}): {trimmed}");
+            }
+            return body;
+        }
+
+        /// <summary>Maps one quota bucket ({window/bucketId, remainingFraction, resetTime}) to a TokenWindow.</summary>
+        private static TokenWindow? ParseQuotaBucket(JsonElement bucket, out bool isWeekly)
+        {
+            isWeekly = false;
+
+            string kind = "";
+            if (bucket.TryGetProperty("window", out var w) && w.ValueKind == JsonValueKind.String)
+                kind = w.GetString() ?? "";
+            if (string.IsNullOrEmpty(kind) && bucket.TryGetProperty("bucketId", out var bid) && bid.ValueKind == JsonValueKind.String)
+                kind = bid.GetString() ?? "";
+            if (string.IsNullOrEmpty(kind) && bucket.TryGetProperty("displayName", out var dn) && dn.ValueKind == JsonValueKind.String)
+                kind = dn.GetString() ?? "";
+            kind = kind.ToLowerInvariant();
+
+            isWeekly = kind.Contains("week");
+            var isFiveHour = !isWeekly && (kind.Contains("5h") || kind.Contains("five") || kind.Contains("hour"));
+            if (!isWeekly && !isFiveHour)
+                return null;
+
+            double? remainingFraction = null;
+            if (bucket.TryGetProperty("remainingFraction", out var rf) && rf.ValueKind == JsonValueKind.Number)
+            {
+                remainingFraction = rf.GetDouble();
+            }
+            else if (bucket.TryGetProperty("remaining", out var rem) && rem.ValueKind == JsonValueKind.Object &&
+                     rem.TryGetProperty("remainingFraction", out var rf2) && rf2.ValueKind == JsonValueKind.Number)
+            {
+                remainingFraction = rf2.GetDouble();
+            }
+            if (remainingFraction == null)
+                return null;
+
+            DateTime? reset = null;
+            if (bucket.TryGetProperty("resetTime", out var rt))
+            {
+                if (rt.ValueKind == JsonValueKind.String && DateTime.TryParse(rt.GetString(),
+                        System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var parsed))
+                {
+                    reset = parsed;
+                }
+                else if (rt.ValueKind == JsonValueKind.Number && rt.TryGetInt64(out var epochSeconds))
+                {
+                    reset = DateTimeOffset.FromUnixTimeSeconds(epochSeconds).LocalDateTime;
+                }
+            }
+
+            var span = isWeekly ? TimeSpan.FromDays(7) : TimeSpan.FromHours(5);
+            // While idle the API keeps the last reset anchor; roll forward so the countdown stays positive.
+            var end = reset ?? DateTime.Now.Add(span);
+            while (end <= DateTime.Now)
+                end = end.Add(span);
+            var start = end.Subtract(span);
+
+            var usedPct = Math.Clamp((1.0 - remainingFraction.Value) * 100.0, 0.0, 100.0);
+            return new TokenWindow
+            {
+                Title = isWeekly ? "每周额度" : "5小时算力额度",
+                UsedPercentage = usedPct,
+                StartTime = start,
+                EndTime = end,
+                Unit = "%",
+                IsIdle = remainingFraction.Value >= 0.999
+            };
+        }
+
+        /// <summary>Fallback via fetchAvailableModels: aggregates the most-constrained gemini model into a 5h window.</summary>
+        private async Task<(TokenWindow? FiveHour, TokenWindow? Weekly)> FetchAntigravityModelsFallbackAsync(string accessToken)
+        {
+            var modelsBody = await PostCloudCodeAsync(accessToken, "/v1internal:fetchAvailableModels");
+
+            double? minRemaining = null;
+            DateTime? reset = null;
+            using var doc = JsonDocument.Parse(modelsBody);
+            if (doc.RootElement.TryGetProperty("models", out var models) && models.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var prop in models.EnumerateObject())
+                {
+                    if (!prop.Name.StartsWith("gemini", StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    if (!prop.Value.TryGetProperty("quotaInfo", out var qi) || qi.ValueKind != JsonValueKind.Object)
+                        continue;
+                    if (qi.TryGetProperty("remainingFraction", out var rf) && rf.ValueKind == JsonValueKind.Number)
+                    {
+                        var fraction = rf.GetDouble();
+                        if (minRemaining == null || fraction < minRemaining)
+                        {
+                            minRemaining = fraction;
+                            if (qi.TryGetProperty("resetTime", out var rt) && rt.ValueKind == JsonValueKind.String &&
+                                DateTime.TryParse(rt.GetString(), System.Globalization.CultureInfo.InvariantCulture,
+                                    System.Globalization.DateTimeStyles.None, out var parsed))
+                            {
+                                reset = parsed;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (minRemaining == null)
+                return (null, null);
+
+            var span = TimeSpan.FromHours(5);
+            var end = reset ?? DateTime.Now.Add(span);
+            while (end <= DateTime.Now)
+                end = end.Add(span);
+
+            var window = new TokenWindow
+            {
+                Title = "5小时算力额度",
+                UsedPercentage = Math.Clamp((1.0 - minRemaining.Value) * 100.0, 0.0, 100.0),
+                StartTime = end.Subtract(span),
+                EndTime = end,
+                Unit = "%",
+                IsIdle = minRemaining.Value >= 0.999
+            };
+            return (window, null);
         }
 
         public async Task<string?> FetchUserInfoAsync(string token)

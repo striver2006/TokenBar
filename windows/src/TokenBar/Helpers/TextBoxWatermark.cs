@@ -4,6 +4,10 @@ using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
+using TextBox = System.Windows.Controls.TextBox;
+using Size = System.Windows.Size;
+using Point = System.Windows.Point;
+using Color = System.Windows.Media.Color;
 
 namespace TokenBar.Helpers
 {

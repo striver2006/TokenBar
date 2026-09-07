@@ -273,44 +273,8 @@ public final class RefreshManager: ObservableObject {
             if let acc = res.account { quota.accountInfo = acc }
             quota.lastUpdated = Date()
         } catch {
-            let local = GeminiService.shared.readLocalGeminiConfig()
-            if local.account != nil || local.token != nil || local.refreshToken != nil {
-                // Construct standard rolling compute windows if local credentials exist
-                let now = Date()
-                let calendar = Calendar.current
-                let currentHour = calendar.component(.hour, from: now)
-                let slotIndex = currentHour / 5
-                let startOfSlotHour = slotIndex * 5
-                let windowStart = calendar.date(bySettingHour: startOfSlotHour, minute: 0, second: 0, of: now) ?? now.addingTimeInterval(-2 * 3600)
-                let windowEnd = windowStart.addingTimeInterval(5 * 3600)
-
-                quota.fiveHourWindow = TokenWindow(
-                    title: "5小时算力额度",
-                    usedPercentage: 15.0,
-                    startTime: windowStart,
-                    endTime: windowEnd,
-                    unit: "%"
-                )
-
-                let weekComponents = calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: now)
-                let weekStart = calendar.date(from: weekComponents) ?? now.addingTimeInterval(-3 * 86400)
-                let weekEnd = calendar.date(byAdding: .day, value: 7, to: weekStart) ?? now.addingTimeInterval(4 * 86400)
-
-                quota.weeklyWindow = TokenWindow(
-                    title: "每周额度",
-                    usedPercentage: 8.0,
-                    startTime: weekStart,
-                    endTime: weekEnd,
-                    unit: "%"
-                )
-
-                quota.isAuthorized = true
-                quota.accountInfo = local.account ?? "Google Account"
-                quota.lastUpdated = Date()
-            } else {
-                quota.isAuthorized = false
-                quota.errorMessage = error.localizedDescription
-            }
+            quota.isAuthorized = false
+            quota.errorMessage = error.localizedDescription
         }
 
         quota.isLoading = false

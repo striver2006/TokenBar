@@ -350,46 +350,8 @@ namespace TokenBar.Services
             }
             catch (Exception ex)
             {
-                var local = GeminiService.Instance.ReadLocalGeminiConfig();
-                if (local.Account != null || local.Token != null)
-                {
-                    var now = DateTime.Now;
-                    int currentHour = now.Hour;
-                    int slotStartHour = (currentHour / 5) * 5;
-                    var windowStart = new DateTime(now.Year, now.Month, now.Day, slotStartHour, 0, 0);
-                    var windowEnd = windowStart.AddHours(5);
-
-                    quota.FiveHourWindow = new TokenWindow
-                    {
-                        Title = "5小时算力额度",
-                        UsedPercentage = 15.0,
-                        StartTime = windowStart,
-                        EndTime = windowEnd,
-                        Unit = "%"
-                    };
-
-                    int diffToMonday = (7 + (now.DayOfWeek - DayOfWeek.Monday)) % 7;
-                    var weekStart = now.Date.AddDays(-diffToMonday);
-                    var weekEnd = weekStart.AddDays(7);
-
-                    quota.WeeklyWindow = new TokenWindow
-                    {
-                        Title = "每周额度",
-                        UsedPercentage = 8.0,
-                        StartTime = weekStart,
-                        EndTime = weekEnd,
-                        Unit = "%"
-                    };
-
-                    quota.IsAuthorized = true;
-                    quota.AccountInfo = local.Account ?? (LocalizationManager.Instance.IsChinese ? "Google 账号" : "Google Account");
-                    quota.LastUpdated = DateTime.Now;
-                }
-                else
-                {
-                    quota.IsAuthorized = false;
-                    quota.ErrorMessage = ex.Message;
-                }
+                quota.IsAuthorized = false;
+                quota.ErrorMessage = ex.Message;
             }
             finally
             {

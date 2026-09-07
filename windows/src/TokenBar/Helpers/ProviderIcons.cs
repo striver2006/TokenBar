@@ -1,6 +1,8 @@
 using System;
 using System.Windows;
 using System.Windows.Media;
+using Color = System.Windows.Media.Color;
+using Point = System.Windows.Point;
 using TokenBar.Models;
 
 namespace TokenBar.Helpers

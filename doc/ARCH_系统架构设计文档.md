@@ -100,7 +100,7 @@ Windows 客户端采用轻量现代的 **.NET 8 WPF** 架构，利用 Windows �
    - 配置通过 `System.Text.Json` 本地持久化到 `%AppData%\TokenBar\settings.json`。
 5. **凭据安全与系统集成 (`GeminiService` / `Advapi32`)**：
    - 原生 P/Invoke 调用 Windows 凭据管理器 (`advapi32.dll` `CredReadW`)，安全提取 Antigravity CLI (`agy`) 及 Antigravity IDE 托管的 Google One PRO 凭证（目标名 `gemini:antigravity`）。
-   - 自动请求 Google UserInfo 接口解析用户邮箱，支持 5 小时滚动算力与每周额度监控，实现与 macOS Keychain/CLI 凭证管理完全同构。
+   - 使用凭证中的 refresh_token 自动续期访问令牌（内存缓存约 1 小时有效期），调用 Google Code Assist 配额接口获取与 Antigravity 官方用量面板一致的真实数据；自动请求 Google UserInfo 接口解析用户邮箱，实现与 macOS 凭证管理完全同构。
 
 ---
 
@@ -123,13 +123,16 @@ Windows 客户端采用轻量现代的 **.NET 8 WPF** 架构，利用 Windows �
 |                   | 解析 5 小时滚动滑动窗口百分比与每周额度配额                 |
 +-------------------+-------------------------------------------------------------+
 | Google Gemini /   | 1. API Key 模式：直连 Generative Language API 探测配额状态；|
-| Google One /      | 2. 账号授权 / Antigravity 模式：                             |
+| Google One /      | 2. 账号授权 / Antigravity 模式（与 Antigravity 官方面板同源）：|
 | Antigravity       |    - Windows: 原生 P/Invoke 调用 Windows 凭据管理器          |
 |                   |      (`advapi32.dll` `CredReadW`) 安全读取 `gemini:antigravity`|
-|                   |      Generic Credential，无感换取 OAuth 访问令牌与用户信息；  |
-|                   |      同时兼容读取 `%USERPROFILE%\.gemini\` 凭证文件；        |
-|                   |    - macOS: 读取系统钥匙串与 `~/.gemini/` 会话；             |
-|                   |    - 支持内置 OAuth 2.0 Web 回环授权，展示 5h 及周配额。     |
+|                   |      Generic Credential；同时兼容读取 `%USERPROFILE%\.gemini\`|
+|                   |      凭证文件；macOS: 读取 `~/.gemini/` 会话；               |
+|                   |    - 使用 agy CLI 内置 OAuth 客户端自动刷新访问令牌，调用    |
+|                   |      Google Code Assist `v1internal:retrieveUserQuotaSummary`|
+|                   |      获取 "Gemini Models" 分组的每周 / 5 小时剩余比例与真实  |
+|                   |      重置时间（fetchAvailableModels 逐模型兜底聚合）；       |
+|                   |    - 支持内置 OAuth 2.0 Web 回环授权；获取失败时如实报错。  |
 +-------------------+-------------------------------------------------------------+
 | DeepSeek          | 查询 /user/balance 接口获取实时账户余额与赠送金额           |
 +-------------------+-------------------------------------------------------------+

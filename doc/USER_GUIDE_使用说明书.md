@@ -74,8 +74,8 @@ TokenBar 独家支持双重模式：
 - **方式二：Google 账号授权 / 本地凭证 (Google One / Antigravity)**：
   - **Google 网站登录授权**：点击设置页面的「Google 网站登录授权」按钮，若本地已登录 Google 账号将一键无缝绑定；若未检测到，将引导通过浏览器完成 OAuth 认证。
   - **自动读取本地 / Antigravity 凭证**：
-    - **Windows**：TokenBar 原生集成 Windows 凭据管理器（Credential Manager），可自动识别并提取 Antigravity CLI (`agy`) / Antigravity IDE 登录的 Google One PRO 凭据（`gemini:antigravity`），并自动请求 UserInfo 接口解析个人 Google 邮箱地址，即时呈现 **5小时滚动算力额度** 与 **每周额度**。同时兼容读取 `%USERPROFILE%\.gemini\` 下的本地凭证。
-    - **macOS**：支持从 Keychain 以及 `~/.gemini/` 自动读取凭证。
+    - **Windows**：TokenBar 原生集成 Windows 凭据管理器（Credential Manager），可自动识别并提取 Antigravity CLI (`agy`) / Antigravity IDE 登录的 Google One PRO 凭据（`gemini:antigravity`），自动刷新访问令牌并调用 Google Code Assist 配额接口，呈现与 **Antigravity 官方用量面板一致** 的 Gemini Models **5小时滚动算力额度** 与 **每周额度**（真实剩余比例与重置时间）。同时兼容读取 `%USERPROFILE%\.gemini\` 下的本地凭证。
+    - **macOS**：支持从 Keychain 以及 `~/.gemini/` 自动读取凭证，额度数据来源与 Windows 端一致。
 
 ### 3.4 国内主流厂商配置
 - **DeepSeek (深度求索)**：在 [platform.deepseek.com](https://platform.deepseek.com) 获取 API Key，填入后将自动同步账户可用余额。
