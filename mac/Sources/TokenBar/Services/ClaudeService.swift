@@ -281,8 +281,9 @@ public final class ClaudeService {
         endpoint: String = "https://api.anthropic.com/v1"
     ) async throws -> (primary: TokenWindow?, secondary: TokenWindow?, account: String?) {
         let cleanKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let isZh = LocalizationManager.shared.effectiveLanguage == "zh"
         guard !cleanKey.isEmpty else {
-            throw NSError(domain: "ClaudeService", code: 400, userInfo: [NSLocalizedDescriptionKey: "请输入 Anthropic API Key"])
+            throw NSError(domain: "ClaudeService", code: 400, userInfo: [NSLocalizedDescriptionKey: isZh ? "请输入 Anthropic API Key" : "Please enter Anthropic API Key"])
         }
 
         var baseEndpoint = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -311,16 +312,16 @@ public final class ClaudeService {
         }
 
         if httpResp.statusCode == 401 {
-            throw NSError(domain: "ClaudeService", code: 401, userInfo: [NSLocalizedDescriptionKey: "Anthropic API Key 无效或未授权 (HTTP 401)"])
+            throw NSError(domain: "ClaudeService", code: 401, userInfo: [NSLocalizedDescriptionKey: isZh ? "Anthropic API Key 无效或未授权 (HTTP 401)" : "Anthropic API Key is invalid or unauthorized (HTTP 401)"])
         }
 
         if httpResp.statusCode == 429 {
-            throw NSError(domain: "ClaudeService", code: 429, userInfo: [NSLocalizedDescriptionKey: "Anthropic 请求频率或额度超限 (HTTP 429)"])
+            throw NSError(domain: "ClaudeService", code: 429, userInfo: [NSLocalizedDescriptionKey: isZh ? "Anthropic 请求频率或额度超限 (HTTP 429)" : "Anthropic rate limit or quota exceeded (HTTP 429)"])
         }
 
         guard httpResp.statusCode >= 200 && httpResp.statusCode < 300 else {
             let msg = String(data: data, encoding: .utf8) ?? "HTTP \(httpResp.statusCode)"
-            throw NSError(domain: "ClaudeService", code: httpResp.statusCode, userInfo: [NSLocalizedDescriptionKey: "Anthropic 接口响应异常: \(msg.prefix(100))"])
+            throw NSError(domain: "ClaudeService", code: httpResp.statusCode, userInfo: [NSLocalizedDescriptionKey: isZh ? "Anthropic 接口响应异常: \(msg.prefix(100))" : "Anthropic API response error: \(msg.prefix(100))"])
         }
 
         let allHeaders = httpResp.allHeaderFields
@@ -394,7 +395,7 @@ public final class ClaudeService {
         }
 
         let keySuffix = cleanKey.count > 6 ? String(cleanKey.suffix(4)) : cleanKey
-        let account = "Anthropic API (尾号 \(keySuffix))"
+        let account = isZh ? "Anthropic API (尾号 \(keySuffix))" : "Anthropic API (... \(keySuffix))"
 
         return (primaryWindow, secondaryWindow, account)
     }

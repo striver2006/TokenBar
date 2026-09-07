@@ -23,7 +23,7 @@ namespace TokenBar.Services
             var cleanKey = apiKey.Trim();
             if (string.IsNullOrEmpty(cleanKey))
             {
-                throw new ArgumentException("请输入 KIMI / Moonshot API Key");
+                throw new ArgumentException(LocalizationManager.Instance.IsChinese ? "请输入 KIMI / Moonshot API Key" : "Please enter KIMI / Moonshot API Key");
             }
 
             var baseEndpoint = endpoint.Trim().TrimEnd('/');
@@ -49,18 +49,18 @@ namespace TokenBar.Services
 
             if (resp.StatusCode == System.Net.HttpStatusCode.Unauthorized)
             {
-                throw new Exception("KIMI API Key 无效或未授权 (HTTP 401)");
+                throw new Exception(LocalizationManager.Instance.IsChinese ? "KIMI API Key 无效或未授权 (HTTP 401)" : "KIMI API Key is invalid or unauthorized (HTTP 401)");
             }
 
             if ((int)resp.StatusCode == 429)
             {
-                throw new Exception("KIMI 请求并发超限或额度不足 (HTTP 429)");
+                throw new Exception(LocalizationManager.Instance.IsChinese ? "KIMI 请求并发超限或额度不足 (HTTP 429)" : "KIMI concurrency limit reached or quota insufficient (HTTP 429)");
             }
 
             if (!resp.IsSuccessStatusCode)
             {
                 var snippet = body.Length > 100 ? body.Substring(0, 100) : body;
-                throw new Exception($"KIMI 接口响应异常 ({(int)resp.StatusCode}): {snippet}");
+                throw new Exception(LocalizationManager.Instance.IsChinese ? $"KIMI 接口响应异常 ({(int)resp.StatusCode}): {snippet}" : $"KIMI API response error ({(int)resp.StatusCode}): {snippet}");
             }
 
             string? GetHeader(string name)
@@ -128,7 +128,10 @@ namespace TokenBar.Services
             }
 
             var keySuffix = cleanKey.Length > 6 ? cleanKey[^4..] : cleanKey;
-            var account = balanceString != null ? $"余额: {balanceString}" : $"KIMI (尾号 {keySuffix})";
+            var isZh = LocalizationManager.Instance.IsChinese;
+            var account = balanceString != null
+                ? (isZh ? $"余额: {balanceString}" : $"Balance: {balanceString}")
+                : (isZh ? $"KIMI (尾号 {keySuffix})" : $"KIMI (...{keySuffix})");
 
             return (primaryWindow, secondaryWindow, account);
         }

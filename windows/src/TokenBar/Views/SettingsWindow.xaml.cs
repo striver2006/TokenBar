@@ -17,6 +17,7 @@ using ComboBoxItem = System.Windows.Controls.ComboBoxItem;
 using ListBox = System.Windows.Controls.ListBox;
 using ListBoxItem = System.Windows.Controls.ListBoxItem;
 using TextBox = System.Windows.Controls.TextBox;
+using TokenBar.Helpers;
 using TokenBar.I18n;
 using TokenBar.Models;
 using TokenBar.Services;
@@ -32,6 +33,7 @@ namespace TokenBar.Views
         {
             InitializeComponent();
             _currentTab = initialTab;
+            ApplyTabIcons();
             UpdateLocalization();
             LoadFromSettings();
             SelectTab(initialTab);
@@ -39,6 +41,40 @@ namespace TokenBar.Views
             LocalizationManager.Instance.PropertyChanged += (s, e) => Dispatcher.Invoke(UpdateLocalization);
             RefreshManager.Instance.OnQuotasUpdated += () => Dispatcher.Invoke(UpdateStatuses);
             UpdateStatuses();
+        }
+
+        /// <summary>
+        /// 为左侧导航与各选项卡标题设置厂商标识矢量图标（几何与配色对齐 macOS 端 SF Symbol 方案）。
+        /// </summary>
+        private void ApplyTabIcons()
+        {
+            SetIcon(NavIconOpenAI, SettingsTab.OpenAI);
+            SetIcon(NavIconClaude, SettingsTab.Anthropic);
+            SetIcon(NavIconGemini, SettingsTab.Gemini);
+            SetIcon(NavIconDeepSeek, SettingsTab.DeepSeek);
+            SetIcon(NavIconVolcengine, SettingsTab.Volcengine);
+            SetIcon(NavIconKimi, SettingsTab.Kimi);
+            SetIcon(NavIconGLM, SettingsTab.GLM);
+            SetIcon(NavIconAliyun, SettingsTab.Aliyun);
+            SetIcon(NavIconCustom, SettingsTab.Custom);
+            SetIcon(NavIconGeneral, SettingsTab.General);
+
+            SetIcon(IconOpenAI, SettingsTab.OpenAI);
+            SetIcon(IconAnthropic, SettingsTab.Anthropic);
+            SetIcon(IconGemini, SettingsTab.Gemini);
+            SetIcon(IconDeepSeek, SettingsTab.DeepSeek);
+            SetIcon(IconVolcengine, SettingsTab.Volcengine);
+            SetIcon(IconKimi, SettingsTab.Kimi);
+            SetIcon(IconGLM, SettingsTab.GLM);
+            SetIcon(IconAliyun, SettingsTab.Aliyun);
+            SetIcon(IconCustom, SettingsTab.Custom);
+            SetIcon(IconGeneral, SettingsTab.General);
+        }
+
+        private static void SetIcon(System.Windows.Shapes.Path icon, SettingsTab tab)
+        {
+            icon.Data = ProviderIcons.GetTabIconGeometry(tab);
+            icon.Fill = new SolidColorBrush(ProviderIcons.GetTabIconColor(tab));
         }
 
         public void SelectTab(SettingsTab tab)
@@ -118,6 +154,106 @@ namespace TokenBar.Views
             TxtNavCustom.Text = i18n.CustomProviders;
             TxtNavGeneral.Text = i18n.GeneralSettings;
 
+            // Tab 0: OpenAI
+            TxtOpenAITitle.Text = i18n.OpenAITitle;
+            TxtOpenAISubtitle.Text = i18n.OpenAISubtitle;
+            ChkOpenAIEnabled.Content = i18n.EnableMonitoring;
+            TxtOpenAIKeyLabel.Text = i18n.ApiKeyLabel;
+            TxtOpenAIKeyHint.Text = i18n.HintOpenAIKey;
+            TxtOpenAIEndpointLabel.Text = i18n.ApiEndpointLabel;
+            TxtOpenAIEndpointHint.Text = i18n.HintOpenAIEndpoint;
+            TxtOpenAIOrgIdLabel.Text = i18n.OrgIdLabel;
+            BtnTestOpenAI.Content = i18n.SaveAndTest;
+
+            // Tab 1: Anthropic
+            TxtClaudeTitle.Text = i18n.AnthropicTitle;
+            TxtClaudeSubtitle.Text = i18n.AnthropicSubtitle;
+            ChkClaudeEnabled.Content = i18n.EnableMonitoring;
+            TxtClaudeMethod1Title.Text = i18n.MethodAnthropicKey;
+            TxtAnthropicKeyLabel.Text = $"{i18n.ApiKeyLabel}:";
+            TxtAnthropicEndpointLabel.Text = i18n.LabelApiEndpointColon;
+            BtnTestAnthropicKey.Content = i18n.SaveAndTestAnthropicKey;
+            TxtClaudeMethod2Title.Text = i18n.MethodClaudeSubscription;
+            BtnImportClaudeLocal.Content = i18n.BtnReadLocalCLIAuth;
+            TxtClaudeManualTokenLabel.Text = i18n.LabelClaudeManualToken;
+            BtnSaveClaudeToken.Content = i18n.Save;
+
+            // Tab 2: Gemini
+            TxtGeminiTitle.Text = i18n.GeminiTitle;
+            TxtGeminiSubtitle.Text = i18n.GeminiSubtitle;
+            ChkGeminiEnabled.Content = i18n.EnableMonitoring;
+            TxtGeminiMethod1Title.Text = i18n.MethodGeminiApiKey;
+            TxtGeminiKeyLabel.Text = $"{i18n.ApiKeyLabel} (AIzaSy...):";
+            TxtGeminiEndpointLabel.Text = i18n.LabelApiEndpointColon;
+            BtnTestGeminiKey.Content = i18n.SaveAndTest;
+            BtnClearGeminiKey.Content = i18n.ClearKey;
+            TxtGeminiMethod2Title.Text = i18n.MethodGeminiOAuth;
+            BtnGeminiWebLogin.Content = i18n.BtnGoogleWebLogin;
+            BtnImportGeminiLocal.Content = i18n.BtnReadLocalGeminiConfig;
+            TxtGeminiManualTokenLabel.Text = i18n.LabelManualGeminiToken;
+            BtnSaveGeminiToken.Content = i18n.Save;
+
+            // Tab 3: DeepSeek
+            TxtDeepSeekTitle.Text = i18n.DeepSeekTitle;
+            TxtDeepSeekSubtitle.Text = i18n.DeepSeekSubtitle;
+            ChkDeepSeekEnabled.Content = i18n.EnableMonitoring;
+            TxtDeepSeekKeyLabel.Text = i18n.ApiKeyLabel;
+            TxtDeepSeekKeyHint.Text = i18n.HintDeepSeekKey;
+            TxtDeepSeekEndpointLabel.Text = i18n.ApiEndpointLabel;
+            TxtDeepSeekModelLabel.Text = i18n.LabelDefaultModel;
+            BtnTestDeepSeek.Content = i18n.SaveAndTest;
+
+            // Tab 4: Volcengine
+            TxtVolcengineTitle.Text = i18n.VolcengineTitle;
+            TxtVolcengineSubtitle.Text = i18n.VolcengineSubtitle;
+            ChkVolcengineEnabled.Content = i18n.EnableMonitoring;
+            TxtVolcengineKeyLabel.Text = $"{i18n.VolcengineTitle} {i18n.ApiKeyLabel}";
+            TxtVolcengineEndpointLabel.Text = i18n.ApiEndpointLabel;
+            TxtVolcengineModelLabel.Text = i18n.LabelVolcengineEndpointId;
+            BtnTestVolcengine.Content = i18n.SaveAndTest;
+
+            // Tab 5: Kimi
+            TxtKimiTitle.Text = i18n.KimiTitle;
+            TxtKimiSubtitle.Text = i18n.KimiSubtitle;
+            ChkKimiEnabled.Content = i18n.EnableMonitoring;
+            TxtKimiKeyLabel.Text = $"{i18n.KimiTitle} {i18n.ApiKeyLabel}";
+            TxtKimiEndpointLabel.Text = i18n.ApiEndpointLabel;
+            TxtKimiModelLabel.Text = i18n.LabelModelName;
+            BtnTestKimi.Content = i18n.SaveAndTest;
+
+            // Tab 6: GLM
+            TxtGLMTitle.Text = i18n.GLMTitle;
+            TxtGLMSubtitle.Text = i18n.GLMSubtitle;
+            ChkGLMEnabled.Content = i18n.EnableMonitoring;
+            TxtGLMKeyLabel.Text = i18n.LabelGLMKey;
+            TxtGLMEndpointLabel.Text = i18n.ApiEndpointLabel;
+            BtnTestGLM.Content = i18n.SaveAndTest;
+
+            // Tab 7: Aliyun
+            TxtAliyunTitle.Text = i18n.AliyunTitle;
+            TxtAliyunSubtitle.Text = i18n.AliyunSubtitle;
+            ChkAliyunEnabled.Content = i18n.EnableMonitoring;
+            TxtAliyunMethod1Title.Text = i18n.AliyunMethodCLI;
+            TxtAliyunMethod1Desc.Text = i18n.AliyunNoticeDesc;
+            BtnOpenAliyunCLI.Content = i18n.BtnAliyunTerminalCLI;
+            BtnTestAliyunCLI.Content = i18n.BtnAliyunTestCLI;
+            TxtAliyunMethod2Title.Text = i18n.AliyunMethodCookie;
+            TxtAliyunCookieLabel.Text = i18n.LabelAliyunCookie;
+            BtnTestAliyunCookie.Content = i18n.BtnAliyunSaveCookie;
+
+            // Tab 8 Custom Form Elements
+            TxtCustomNameLabel.Text = i18n.ProviderNameLabel + ":";
+            TxtCustomProtocolLabel.Text = i18n.ProtocolTypeLabel + ":";
+            TxtCustomKeyLabel.Text = i18n.ApiKeyLabel + ":";
+            TxtCustomEndpointLabel.Text = i18n.LabelCustomBaseUrl;
+            TxtCustomModelLabel.Text = i18n.LabelCustomModelOptional;
+            BtnCancelCustomForm.Content = i18n.Cancel;
+            BtnSaveCustomForm.Content = i18n.BtnSaveProvider;
+            if (_editingCustomId == null)
+            {
+                TxtCustomFormTitle.Text = i18n.FormTitleAddProvider;
+            }
+
             // Tab 8 Custom
             TxtCustomTitle.Text = i18n.CustomTitle;
             TxtCustomSubtitle.Text = i18n.CustomSubtitle;
@@ -168,6 +304,25 @@ namespace TokenBar.Views
                 _ => 1
             };
 
+            // Input watermarks (WPF TextBox has no native placeholder)
+            TextBoxWatermark.SetPlaceholder(TxtOpenAIKey, i18n.PlaceholderApiKeyOpenAI);
+            TextBoxWatermark.SetPlaceholder(TxtOpenAIOrgId, i18n.PlaceholderOrgId);
+            TextBoxWatermark.SetPlaceholder(TxtAnthropicKey, "sk-ant-...");
+            TextBoxWatermark.SetPlaceholder(TxtClaudeToken, i18n.PlaceholderClaudeManualToken);
+            TextBoxWatermark.SetPlaceholder(TxtGeminiKey, "AIzaSy...");
+            TextBoxWatermark.SetPlaceholder(TxtGeminiToken, i18n.PlaceholderGeminiToken);
+            TextBoxWatermark.SetPlaceholder(TxtDeepSeekKey, "sk-...");
+            TextBoxWatermark.SetPlaceholder(TxtDeepSeekModel, "deepseek-chat");
+            TextBoxWatermark.SetPlaceholder(TxtVolcengineKey, i18n.PlaceholderApiKeyVolcengine);
+            TextBoxWatermark.SetPlaceholder(TxtVolcengineModel, "ep-xxxxxxxx-xxxx");
+            TextBoxWatermark.SetPlaceholder(TxtKimiKey, "sk-...");
+            TextBoxWatermark.SetPlaceholder(TxtKimiModel, "moonshot-v1-8k");
+            TextBoxWatermark.SetPlaceholder(TxtGLMKey, i18n.PlaceholderApiKeyGLM);
+            TextBoxWatermark.SetPlaceholder(TxtAliyunCookie, i18n.PlaceholderAliyunCookie);
+            TextBoxWatermark.SetPlaceholder(TxtCustomName, i18n.PlaceholderCustomName);
+            TextBoxWatermark.SetPlaceholder(TxtCustomKey, "sk-...");
+            TextBoxWatermark.SetPlaceholder(TxtCustomModel, i18n.PlaceholderCustomModel);
+
             UpdateStatuses();
         }
 
@@ -178,7 +333,7 @@ namespace TokenBar.Views
             CmbPresets.Items.Add(new ComboBoxItem { Content = LocalizationManager.Instance.SelectPresetPrompt });
             foreach (var preset in DomesticProviderPreset.AllPresets)
             {
-                CmbPresets.Items.Add(new ComboBoxItem { Content = preset.Name, Tag = preset });
+                CmbPresets.Items.Add(new ComboBoxItem { Content = preset.LocalizedName, Tag = preset });
             }
             CmbPresets.SelectedIndex = (oldIndex >= 0 && oldIndex < CmbPresets.Items.Count) ? oldIndex : 0;
         }
@@ -337,6 +492,13 @@ namespace TokenBar.Views
                         account.Text = "";
                     }
                 }
+                else
+                {
+                    dot.Text = "●";
+                    dot.Foreground = new SolidColorBrush(Color.FromRgb(156, 163, 175));
+                    status.Text = LocalizationManager.Instance.StatusNotConnected;
+                    account.Text = "";
+                }
             }
 
             UpdateOne(ProviderType.OpenAI, TxtOpenAIStatusDot, TxtOpenAIStatus, TxtOpenAIAccount);
@@ -358,10 +520,11 @@ namespace TokenBar.Views
             SyncToSettings();
             await RefreshManager.Instance.RefreshOpenAIAsync();
             var q = RefreshManager.Instance.Quotas[ProviderType.OpenAI];
+            var i18n = LocalizationManager.Instance;
             if (q.IsAuthorized)
-                MessageBox.Show("OpenAI 授权连接成功！已检测到接口状态与可用模型。", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                MessageBox.Show(i18n.IsChinese ? "OpenAI 授权连接成功！已检测到接口状态与可用模型。" : "OpenAI connection successful! API status and models detected.", i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Information);
             else
-                MessageBox.Show($"OpenAI 连接失败: {q.ErrorMessage}", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+                MessageBox.Show(i18n.IsChinese ? $"OpenAI 连接失败: {q.ErrorMessage}" : $"OpenAI connection failed: {q.ErrorMessage}", i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Warning);
         }
 
         private async void BtnTestAnthropicKey_Click(object sender, RoutedEventArgs e)
@@ -369,21 +532,23 @@ namespace TokenBar.Views
             SyncToSettings();
             await RefreshManager.Instance.RefreshClaudeAsync();
             var q = RefreshManager.Instance.Quotas[ProviderType.ClaudeCode];
+            var i18n = LocalizationManager.Instance;
             if (q.IsAuthorized)
-                MessageBox.Show("Anthropic API Key 校验成功！", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                MessageBox.Show(i18n.IsChinese ? "Anthropic API Key 校验成功！" : "Anthropic API Key verified successfully!", i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Information);
             else
-                MessageBox.Show($"Anthropic 校验失败: {q.ErrorMessage}", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+                MessageBox.Show(i18n.IsChinese ? $"Anthropic 校验失败: {q.ErrorMessage}" : $"Anthropic verification failed: {q.ErrorMessage}", i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Warning);
         }
 
         private void BtnImportClaudeLocal_Click(object sender, RoutedEventArgs e)
         {
+            var i18n = LocalizationManager.Instance;
             if (RefreshManager.Instance.ImportClaudeFromLocal())
             {
-                MessageBox.Show("成功从 ~/.claude.json 读取并同步本地 Claude CLI 配额！", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                MessageBox.Show(i18n.IsChinese ? "成功从 ~/.claude.json 读取并同步本地 Claude CLI 配额！" : "Successfully read and synced local Claude CLI quota from ~/.claude.json!", i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Information);
             }
             else
             {
-                MessageBox.Show("未在本地找到 ~/.claude.json 配置文件，请先在终端运行 claude 进行登录。", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+                MessageBox.Show(i18n.IsChinese ? "未在本地找到 ~/.claude.json 配置文件，请先在终端运行 claude 进行登录。" : "Could not find ~/.claude.json locally. Please run claude login in terminal first.", i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Warning);
             }
         }
 
@@ -391,7 +556,8 @@ namespace TokenBar.Views
         {
             SyncToSettings();
             await RefreshManager.Instance.RefreshClaudeAsync();
-            MessageBox.Show("Claude Token 已保存并刷新！", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+            var i18n = LocalizationManager.Instance;
+            MessageBox.Show(i18n.IsChinese ? "Claude Token 已保存并刷新！" : "Claude Token saved and refreshed!", i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Information);
         }
 
         private async void BtnTestGeminiKey_Click(object sender, RoutedEventArgs e)
@@ -399,10 +565,11 @@ namespace TokenBar.Views
             SyncToSettings();
             await RefreshManager.Instance.RefreshGeminiAsync();
             var q = RefreshManager.Instance.Quotas[ProviderType.Gemini];
+            var i18n = LocalizationManager.Instance;
             if (q.IsAuthorized)
-                MessageBox.Show("Google AI Studio API 连接成功！", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                MessageBox.Show(i18n.IsChinese ? "Google AI Studio API 连接成功！" : "Google AI Studio API connected successfully!", i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Information);
             else
-                MessageBox.Show($"连接失败: {q.ErrorMessage}", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+                MessageBox.Show(i18n.IsChinese ? $"连接失败: {q.ErrorMessage}" : $"Connection failed: {q.ErrorMessage}", i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Warning);
         }
 
         private async void BtnClearGeminiKey_Click(object sender, RoutedEventArgs e)
@@ -414,17 +581,18 @@ namespace TokenBar.Views
 
         private async void BtnGeminiWebLogin_Click(object sender, RoutedEventArgs e)
         {
+            var i18n = LocalizationManager.Instance;
             if (RefreshManager.Instance.ImportGeminiFromLocal())
             {
                 TxtGeminiToken.Text = RefreshManager.Instance.Settings.GeminiToken;
                 await RefreshManager.Instance.RefreshGeminiAsync();
                 UpdateStatuses();
                 var q = RefreshManager.Instance.Quotas[ProviderType.Gemini];
-                MessageBox.Show($"Google 网站登录授权成功！\n已绑定账号: {q.AccountInfo ?? "Google 账号"}", "授权成功", MessageBoxButton.OK, MessageBoxImage.Information);
+                MessageBox.Show(i18n.IsChinese ? $"Google 网站登录授权成功！\n已绑定账号: {q.AccountInfo ?? "Google 账号"}" : $"Google web login authorization successful!\nAccount: {q.AccountInfo ?? "Google Account"}", i18n.IsChinese ? "授权成功" : "Authorized", MessageBoxButton.OK, MessageBoxImage.Information);
             }
             else
             {
-                var result = MessageBox.Show("未检测到本地 Google 账号凭据。\n\n您可以使用 Antigravity CLI (agy) 完成 Google 登录，或在浏览器中打开 Google 授权页面。\n\n是否立即在浏览器中打开授权页面？", "提示", MessageBoxButton.YesNo, MessageBoxImage.Question);
+                var result = MessageBox.Show(i18n.IsChinese ? "未检测到本地 Google 账号凭据。\n\n您可以使用 Antigravity CLI (agy) 完成 Google 登录，或在浏览器中打开 Google 授权页面。\n\n是否立即在浏览器中打开授权页面？" : "No local Google credentials found.\n\nYou can login using Antigravity CLI (agy) or open Google authorization page in browser.\n\nOpen authorization page in browser now?", i18n.AlertNotice, MessageBoxButton.YesNo, MessageBoxImage.Question);
                 if (result == MessageBoxResult.Yes)
                 {
                     try
@@ -439,17 +607,18 @@ namespace TokenBar.Views
 
         private async void BtnImportGeminiLocal_Click(object sender, RoutedEventArgs e)
         {
+            var i18n = LocalizationManager.Instance;
             if (RefreshManager.Instance.ImportGeminiFromLocal())
             {
                 TxtGeminiToken.Text = RefreshManager.Instance.Settings.GeminiToken;
                 await RefreshManager.Instance.RefreshGeminiAsync();
                 UpdateStatuses();
                 var q = RefreshManager.Instance.Quotas[ProviderType.Gemini];
-                MessageBox.Show($"已成功从本地凭据 / Antigravity 读取 Google 凭证！\n当前绑定账号: {q.AccountInfo ?? "Google 账号"}", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                MessageBox.Show(i18n.IsChinese ? $"已成功从本地凭据 / Antigravity 读取 Google 凭证！\n当前绑定账号: {q.AccountInfo ?? "Google 账号"}" : $"Successfully read Google credentials from local config / Antigravity!\nAccount: {q.AccountInfo ?? "Google Account"}", i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Information);
             }
             else
             {
-                MessageBox.Show("未检测到本地 Google 凭证。\n请先运行 `agy` 登录 Google 账号，或使用上方 API Key 方式。", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+                MessageBox.Show(i18n.IsChinese ? "未检测到本地 Google 凭证。\n请先运行 `agy` 登录 Google 账号，或使用上方 API Key 方式。" : "No local Google credentials detected.\nPlease run `agy` to login Google account, or use API Key above.", i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Warning);
             }
         }
 
@@ -457,7 +626,8 @@ namespace TokenBar.Views
         {
             SyncToSettings();
             await RefreshManager.Instance.RefreshGeminiAsync();
-            MessageBox.Show("Gemini Token 已保存！", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+            var i18n = LocalizationManager.Instance;
+            MessageBox.Show(i18n.IsChinese ? "Gemini Token 已保存！" : "Gemini Token saved!", i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Information);
         }
 
         private async void BtnTestDeepSeek_Click(object sender, RoutedEventArgs e)
@@ -465,10 +635,11 @@ namespace TokenBar.Views
             SyncToSettings();
             await RefreshManager.Instance.RefreshDeepSeekAsync();
             var q = RefreshManager.Instance.Quotas[ProviderType.DeepSeek];
+            var i18n = LocalizationManager.Instance;
             if (q.IsAuthorized)
-                MessageBox.Show($"DeepSeek 连接成功！{q.AccountInfo}", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                MessageBox.Show(i18n.IsChinese ? $"DeepSeek 连接成功！{q.AccountInfo}" : $"DeepSeek connected successfully! {q.AccountInfo}", i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Information);
             else
-                MessageBox.Show($"DeepSeek 连接失败: {q.ErrorMessage}", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+                MessageBox.Show(i18n.IsChinese ? $"DeepSeek 连接失败: {q.ErrorMessage}" : $"DeepSeek connection failed: {q.ErrorMessage}", i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Warning);
         }
 
         private async void BtnTestVolcengine_Click(object sender, RoutedEventArgs e)
@@ -476,10 +647,11 @@ namespace TokenBar.Views
             SyncToSettings();
             await RefreshManager.Instance.RefreshVolcengineAsync();
             var q = RefreshManager.Instance.Quotas[ProviderType.Volcengine];
+            var i18n = LocalizationManager.Instance;
             if (q.IsAuthorized)
-                MessageBox.Show("火山方舟接入点连接成功！", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                MessageBox.Show(i18n.IsChinese ? "火山方舟接入点连接成功！" : "Volcengine Ark connected successfully!", i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Information);
             else
-                MessageBox.Show($"火山方舟连接失败: {q.ErrorMessage}", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+                MessageBox.Show(i18n.IsChinese ? $"火山方舟连接失败: {q.ErrorMessage}" : $"Volcengine Ark connection failed: {q.ErrorMessage}", i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Warning);
         }
 
         private async void BtnTestKimi_Click(object sender, RoutedEventArgs e)
@@ -487,10 +659,11 @@ namespace TokenBar.Views
             SyncToSettings();
             await RefreshManager.Instance.RefreshKimiAsync();
             var q = RefreshManager.Instance.Quotas[ProviderType.Kimi];
+            var i18n = LocalizationManager.Instance;
             if (q.IsAuthorized)
-                MessageBox.Show($"KIMI 连接成功！{q.AccountInfo}", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                MessageBox.Show(i18n.IsChinese ? $"KIMI 连接成功！{q.AccountInfo}" : $"KIMI connected successfully! {q.AccountInfo}", i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Information);
             else
-                MessageBox.Show($"KIMI 连接失败: {q.ErrorMessage}", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+                MessageBox.Show(i18n.IsChinese ? $"KIMI 连接失败: {q.ErrorMessage}" : $"KIMI connection failed: {q.ErrorMessage}", i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Warning);
         }
 
         private async void BtnTestGLM_Click(object sender, RoutedEventArgs e)
@@ -498,10 +671,11 @@ namespace TokenBar.Views
             SyncToSettings();
             await RefreshManager.Instance.RefreshGLMAsync();
             var q = RefreshManager.Instance.Quotas[ProviderType.GLM];
+            var i18n = LocalizationManager.Instance;
             if (q.IsAuthorized)
-                MessageBox.Show("GLM 智谱 BigModel 授权连接成功！", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                MessageBox.Show(i18n.IsChinese ? "GLM 智谱 BigModel 授权连接成功！" : "GLM BigModel connected successfully!", i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Information);
             else
-                MessageBox.Show($"GLM 连接失败: {q.ErrorMessage}", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+                MessageBox.Show(i18n.IsChinese ? $"GLM 连接失败: {q.ErrorMessage}" : $"GLM connection failed: {q.ErrorMessage}", i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Warning);
         }
 
         private void BtnOpenAliyunCLI_Click(object sender, RoutedEventArgs e)
@@ -511,15 +685,16 @@ namespace TokenBar.Views
 
         private async void BtnTestAliyunCLI_Click(object sender, RoutedEventArgs e)
         {
+            var i18n = LocalizationManager.Instance;
             try
             {
                 var res = await AliyunBailianService.Instance.FetchViaCLIAsync();
-                MessageBox.Show("百炼 CLI 配额读取成功！已检测到 7天 与 5小时额度。", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                MessageBox.Show(i18n.IsChinese ? "百炼 CLI 配额读取成功！已检测到 7天 与 5小时额度。" : "Bailian CLI quota retrieved successfully! 7-day and 5-hour quotas detected.", i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Information);
                 _ = RefreshManager.Instance.RefreshAliyunAsync();
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"百炼 CLI 读取失败: {ex.Message}", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+                MessageBox.Show(i18n.IsChinese ? $"百炼 CLI 读取失败: {ex.Message}" : $"Bailian CLI retrieval failed: {ex.Message}", i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Warning);
             }
         }
 
@@ -528,10 +703,11 @@ namespace TokenBar.Views
             SyncToSettings();
             await RefreshManager.Instance.RefreshAliyunAsync();
             var q = RefreshManager.Instance.Quotas[ProviderType.AliyunBailian];
+            var i18n = LocalizationManager.Instance;
             if (q.IsAuthorized)
-                MessageBox.Show("百炼控制台 Cookie 授权连接成功！", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                MessageBox.Show(i18n.IsChinese ? "百炼控制台 Cookie 授权连接成功！" : "Bailian console cookie connected successfully!", i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Information);
             else
-                MessageBox.Show($"百炼连接失败: {q.ErrorMessage}", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+                MessageBox.Show(i18n.IsChinese ? $"百炼连接失败: {q.ErrorMessage}" : $"Bailian connection failed: {q.ErrorMessage}", i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Warning);
         }
 
         // ==================== Custom Providers ====================
@@ -602,7 +778,7 @@ namespace TokenBar.Views
 
                 var btnEdit = new Button
                 {
-                    Content = "编辑",
+                    Content = LocalizationManager.Instance.IsChinese ? "编辑" : "Edit",
                     Padding = new Thickness(8, 3, 8, 3),
                     Margin = new Thickness(0, 0, 6, 0),
                     Background = Brushes.White,
@@ -615,7 +791,7 @@ namespace TokenBar.Views
 
                 var btnDelete = new Button
                 {
-                    Content = "删除",
+                    Content = LocalizationManager.Instance.IsChinese ? "删除" : "Delete",
                     Padding = new Thickness(8, 3, 8, 3),
                     Background = Brushes.White,
                     BorderBrush = new SolidColorBrush(Color.FromRgb(209, 213, 219)),
@@ -625,7 +801,8 @@ namespace TokenBar.Views
                 };
                 btnDelete.Click += (s, e) =>
                 {
-                    if (MessageBox.Show($"确定要删除模型厂商「{cfg.Name}」吗？", "删除确认", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes)
+                    var i18n = LocalizationManager.Instance;
+                    if (MessageBox.Show(i18n.IsChinese ? $"确定要删除模型厂商「{cfg.Name}」吗？" : $"Are you sure you want to delete \"{cfg.Name}\"?", i18n.IsChinese ? "删除确认" : "Confirm Delete", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes)
                     {
                         RefreshManager.Instance.RemoveCustomProvider(cfg.Id);
                     }
@@ -668,7 +845,7 @@ namespace TokenBar.Views
         {
             if (CmbPresets.SelectedItem is ComboBoxItem item && item.Tag is DomesticProviderPreset preset)
             {
-                TxtCustomName.Text = preset.Name;
+                TxtCustomName.Text = preset.LocalizedName;
                 TxtCustomEndpoint.Text = preset.Endpoint;
                 TxtCustomModel.Text = preset.DefaultModel;
                 TxtCustomKey.Text = "";
@@ -678,7 +855,7 @@ namespace TokenBar.Views
                     ApiProtocol.Anthropic => 2,
                     _ => 0
                 };
-                TxtCustomFormTitle.Text = $"快速添加：{preset.Name}";
+                TxtCustomFormTitle.Text = LocalizationManager.Instance.IsChinese ? $"快速添加：{preset.Name}" : $"Quick Add: {preset.LocalizedName}";
                 _editingCustomId = null;
                 BdCustomForm.Visibility = Visibility.Visible;
             }
@@ -687,7 +864,7 @@ namespace TokenBar.Views
         private void BtnAddCustomProvider_Click(object sender, RoutedEventArgs e)
         {
             _editingCustomId = null;
-            TxtCustomFormTitle.Text = "添加模型厂商";
+            TxtCustomFormTitle.Text = LocalizationManager.Instance.FormTitleAddProvider;
             TxtCustomName.Text = "";
             TxtCustomKey.Text = "";
             TxtCustomEndpoint.Text = "http://localhost:3000/v1";
@@ -699,7 +876,7 @@ namespace TokenBar.Views
         private void OpenEditCustomForm(CustomProviderConfig cfg)
         {
             _editingCustomId = cfg.Id;
-            TxtCustomFormTitle.Text = $"编辑厂商：{cfg.Name}";
+            TxtCustomFormTitle.Text = LocalizationManager.Instance.IsChinese ? $"编辑厂商：{cfg.Name}" : $"Edit Provider: {cfg.Name}";
             TxtCustomName.Text = cfg.Name;
             TxtCustomKey.Text = cfg.ApiKey;
             TxtCustomEndpoint.Text = cfg.Endpoint;
@@ -723,7 +900,8 @@ namespace TokenBar.Views
             var name = TxtCustomName.Text.Trim();
             if (string.IsNullOrEmpty(name))
             {
-                MessageBox.Show("请输入厂商名称", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+                var i18n = LocalizationManager.Instance;
+                MessageBox.Show(i18n.IsChinese ? "请输入厂商名称" : "Please enter provider name", i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
 

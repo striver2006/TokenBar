@@ -9,10 +9,11 @@ public final class CustomProviderService: @unchecked Sendable {
     public func fetchQuota(config: CustomProviderConfig) async throws -> (primary: TokenWindow?, secondary: TokenWindow?, account: String?) {
         let trimmedKey = config.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedKey.isEmpty else {
+            let isZh = LocalizationManager.shared.effectiveLanguage == "zh"
             throw NSError(
                 domain: "CustomProviderService",
                 code: 400,
-                userInfo: [NSLocalizedDescriptionKey: "请在配置中填入 \(config.name) 的 API KEY"]
+                userInfo: [NSLocalizedDescriptionKey: isZh ? "请在配置中填入 \(config.name) 的 API KEY" : "Please enter the API KEY for \(config.name)"]
             )
         }
 
@@ -45,9 +46,10 @@ public final class CustomProviderService: @unchecked Sendable {
         var balanceAccountInfo: String? = nil
         var balanceWindow: TokenWindow? = nil
 
+        let isZh = LocalizationManager.shared.effectiveLanguage == "zh"
         if endpoint.contains("deepseek.com") {
             if let balance = await fetchDeepSeekBalance(apiKey: apiKey) {
-                balanceAccountInfo = "余额: \(balance)"
+                balanceAccountInfo = isZh ? "余额: \(balance)" : "Balance: \(balance)"
                 balanceWindow = TokenWindow(
                     title: "账户余额",
                     usedPercentage: 0.0,
@@ -59,7 +61,7 @@ public final class CustomProviderService: @unchecked Sendable {
             }
         } else if endpoint.contains("moonshot.cn") {
             if let balance = await fetchMoonshotBalance(apiKey: apiKey) {
-                balanceAccountInfo = "余额: \(balance)"
+                balanceAccountInfo = isZh ? "余额: \(balance)" : "Balance: \(balance)"
                 balanceWindow = TokenWindow(
                     title: "账户余额",
                     usedPercentage: 0.0,
@@ -71,7 +73,7 @@ public final class CustomProviderService: @unchecked Sendable {
             }
         } else if endpoint.contains("siliconflow.cn") {
             if let balance = await fetchSiliconFlowBalance(apiKey: apiKey) {
-                balanceAccountInfo = "余额: \(balance)"
+                balanceAccountInfo = isZh ? "余额: \(balance)" : "Balance: \(balance)"
                 balanceWindow = TokenWindow(
                     title: "账户余额",
                     usedPercentage: 0.0,
@@ -104,12 +106,12 @@ public final class CustomProviderService: @unchecked Sendable {
             throw NSError(
                 domain: "CustomProviderService",
                 code: 401,
-                userInfo: [NSLocalizedDescriptionKey: "\(config.name) API Key 认证失败 (HTTP 401)，请核对密钥"]
+                userInfo: [NSLocalizedDescriptionKey: isZh ? "\(config.name) API Key 认证失败 (HTTP 401)，请核对密钥" : "\(config.name) API Key authentication failed (HTTP 401). Please check the key"]
             )
         }
 
         if httpResp.statusCode == 429 {
-            var msg = "请求过于频繁或额度不足 (HTTP 429)"
+            var msg = isZh ? "请求过于频繁或额度不足 (HTTP 429)" : "Rate limit reached or quota insufficient (HTTP 429)"
             if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let err = json["error"] as? [String: Any],
                let detail = err["message"] as? String {
@@ -123,7 +125,7 @@ public final class CustomProviderService: @unchecked Sendable {
             throw NSError(
                 domain: "CustomProviderService",
                 code: httpResp.statusCode,
-                userInfo: [NSLocalizedDescriptionKey: "请求端点失败 (\(httpResp.statusCode)): \(errorText.prefix(100))"]
+                userInfo: [NSLocalizedDescriptionKey: isZh ? "请求端点失败 (\(httpResp.statusCode)): \(errorText.prefix(100))" : "Endpoint request failed (\(httpResp.statusCode)): \(errorText.prefix(100))"]
             )
         }
 
@@ -189,7 +191,7 @@ public final class CustomProviderService: @unchecked Sendable {
             )
         }
 
-        let account = balanceAccountInfo ?? (modelCount > 0 ? "可用模型: \(modelCount)个" : "已连接")
+        let account = balanceAccountInfo ?? (modelCount > 0 ? (isZh ? "可用模型: \(modelCount)个" : "\(modelCount) models available") : (isZh ? "已连接" : "Connected"))
         return (primaryWindow, secondaryWindow, account)
     }
 
@@ -216,16 +218,17 @@ public final class CustomProviderService: @unchecked Sendable {
             throw URLError(.badServerResponse)
         }
 
+        let isZh = LocalizationManager.shared.effectiveLanguage == "zh"
         if httpResp.statusCode == 401 {
             throw NSError(
                 domain: "CustomProviderService",
                 code: 401,
-                userInfo: [NSLocalizedDescriptionKey: "\(config.name) Anthropic API Key 无效或未授权 (HTTP 401)"]
+                userInfo: [NSLocalizedDescriptionKey: isZh ? "\(config.name) Anthropic API Key 无效或未授权 (HTTP 401)" : "\(config.name) Anthropic API Key invalid or unauthorized (HTTP 401)"]
             )
         }
 
         if httpResp.statusCode == 429 {
-            var msg = "Anthropic 接口请求已触发速率限制 (HTTP 429)"
+            var msg = isZh ? "Anthropic 接口请求已触发速率限制 (HTTP 429)" : "Anthropic rate limit exceeded (HTTP 429)"
             if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let err = json["error"] as? [String: Any],
                let detail = err["message"] as? String {
@@ -239,7 +242,7 @@ public final class CustomProviderService: @unchecked Sendable {
             throw NSError(
                 domain: "CustomProviderService",
                 code: httpResp.statusCode,
-                userInfo: [NSLocalizedDescriptionKey: "Anthropic 兼容端点响应异常 (\(httpResp.statusCode)): \(errorText.prefix(100))"]
+                userInfo: [NSLocalizedDescriptionKey: isZh ? "Anthropic 兼容端点响应异常 (\(httpResp.statusCode)): \(errorText.prefix(100))" : "Anthropic compatible endpoint error (\(httpResp.statusCode)): \(errorText.prefix(100))"]
             )
         }
 
@@ -319,7 +322,7 @@ public final class CustomProviderService: @unchecked Sendable {
             )
         }
 
-        let account = modelCount > 0 ? "已接入 (模型数: \(modelCount))" : "Anthropic 兼容协议"
+        let account = modelCount > 0 ? (isZh ? "已接入 (模型数: \(modelCount))" : "Connected (\(modelCount) models)") : (isZh ? "Anthropic 兼容协议" : "Anthropic Compatible Protocol")
         return (primaryWindow, secondaryWindow, account)
     }
 

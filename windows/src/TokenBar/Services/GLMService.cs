@@ -22,7 +22,7 @@ namespace TokenBar.Services
             var cleanKey = apiKey.Trim();
             if (string.IsNullOrEmpty(cleanKey))
             {
-                throw new ArgumentException("API Key 不能为空");
+                throw new ArgumentException(LocalizationManager.Instance.IsChinese ? "API Key 不能为空" : "API Key cannot be empty");
             }
 
             var trimmedEndpoint = endpoint.Trim().TrimEnd('/');
@@ -65,7 +65,7 @@ namespace TokenBar.Services
                 if (openAiResp.StatusCode == System.Net.HttpStatusCode.Unauthorized ||
                     openAiResp.StatusCode == System.Net.HttpStatusCode.Forbidden)
                 {
-                    throw new Exception("GLM API Key 无效或未授权");
+                    throw new Exception(LocalizationManager.Instance.IsChinese ? "GLM API Key 无效或未授权" : "GLM API Key is invalid or unauthorized");
                 }
 
                 try
@@ -73,11 +73,11 @@ namespace TokenBar.Services
                     using var doc = JsonDocument.Parse(openAiData);
                     if (doc.RootElement.TryGetProperty("code", out var codeProp) && codeProp.GetInt32() == 1001)
                     {
-                        var msg = doc.RootElement.TryGetProperty("msg", out var m) ? m.GetString() : "未收到有效 Authorization 参数";
-                        throw new Exception($"身份验证失败: {msg}");
+                        var msg = doc.RootElement.TryGetProperty("msg", out var m) ? m.GetString() : (LocalizationManager.Instance.IsChinese ? "未收到有效 Authorization 参数" : "Valid Authorization parameter not received");
+                        throw new Exception(LocalizationManager.Instance.IsChinese ? $"身份验证失败: {msg}" : $"Authentication failed: {msg}");
                     }
                 }
-                catch (Exception ex) when (ex.Message.StartsWith("身份验证失败"))
+                catch (Exception ex) when (ex.Message.StartsWith("身份验证失败") || ex.Message.StartsWith("Authentication failed"))
                 {
                     throw;
                 }
@@ -99,7 +99,7 @@ namespace TokenBar.Services
                     rateLimitResetDurationSec = rst;
                 }
             }
-            catch (Exception ex) when (ex.Message.Contains("GLM API Key") || ex.Message.Contains("身份验证失败"))
+            catch (Exception ex) when (ex.Message.Contains("GLM API Key") || ex.Message.Contains("身份验证失败") || ex.Message.Contains("Authentication failed"))
             {
                 throw;
             }

@@ -20,7 +20,7 @@ namespace TokenBar.Services
             var trimmedKey = config.ApiKey.Trim();
             if (string.IsNullOrEmpty(trimmedKey))
             {
-                throw new ArgumentException($"请在配置中填入 {config.Name} 的 API KEY");
+                throw new ArgumentException(LocalizationManager.Instance.IsChinese ? $"请在配置中填入 {config.Name} 的 API KEY" : $"Please enter the API KEY for {config.Name}");
             }
 
             var endpoint = config.Endpoint.Trim().TrimEnd('/');
@@ -52,7 +52,7 @@ namespace TokenBar.Services
                 var balance = await DeepSeekService.Instance.FetchBalanceAsync(apiKey);
                 if (balance != null)
                 {
-                    balanceAccountInfo = $"余额: {balance}";
+                    balanceAccountInfo = LocalizationManager.Instance.IsChinese ? $"余额: {balance}" : $"Balance: {balance}";
                     balanceWindow = new TokenWindow
                     {
                         Title = "账户余额",
@@ -69,7 +69,7 @@ namespace TokenBar.Services
                 var balance = await FetchMoonshotBalanceAsync(apiKey);
                 if (balance != null)
                 {
-                    balanceAccountInfo = $"余额: {balance}";
+                    balanceAccountInfo = LocalizationManager.Instance.IsChinese ? $"余额: {balance}" : $"Balance: {balance}";
                     balanceWindow = new TokenWindow
                     {
                         Title = "账户余额",
@@ -86,7 +86,7 @@ namespace TokenBar.Services
                 var balance = await FetchSiliconFlowBalanceAsync(apiKey);
                 if (balance != null)
                 {
-                    balanceAccountInfo = $"余额: {balance}";
+                    balanceAccountInfo = LocalizationManager.Instance.IsChinese ? $"余额: {balance}" : $"Balance: {balance}";
                     balanceWindow = new TokenWindow
                     {
                         Title = "账户余额",
@@ -112,12 +112,12 @@ namespace TokenBar.Services
 
             if (resp.StatusCode == System.Net.HttpStatusCode.Unauthorized)
             {
-                throw new Exception($"{config.Name} API Key 认证失败 (HTTP 401)，请核对密钥");
+                throw new Exception(LocalizationManager.Instance.IsChinese ? $"{config.Name} API Key 认证失败 (HTTP 401)，请核对密钥" : $"{config.Name} API Key authentication failed (HTTP 401). Please check the key");
             }
 
             if ((int)resp.StatusCode == 429)
             {
-                var msg = "请求过于频繁或额度不足 (HTTP 429)";
+                var msg = LocalizationManager.Instance.IsChinese ? "请求过于频繁或额度不足 (HTTP 429)" : "Rate limit reached or quota insufficient (HTTP 429)";
                 try
                 {
                     using var doc = JsonDocument.Parse(body);
@@ -134,7 +134,7 @@ namespace TokenBar.Services
             if (!resp.IsSuccessStatusCode)
             {
                 var snippet = body.Length > 100 ? body.Substring(0, 100) : body;
-                throw new Exception($"请求端点失败 ({(int)resp.StatusCode}): {snippet}");
+                throw new Exception(LocalizationManager.Instance.IsChinese ? $"请求端点失败 ({(int)resp.StatusCode}): {snippet}" : $"Endpoint request failed ({(int)resp.StatusCode}): {snippet}");
             }
 
             string? GetHeader(string name)
@@ -204,7 +204,10 @@ namespace TokenBar.Services
                 };
             }
 
-            var account = balanceAccountInfo ?? (modelCount > 0 ? $"可用模型: {modelCount}个" : "已连接");
+            var isZhAcct = LocalizationManager.Instance.IsChinese;
+            var account = balanceAccountInfo ?? (modelCount > 0
+                ? (isZhAcct ? $"可用模型: {modelCount}个" : $"{modelCount} models available")
+                : (isZhAcct ? "已连接" : "Connected"));
             return (primaryWindow, secondaryWindow, account);
         }
 
@@ -227,18 +230,18 @@ namespace TokenBar.Services
 
             if (resp.StatusCode == System.Net.HttpStatusCode.Unauthorized)
             {
-                throw new Exception($"{config.Name} Anthropic API Key 无效或未授权 (HTTP 401)");
+                throw new Exception(LocalizationManager.Instance.IsChinese ? $"{config.Name} Anthropic API Key 无效或未授权 (HTTP 401)" : $"{config.Name} Anthropic API Key invalid or unauthorized (HTTP 401)");
             }
 
             if ((int)resp.StatusCode == 429)
             {
-                throw new Exception("Anthropic 接口请求已触发速率限制 (HTTP 429)");
+                throw new Exception(LocalizationManager.Instance.IsChinese ? "Anthropic 接口请求已触发速率限制 (HTTP 429)" : "Anthropic rate limit exceeded (HTTP 429)");
             }
 
             if (!resp.IsSuccessStatusCode)
             {
                 var snippet = body.Length > 100 ? body.Substring(0, 100) : body;
-                throw new Exception($"Anthropic 兼容端点响应异常 ({(int)resp.StatusCode}): {snippet}");
+                throw new Exception(LocalizationManager.Instance.IsChinese ? $"Anthropic 兼容端点响应异常 ({(int)resp.StatusCode}): {snippet}" : $"Anthropic compatible endpoint error ({(int)resp.StatusCode}): {snippet}");
             }
 
             string? GetHeader(string name)
@@ -326,7 +329,10 @@ namespace TokenBar.Services
                 };
             }
 
-            var account = modelCount > 0 ? $"已接入 (模型数: {modelCount})" : "Anthropic 兼容协议";
+            var isZhAcct = LocalizationManager.Instance.IsChinese;
+            var account = modelCount > 0
+                ? (isZhAcct ? $"已接入 (模型数: {modelCount})" : $"Connected ({modelCount} models)")
+                : (isZhAcct ? "Anthropic 兼容协议" : "Anthropic Compatible Protocol");
             return (primaryWindow, secondaryWindow, account);
         }
 

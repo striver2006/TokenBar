@@ -13,10 +13,11 @@ public final class OpenAIService: @unchecked Sendable {
     ) async throws -> (primary: TokenWindow?, secondary: TokenWindow?, account: String?) {
         let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedKey.isEmpty else {
+            let isZh = LocalizationManager.shared.effectiveLanguage == "zh"
             throw NSError(
                 domain: "OpenAIService",
                 code: 400,
-                userInfo: [NSLocalizedDescriptionKey: "请输入 OpenAI API Key"]
+                userInfo: [NSLocalizedDescriptionKey: isZh ? "请输入 OpenAI API Key" : "Please enter OpenAI API Key"]
             )
         }
 
@@ -53,16 +54,17 @@ public final class OpenAIService: @unchecked Sendable {
             throw URLError(.badServerResponse)
         }
 
+        let isZh = LocalizationManager.shared.effectiveLanguage == "zh"
         if httpResp.statusCode == 401 {
             throw NSError(
                 domain: "OpenAIService",
                 code: 401,
-                userInfo: [NSLocalizedDescriptionKey: "OpenAI API Key 无效或已过期 (HTTP 401)"]
+                userInfo: [NSLocalizedDescriptionKey: isZh ? "OpenAI API Key 无效或已过期 (HTTP 401)" : "OpenAI API Key is invalid or expired (HTTP 401)"]
             )
         }
 
         if httpResp.statusCode == 429 {
-            var msg = "请求过于频繁或额度已耗尽 (HTTP 429)"
+            var msg = isZh ? "请求过于频繁或额度已耗尽 (HTTP 429)" : "Rate limit reached or quota exhausted (HTTP 429)"
             if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let err = json["error"] as? [String: Any],
                let errDetail = err["message"] as? String {
@@ -76,7 +78,7 @@ public final class OpenAIService: @unchecked Sendable {
             throw NSError(
                 domain: "OpenAIService",
                 code: httpResp.statusCode,
-                userInfo: [NSLocalizedDescriptionKey: "OpenAI 接口请求失败 (\(httpResp.statusCode)): \(errorMsg.prefix(120))"]
+                userInfo: [NSLocalizedDescriptionKey: isZh ? "OpenAI 接口请求失败 (\(httpResp.statusCode)): \(errorMsg.prefix(120))" : "OpenAI request failed (\(httpResp.statusCode)): \(errorMsg.prefix(120))"]
             )
         }
 
@@ -172,7 +174,7 @@ public final class OpenAIService: @unchecked Sendable {
 
         var accountInfo = orgHeader ?? organizationId
         if accountInfo == nil || accountInfo?.isEmpty == true {
-            accountInfo = modelCount > 0 ? "OpenAI (可用模型: \(modelCount)个)" : "OpenAI API"
+            accountInfo = modelCount > 0 ? (isZh ? "OpenAI (可用模型: \(modelCount)个)" : "OpenAI (\(modelCount) models available)") : "OpenAI API"
         }
 
         return (primaryWindow, secondaryWindow, accountInfo)

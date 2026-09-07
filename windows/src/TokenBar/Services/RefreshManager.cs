@@ -178,7 +178,7 @@ namespace TokenBar.Services
             if (string.IsNullOrWhiteSpace(Settings.OpenAIApiKey))
             {
                 quota.IsAuthorized = false;
-                quota.ErrorMessage = "请在配置中输入 OpenAI API Key";
+                quota.ErrorMessage = LocalizationManager.Instance.IsChinese ? "请在配置中输入 OpenAI API Key" : "Please configure OpenAI API Key";
                 quota.IsLoading = false;
                 NotifyQuotasUpdated();
                 return;
@@ -288,7 +288,7 @@ namespace TokenBar.Services
             if (!foundAuth)
             {
                 quota.IsAuthorized = false;
-                quota.ErrorMessage ??= "未配置 Anthropic API Key 或 Claude Code 网页/本地授权";
+                quota.ErrorMessage ??= LocalizationManager.Instance.IsChinese ? "未配置 Anthropic API Key 或 Claude Code 网页/本地授权" : "Anthropic API Key or Claude Code authorization not configured";
             }
 
             quota.LastUpdated = DateTime.Now;
@@ -382,7 +382,7 @@ namespace TokenBar.Services
                     };
 
                     quota.IsAuthorized = true;
-                    quota.AccountInfo = local.Account ?? "Google 账号";
+                    quota.AccountInfo = local.Account ?? (LocalizationManager.Instance.IsChinese ? "Google 账号" : "Google Account");
                     quota.LastUpdated = DateTime.Now;
                 }
                 else
@@ -408,7 +408,7 @@ namespace TokenBar.Services
             if (string.IsNullOrWhiteSpace(Settings.DeepSeekApiKey))
             {
                 quota.IsAuthorized = false;
-                quota.ErrorMessage = "请在配置中输入 DeepSeek API Key";
+                quota.ErrorMessage = LocalizationManager.Instance.IsChinese ? "请在配置中输入 DeepSeek API Key" : "Please configure DeepSeek API Key";
                 quota.IsLoading = false;
                 NotifyQuotasUpdated();
                 return;
@@ -449,7 +449,7 @@ namespace TokenBar.Services
             if (string.IsNullOrWhiteSpace(Settings.VolcengineApiKey))
             {
                 quota.IsAuthorized = false;
-                quota.ErrorMessage = "请在配置中输入火山方舟 API Key";
+                quota.ErrorMessage = LocalizationManager.Instance.IsChinese ? "请在配置中输入火山方舟 API Key" : "Please configure Volcengine Ark API Key";
                 quota.IsLoading = false;
                 NotifyQuotasUpdated();
                 return;
@@ -490,7 +490,7 @@ namespace TokenBar.Services
             if (string.IsNullOrWhiteSpace(Settings.KimiApiKey))
             {
                 quota.IsAuthorized = false;
-                quota.ErrorMessage = "请在配置中输入 KIMI API Key";
+                quota.ErrorMessage = LocalizationManager.Instance.IsChinese ? "请在配置中输入 KIMI API Key" : "Please configure KIMI API Key";
                 quota.IsLoading = false;
                 NotifyQuotasUpdated();
                 return;
@@ -531,7 +531,7 @@ namespace TokenBar.Services
             if (string.IsNullOrWhiteSpace(Settings.GLMApiKey))
             {
                 quota.IsAuthorized = false;
-                quota.ErrorMessage = "请在配置中输入 GLM API KEY";
+                quota.ErrorMessage = LocalizationManager.Instance.IsChinese ? "请在配置中输入 GLM API KEY" : "Please configure GLM API Key";
                 quota.IsLoading = false;
                 NotifyQuotasUpdated();
                 return;
@@ -551,6 +551,7 @@ namespace TokenBar.Services
             }
             catch (Exception ex)
             {
+                quota.IsAuthorized = false;
                 quota.ErrorMessage = ex.Message;
             }
             finally
@@ -612,7 +613,7 @@ namespace TokenBar.Services
             if (string.IsNullOrWhiteSpace(config.ApiKey))
             {
                 q.IsAuthorized = false;
-                q.ErrorMessage = "请在配置中填入 API KEY";
+                q.ErrorMessage = LocalizationManager.Instance.IsChinese ? "请在配置中填入 API KEY" : "Please configure API Key";
                 q.IsLoading = false;
                 NotifyQuotasUpdated();
                 return;

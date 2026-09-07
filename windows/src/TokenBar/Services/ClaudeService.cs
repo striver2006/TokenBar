@@ -352,7 +352,7 @@ namespace TokenBar.Services
             var cleanKey = apiKey.Trim();
             if (string.IsNullOrEmpty(cleanKey))
             {
-                throw new ArgumentException("请输入 Anthropic API Key");
+                throw new ArgumentException(LocalizationManager.Instance.IsChinese ? "请输入 Anthropic API Key" : "Please enter Anthropic API Key");
             }
 
             var baseEndpoint = endpoint.Trim().TrimEnd('/');
@@ -375,18 +375,18 @@ namespace TokenBar.Services
 
             if (resp.StatusCode == System.Net.HttpStatusCode.Unauthorized)
             {
-                throw new Exception("Anthropic API Key 无效或未授权 (HTTP 401)");
+                throw new Exception(LocalizationManager.Instance.IsChinese ? "Anthropic API Key 无效或未授权 (HTTP 401)" : "Anthropic API Key is invalid or unauthorized (HTTP 401)");
             }
 
             if ((int)resp.StatusCode == 429)
             {
-                throw new Exception("Anthropic 请求频率或额度超限 (HTTP 429)");
+                throw new Exception(LocalizationManager.Instance.IsChinese ? "Anthropic 请求频率或额度超限 (HTTP 429)" : "Anthropic rate limit or quota exceeded (HTTP 429)");
             }
 
             if (!resp.IsSuccessStatusCode)
             {
                 var snippet = body.Length > 100 ? body.Substring(0, 100) : body;
-                throw new Exception($"Anthropic 接口响应异常: {snippet}");
+                throw new Exception(LocalizationManager.Instance.IsChinese ? $"Anthropic 接口响应异常: {snippet}" : $"Anthropic API response error: {snippet}");
             }
 
             string? GetHeader(string name)
@@ -463,7 +463,7 @@ namespace TokenBar.Services
             }
 
             var keySuffix = cleanKey.Length > 6 ? cleanKey[^4..] : cleanKey;
-            var account = $"Anthropic API (尾号 {keySuffix})";
+            var account = LocalizationManager.Instance.IsChinese ? $"Anthropic API (尾号 {keySuffix})" : $"Anthropic API (...{keySuffix})";
 
             return (primaryWindow, secondaryWindow, account);
         }

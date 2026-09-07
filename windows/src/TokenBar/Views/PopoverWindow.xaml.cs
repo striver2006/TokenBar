@@ -10,6 +10,7 @@ using HorizontalAlignment = System.Windows.HorizontalAlignment;
 using Button = System.Windows.Controls.Button;
 using CheckBox = System.Windows.Controls.CheckBox;
 using Orientation = System.Windows.Controls.Orientation;
+using TokenBar.Helpers;
 using TokenBar.I18n;
 using TokenBar.Models;
 using TokenBar.Services;
@@ -184,13 +185,13 @@ namespace TokenBar.Views
                 Background = new SolidColorBrush(Color.FromArgb(30, themeColor.R, themeColor.G, themeColor.B)),
                 Margin = new Thickness(0, 0, 8, 0)
             };
-            var iconChar = quota.Provider.GetShortName().Substring(0, 1);
-            iconBadge.Child = new TextBlock
+            iconBadge.Child = new System.Windows.Shapes.Path
             {
-                Text = iconChar,
-                FontSize = 11,
-                FontWeight = FontWeights.Bold,
-                Foreground = new SolidColorBrush(themeColor),
+                Data = ProviderIcons.GetIconGeometry(quota.Provider),
+                Fill = new SolidColorBrush(themeColor),
+                Stretch = Stretch.Uniform,
+                Width = 13,
+                Height = 13,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center
             };
@@ -348,9 +349,10 @@ namespace TokenBar.Views
                 Background = new SolidColorBrush(Color.FromArgb(30, 99, 102, 241)), // Indigo
                 Margin = new Thickness(0, 0, 8, 0)
             };
+            var displayName = config.Name.Length > 0 ? config.Name : LocalizationManager.Instance.FallbackCustomProviderName;
             iconBadge.Child = new TextBlock
             {
-                Text = config.Name.Length > 0 ? config.Name.Substring(0, 1) : "C",
+                Text = displayName.Substring(0, 1),
                 FontSize = 11,
                 FontWeight = FontWeights.Bold,
                 Foreground = new SolidColorBrush(Color.FromRgb(99, 102, 241)),
@@ -362,7 +364,7 @@ namespace TokenBar.Views
 
             var nameBlock = new TextBlock
             {
-                Text = config.Name,
+                Text = displayName,
                 FontWeight = FontWeights.Bold,
                 FontSize = 12,
                 Foreground = new SolidColorBrush(Color.FromRgb(17, 24, 39)),
@@ -483,7 +485,7 @@ namespace TokenBar.Views
 
             var titleBlock = new TextBlock
             {
-                Text = window.Title,
+                Text = window.LocalizedTitle,
                 FontSize = 11,
                 FontWeight = FontWeights.Medium,
                 Foreground = new SolidColorBrush(Color.FromRgb(17, 24, 39)),

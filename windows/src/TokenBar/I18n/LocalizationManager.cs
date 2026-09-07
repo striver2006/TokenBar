@@ -142,5 +142,65 @@ namespace TokenBar.I18n
         public string NoCustomProvidersHint => IsChinese ? "点击上方「＋ 添加新厂商」可添加硅基流动、MiniMax、腾讯混元等自定义端点。" : "Click '+ Add Provider' above to add SiliconFlow, MiniMax, etc.";
         public string AlertNotice => IsChinese ? "提示" : "Notice";
         public string AlertOk => IsChinese ? "好的" : "OK";
+
+        // Placeholders & Secondary Labels
+        public string PlaceholderApiKeyOpenAI => IsChinese ? "sk-... 或 sk-proj-..." : "sk-... or sk-proj-...";
+        public string PlaceholderApiKeyVolcengine => IsChinese ? "sk-... 或 API Key" : "sk-... or API Key";
+        public string PlaceholderApiKeyGLM => IsChinese ? "例如: 75f...your_api_key" : "e.g. 75f...your_api_key";
+        public string PlaceholderApiKeyAliyun => IsChinese ? "例如: sk-sp-xxxxxxxx" : "e.g. sk-sp-xxxxxxxx";
+        public string PlaceholderOrgId => IsChinese ? "org-xxxxxxxx (选填)" : "org-xxxxxxxx (Optional)";
+        public string PlaceholderCustomName => IsChinese ? "例如: OpenAI 兼容代理" : "e.g. OpenAI Compatible Proxy";
+        public string PlaceholderCustomModel => IsChinese ? "例如: deepseek-chat 或 claude-3-5-sonnet" : "e.g. deepseek-chat or claude-3-5-sonnet";
+        public string DefaultCustomProviderName => IsChinese ? "OpenAI 兼容代理" : "OpenAI Compatible Proxy";
+        public string FallbackCustomProviderName => IsChinese ? "自定义厂商" : "Custom Provider";
+
+        // Hints & Section Headers
+        public string HintOpenAIKey => IsChinese ? "可在 OpenAI Platform (platform.openai.com) -> API Keys 中生成。" : "Can be generated in OpenAI Platform (platform.openai.com) -> API Keys.";
+        public string HintOpenAIEndpoint => IsChinese ? "默认为官方接口，亦可配置中转反向代理地址。" : "Defaults to official endpoint. Reverse proxy URLs are supported.";
+
+        public string MethodAnthropicKey => IsChinese ? "方式一：Anthropic API Key (官方或代理)" : "Method 1: Anthropic API Key (Official or Proxy)";
+        public string LabelApiEndpointColon => IsChinese ? "接入端点:" : "API Endpoint:";
+        public string SaveAndTestAnthropicKey => IsChinese ? "保存并测试 API Key" : "Save & Test API Key";
+        public string HintAnthropicKey => IsChinese ? "可在 Anthropic Console (console.anthropic.com) 生成。" : "Can be generated in Anthropic Console (console.anthropic.com).";
+        public string MethodClaudeSubscription => IsChinese ? "方式二：Claude Code 订阅 (监控 5小时与每周额度)" : "Method 2: Claude Code Subscription (5h & Weekly Quota)";
+        public string BtnReadLocalCLIAuth => IsChinese ? "读取本地 CLI 授权 (~/.claude.json)" : "Read Local CLI Auth (~/.claude.json)";
+        public string LabelClaudeManualToken => IsChinese ? "手动输入 OAuth Token / Session (备用):" : "Manual OAuth Token / Session (Backup):";
+        public string PlaceholderClaudeManualToken => IsChinese ? "手动输入 OAuth Token / Session (可选备用)" : "Enter OAuth Token / Session (Optional backup)";
+
+        public string MethodGeminiApiKey => IsChinese ? "方式一：Google AI Studio API Key (推荐，永久有效)" : "Method 1: Google AI Studio API Key (Recommended, Lifetime)";
+        public string LabelRecommendedLifetime => IsChinese ? "(推荐，永久有效)" : "(Recommended, Lifetime)";
+        public string LabelGetKeyColon => IsChinese ? "获取密钥:" : "Get Key:";
+        public string MethodGeminiOAuth => IsChinese ? "方式二：Google 账号授权 / 本地凭证 (Google One / Antigravity)" : "Method 2: Google Account Authorization / Local Credentials (OAuth)";
+        public string BtnGoogleWebLogin => IsChinese ? "Google 网站登录授权" : "Google Web Login Authorization";
+        public string BtnReadLocalGeminiConfig => IsChinese ? "读取本地 Gemini / Antigravity 配置" : "Read Local Gemini / Antigravity Credentials";
+        public string LabelManualGeminiToken => IsChinese ? "手动输入 Access Token (可选):" : "Manual Access Token (Optional):";
+        public string PlaceholderGeminiToken => IsChinese ? "输入 Access Token" : "Enter Access Token";
+        public string PlaceholderAliyunCookie => IsChinese ? "通过网页登录会自动填入，亦可手动粘贴" : "Auto-filled via web login, or paste manually";
+
+        public string HintDeepSeekKey => IsChinese ? "可在 DeepSeek 开放平台 (platform.deepseek.com) -> API Keys 生成。" : "Can be generated in DeepSeek Platform (platform.deepseek.com) -> API Keys.";
+        public string LabelDefaultModel => IsChinese ? "默认模型名称" : "Default Model Name";
+
+        public string HintVolcengineKey => IsChinese ? "可在 火山引擎控制台 (console.volcengine.com/ark) -> API Key 管理中创建。" : "Can be created in Volcengine Console (console.volcengine.com/ark) -> API Keys.";
+        public string LabelVolcengineEndpointId => IsChinese ? "模型接入点 ID (Endpoint / Model, 选填)" : "Model Endpoint ID (Endpoint / Model, Optional)";
+
+        public string HintKimiKey => IsChinese ? "可在 Moonshot 开放平台 (platform.moonshot.cn) -> API Key 管理中创建。" : "Can be created in Moonshot Platform (platform.moonshot.cn) -> API Keys.";
+        public string LabelModelName => IsChinese ? "模型名称" : "Model Name";
+
+        public string HintGLMKey => IsChinese ? "可在 智谱开放平台 (open.bigmodel.cn) -> API Keys 中获取。" : "Can be obtained in Zhipu Platform (open.bigmodel.cn) -> API Keys.";
+        public string LabelGLMKey => IsChinese ? "智谱 BigModel API Key" : "Zhipu BigModel API Key";
+
+        public string AliyunMethodCLI => IsChinese ? "方式一：百炼官方 CLI (`bl`) (推荐)" : "Method 1: Bailian Official CLI (`bl`) (Recommended)";
+        public string AliyunNoticeDesc => IsChinese ? "百炼 Token Plan 仅支持 CLI 或控制台 Cookie 读取，OpenAI 兼容接口不支持配额查询。" : "Token Plan quotas are retrieved via CLI or console cookies; OpenAI endpoints do not support quota queries.";
+        public string BtnAliyunTerminalCLI => IsChinese ? "打开终端登录 CLI (`bl auth login --console`)" : "Open Terminal to Login CLI (`bl auth login --console`)";
+        public string BtnAliyunTestCLI => IsChinese ? "测试 CLI 配额读取" : "Test CLI Quota Retrieval";
+        public string AliyunMethodCookie => IsChinese ? "方式二：控制台网页 Cookie 授权 (备用)" : "Method 2: Console Web Cookie Authorization (Backup)";
+        public string LabelAliyunCookie => IsChinese ? "控制台 Cookie:" : "Console Cookie:";
+        public string BtnAliyunSaveCookie => IsChinese ? "保存 Cookie 并测试连接" : "Save Cookie & Test Connection";
+
+        public string FormTitleAddProvider => IsChinese ? "添加模型厂商" : "Add Model Provider";
+        public string FormTitleEditProvider => IsChinese ? "编辑模型厂商" : "Edit Model Provider";
+        public string LabelCustomBaseUrl => IsChinese ? "API 接入端点 (Base URL):" : "API Endpoint (Base URL):";
+        public string LabelCustomModelOptional => IsChinese ? "默认模型名称 (选填):" : "Default Model Name (Optional):";
+        public string BtnSaveProvider => IsChinese ? "保存厂商" : "Save Provider";
     }
 }

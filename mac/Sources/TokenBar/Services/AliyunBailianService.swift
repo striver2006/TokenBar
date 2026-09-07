@@ -46,10 +46,11 @@ public final class AliyunBailianService: @unchecked Sendable {
             throw err
         }
 
+        let isZh = LocalizationManager.shared.effectiveLanguage == "zh"
         throw NSError(
             domain: "AliyunBailianService",
             code: 400,
-            userInfo: [NSLocalizedDescriptionKey: "百炼兼容 OpenAI 接口仅用于模型对话，不支持配额查询。请在终端登录百炼 CLI (`bl auth login --console`) 或使用网页登录授权获取 7天 与 5小时额度。"]
+            userInfo: [NSLocalizedDescriptionKey: isZh ? "百炼兼容 OpenAI 接口仅用于模型对话，不支持配额查询。请在终端登录百炼 CLI (`bl auth login --console`) 或使用网页登录授权获取 7天 与 5小时额度。" : "Aliyun Bailian OpenAI-compatible endpoint only supports chat, not quota queries. Please run `bl auth login --console` in terminal or configure web cookies to monitor 7-day and 5-hour quotas."]
         )
     }
 
@@ -79,10 +80,11 @@ public final class AliyunBailianService: @unchecked Sendable {
         }
 
         guard let blBinary = resolvedPath else {
+            let isZh = LocalizationManager.shared.effectiveLanguage == "zh"
             throw NSError(
                 domain: "AliyunBailianService",
                 code: 404,
-                userInfo: [NSLocalizedDescriptionKey: "未检测到百炼 CLI ('bl')。可在终端通过 npm install -g @modelstudio/cli 安装，或使用网页登录授权。"]
+                userInfo: [NSLocalizedDescriptionKey: isZh ? "未检测到百炼 CLI ('bl')。可在终端通过 npm install -g @modelstudio/cli 安装，或使用网页登录授权。" : "Bailian CLI ('bl') not detected. Install via npm install -g @modelstudio/cli in terminal, or configure web cookies."]
             )
         }
 
@@ -111,7 +113,8 @@ public final class AliyunBailianService: @unchecked Sendable {
 
                     let data = pipe.fileHandleForReading.readDataToEndOfFile()
 
-                    if let res = try? self.parseTokenPlanJSON(data, accountLabel: "百炼 CLI (cn-beijing)") {
+                    let isZh = LocalizationManager.shared.effectiveLanguage == "zh"
+                    if let res = try? self.parseTokenPlanJSON(data, accountLabel: isZh ? "百炼 CLI (cn-beijing)" : "Bailian CLI (cn-beijing)") {
                         continuation.resume(returning: res)
                         return
                     }
@@ -119,7 +122,7 @@ public final class AliyunBailianService: @unchecked Sendable {
                     if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                        let errorObj = json["error"] as? [String: Any],
                        let msg = errorObj["message"] as? String {
-                        let hint = errorObj["hint"] as? String ?? "请运行 bl auth login --console 登录"
+                        let hint = errorObj["hint"] as? String ?? (isZh ? "请运行 bl auth login --console 登录" : "Please run bl auth login --console to login")
                         continuation.resume(throwing: NSError(
                             domain: "AliyunBailianService",
                             code: 401,
@@ -132,7 +135,7 @@ public final class AliyunBailianService: @unchecked Sendable {
                     continuation.resume(throwing: NSError(
                         domain: "AliyunBailianService",
                         code: -1,
-                        userInfo: [NSLocalizedDescriptionKey: "CLI 返回格式不符合预期: \(raw.prefix(200))"]
+                        userInfo: [NSLocalizedDescriptionKey: isZh ? "CLI 返回格式不符合预期: \(raw.prefix(200))" : "CLI returned unexpected format: \(raw.prefix(200))"]
                     ))
                 } catch {
                     continuation.resume(throwing: error)
@@ -188,22 +191,24 @@ public final class AliyunBailianService: @unchecked Sendable {
             throw URLError(.badServerResponse)
         }
 
+        let isZh = LocalizationManager.shared.effectiveLanguage == "zh"
         if httpResp.statusCode == 401 || httpResp.statusCode == 403 {
-            throw NSError(domain: "AliyunBailianService", code: 401, userInfo: [NSLocalizedDescriptionKey: "控制台 Cookie 已失效，请重新登录授权"])
+            throw NSError(domain: "AliyunBailianService", code: 401, userInfo: [NSLocalizedDescriptionKey: isZh ? "控制台 Cookie 已失效，请重新登录授权" : "Console Cookie expired. Please log in and authorize again"])
         }
 
-        return try parseTokenPlanJSON(data, accountLabel: "控制台网页授权")
+        return try parseTokenPlanJSON(data, accountLabel: isZh ? "控制台网页授权" : "Console Web Auth")
     }
 
     /// Parse Bailian 7-day and 5-hour Token Plan JSON response
     public func parseTokenPlanJSON(_ data: Data, accountLabel: String) throws -> (fiveHour: TokenWindow?, weekly: TokenWindow?, account: String?) {
+        let isZh = LocalizationManager.shared.effectiveLanguage == "zh"
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw NSError(domain: "AliyunBailianService", code: -1, userInfo: [NSLocalizedDescriptionKey: "无法解析百炼配额响应数据"])
+            throw NSError(domain: "AliyunBailianService", code: -1, userInfo: [NSLocalizedDescriptionKey: isZh ? "无法解析百炼配额响应数据" : "Unable to parse Bailian quota response data"])
         }
 
         if let errorObj = json["error"] as? [String: Any] {
-            let msg = errorObj["message"] as? String ?? "未知错误"
-            let hint = errorObj["hint"] as? String ?? "请运行 bl auth login --console 登录"
+            let msg = errorObj["message"] as? String ?? (isZh ? "未知错误" : "Unknown error")
+            let hint = errorObj["hint"] as? String ?? (isZh ? "请运行 bl auth login --console 登录" : "Please run bl auth login --console to login")
             throw NSError(domain: "AliyunBailianService", code: 401, userInfo: [NSLocalizedDescriptionKey: "\(msg) (\(hint))"])
         }
 
@@ -218,7 +223,7 @@ public final class AliyunBailianService: @unchecked Sendable {
         let per5HourResetMs = (payload["per5HourResetTime"] as? NSNumber)?.doubleValue
 
         guard per1WeekPctVal != nil || per5HourPctVal != nil else {
-            throw NSError(domain: "AliyunBailianService", code: -2, userInfo: [NSLocalizedDescriptionKey: "返回数据中未包含 7天或5小时配额字段"])
+            throw NSError(domain: "AliyunBailianService", code: -2, userInfo: [NSLocalizedDescriptionKey: isZh ? "返回数据中未包含 7天或5小时配额字段" : "Response data missing 7-day or 5-hour quota fields"])
         }
 
         var weeklyWindow: TokenWindow? = nil

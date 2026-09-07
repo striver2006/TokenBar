@@ -280,10 +280,10 @@ public struct SettingsView: View {
 
                 HStack {
                     if isOpenAIKeyVisible {
-                        TextField("sk-... 或 sk-proj-...", text: $openAIKeyInput)
+                        TextField(I18n(.placeholderApiKeyOpenAI), text: $openAIKeyInput)
                             .textFieldStyle(.roundedBorder)
                     } else {
-                        SecureField("sk-... 或 sk-proj-...", text: $openAIKeyInput)
+                        SecureField(I18n(.placeholderApiKeyOpenAI), text: $openAIKeyInput)
                             .textFieldStyle(.roundedBorder)
                     }
 
@@ -295,7 +295,7 @@ public struct SettingsView: View {
                     .buttonStyle(.borderless)
                 }
 
-                Text("可在 OpenAI Platform (platform.openai.com) -> API Keys 中生成。")
+                Text(I18n(.hintOpenAIKey))
                     .font(.system(size: 10))
                     .foregroundColor(.secondary)
             }
@@ -309,7 +309,7 @@ public struct SettingsView: View {
                     .textFieldStyle(.roundedBorder)
                     .font(.system(size: 11))
 
-                Text("默认为官方接口，亦可配置中转反向代理地址。")
+                Text(I18n(.hintOpenAIEndpoint))
                     .font(.system(size: 10))
                     .foregroundColor(.secondary)
             }
@@ -320,7 +320,7 @@ public struct SettingsView: View {
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
 
-                TextField("org-xxxxxxxx (选填)", text: $openAIOrgInput)
+                TextField(I18n(.placeholderOrgId), text: $openAIOrgInput)
                     .textFieldStyle(.roundedBorder)
                     .font(.system(size: 11))
             }
@@ -336,9 +336,9 @@ public struct SettingsView: View {
                     Task {
                         await refreshManager.refreshOpenAI()
                         if refreshManager.quotas[.openAI]?.isAuthorized == true {
-                            statusAlertMessage = "OpenAI 授权连接成功！已检测到接口状态与可用模型。"
+                            statusAlertMessage = I18n(.alertOpenAISuccess)
                         } else {
-                            statusAlertMessage = "OpenAI 连接失败: \(refreshManager.quotas[.openAI]?.errorMessage ?? "未知错误")"
+                            statusAlertMessage = "\(I18n(.alertOpenAIFailed))\(refreshManager.quotas[.openAI]?.errorMessage ?? I18n(.alertUnknownError))"
                         }
                         showStatusAlert = true
                     }
@@ -403,7 +403,7 @@ public struct SettingsView: View {
 
             // Section 1: Anthropic API Key
             VStack(alignment: .leading, spacing: 8) {
-                Text("方式一：Anthropic API Key (官方或代理)")
+                Text(I18n(.methodAnthropicKey))
                     .font(.system(size: 12, weight: .bold))
 
                 HStack {
@@ -424,7 +424,7 @@ public struct SettingsView: View {
                 }
 
                 HStack {
-                    Text("接入端点:")
+                    Text(I18n(.labelApiEndpointColon))
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
                     TextField("https://api.anthropic.com/v1", text: $anthropicEndpointInput)
@@ -441,9 +441,9 @@ public struct SettingsView: View {
                         Task {
                             await refreshManager.refreshClaude()
                             if refreshManager.quotas[.claudeCode]?.isAuthorized == true {
-                                statusAlertMessage = "Anthropic API Key 校验成功！"
+                                statusAlertMessage = I18n(.alertAnthropicSuccess)
                             } else {
-                                statusAlertMessage = "校验失败: \(refreshManager.quotas[.claudeCode]?.errorMessage ?? "请核对Key")"
+                                statusAlertMessage = "\(I18n(.alertAnthropicFailed))\(refreshManager.quotas[.claudeCode]?.errorMessage ?? I18n(.alertCheckKey))"
                             }
                             showStatusAlert = true
                         }
@@ -456,7 +456,7 @@ public struct SettingsView: View {
                     .buttonStyle(.bordered)
                     .controlSize(.small)
 
-                    Text("可在 Anthropic Console (console.anthropic.com) 生成。")
+                    Text(I18n(.hintAnthropicKey))
                         .font(.system(size: 10))
                         .foregroundColor(.secondary)
                 }
@@ -467,7 +467,7 @@ public struct SettingsView: View {
 
             // Section 2: Claude Code Subscription (Web OAuth / Local)
             VStack(alignment: .leading, spacing: 8) {
-                Text("方式二：Claude Code 订阅 (监控 5小时与每周额度)")
+                Text(I18n(.methodClaudeSubscription))
                     .font(.system(size: 12, weight: .bold))
 
                 HStack(spacing: 12) {
@@ -478,7 +478,7 @@ public struct SettingsView: View {
                                 refreshManager.saveSettings()
                                 Task {
                                     await refreshManager.refreshClaude()
-                                    statusAlertMessage = "Claude Code 网页登录授权成功！"
+                                    statusAlertMessage = I18n(.alertClaudeWebSuccess)
                                     showStatusAlert = true
                                 }
                             }
@@ -486,22 +486,22 @@ public struct SettingsView: View {
                     } label: {
                         HStack {
                             Image(systemName: "globe")
-                            Text("网站登录授权 (推荐)")
+                            Text(I18n(.btnWebLoginRecommended))
                         }
                     }
                     .buttonStyle(.borderedProminent)
 
                     Button {
                         if refreshManager.importClaudeFromLocal() {
-                            statusAlertMessage = "成功从 ~/.claude.json 读取并同步本地 Claude CLI 配额！"
+                            statusAlertMessage = I18n(.alertClaudeLocalSuccess)
                         } else {
-                            statusAlertMessage = "未在本地找到 ~/.claude.json 配置文件，请先在终端运行 claude 进行登录，或使用上方网页登录授权。"
+                            statusAlertMessage = I18n(.alertClaudeLocalNotFound)
                         }
                         showStatusAlert = true
                     } label: {
                         HStack {
                             Image(systemName: "terminal")
-                            Text("读取本地 CLI 授权")
+                            Text(I18n(.btnReadLocalCLIAuth))
                         }
                     }
                     .buttonStyle(.bordered)
@@ -509,7 +509,7 @@ public struct SettingsView: View {
 
                 // Optional Manual Token Input
                 HStack {
-                    SecureField("手动输入 OAuth Token / Session (可选备用)", text: $claudeTokenInput)
+                    SecureField(I18n(.placeholderClaudeManualToken), text: $claudeTokenInput)
                         .textFieldStyle(.roundedBorder)
                         .font(.system(size: 11))
 
@@ -518,7 +518,7 @@ public struct SettingsView: View {
                         refreshManager.saveSettings()
                         Task {
                             await refreshManager.refreshClaude()
-                            statusAlertMessage = "Claude Token 已保存并刷新！"
+                            statusAlertMessage = I18n(.alertClaudeTokenSaved)
                             showStatusAlert = true
                         }
                     }
@@ -581,9 +581,9 @@ public struct SettingsView: View {
             // Method 1: Google AI Studio API Key
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
-                    Text("方式一：Google AI Studio API Key")
+                    Text(I18n(.methodGeminiApiKey))
                         .font(.system(size: 13, weight: .bold))
-                    Text("(推荐，永久有效)")
+                    Text(I18n(.labelRecommendedLifetime))
                         .font(.system(size: 11))
                         .foregroundColor(.green)
                 }
@@ -614,7 +614,7 @@ public struct SettingsView: View {
                     }
 
                     HStack {
-                        Text("API 终端:")
+                        Text(I18n(.labelApiEndpointColon))
                             .font(.system(size: 12, weight: .medium))
                             .frame(width: 70, alignment: .leading)
                         TextField("https://generativelanguage.googleapis.com", text: $geminiEndpointInput)
@@ -623,7 +623,7 @@ public struct SettingsView: View {
                     }
 
                     HStack {
-                        Text("获取密钥:")
+                        Text(I18n(.labelGetKeyColon))
                             .font(.system(size: 11))
                             .foregroundColor(.secondary)
                         Link("aistudio.google.com/app/apikey", destination: URL(string: "https://aistudio.google.com/app/apikey")!)
@@ -637,9 +637,9 @@ public struct SettingsView: View {
                             Task {
                                 await refreshManager.refreshGemini()
                                 if refreshManager.quotas[.gemini]?.isAuthorized == true {
-                                    statusAlertMessage = "Google AI Studio API 连接成功！"
+                                    statusAlertMessage = I18n(.alertGeminiSuccess)
                                 } else {
-                                    statusAlertMessage = refreshManager.quotas[.gemini]?.errorMessage ?? "连接失败"
+                                    statusAlertMessage = refreshManager.quotas[.gemini]?.errorMessage ?? I18n(.alertUnknownError)
                                 }
                                 showStatusAlert = true
                             }
@@ -666,7 +666,7 @@ public struct SettingsView: View {
 
             // Method 2: OAuth Web Login / Local Credentials
             VStack(alignment: .leading, spacing: 10) {
-                Text("方式二：Google 账号网页登录 / 本地凭证 (OAuth)")
+                Text(I18n(.methodGeminiOAuth))
                     .font(.system(size: 13, weight: .bold))
 
                 HStack(spacing: 12) {
@@ -677,7 +677,7 @@ public struct SettingsView: View {
                                 refreshManager.saveSettings()
                                 Task {
                                     await refreshManager.refreshGemini()
-                                    statusAlertMessage = "Gemini 网站登录授权成功！"
+                                    statusAlertMessage = I18n(.alertGeminiWebSuccess)
                                     showStatusAlert = true
                                 }
                             }
@@ -685,22 +685,22 @@ public struct SettingsView: View {
                     } label: {
                         HStack {
                             Image(systemName: "globe")
-                            Text("Google 网站登录授权")
+                            Text(I18n(.btnGoogleWebLogin))
                         }
                     }
                     .buttonStyle(.bordered)
 
                     Button {
                         if refreshManager.importGeminiFromLocal() {
-                            statusAlertMessage = "已从 ~/.gemini/oauth_creds.json 读取本地凭证！"
+                            statusAlertMessage = I18n(.alertGeminiLocalSuccess)
                         } else {
-                            statusAlertMessage = "未检测到本地 ~/.gemini 配置文件，请使用网页登录授权。"
+                            statusAlertMessage = I18n(.alertGeminiLocalNotFound)
                         }
                         showStatusAlert = true
                     } label: {
                         HStack {
                             Image(systemName: "desktopcomputer")
-                            Text("读取本地 Gemini 配置")
+                            Text(I18n(.btnReadLocalGeminiConfig))
                         }
                     }
                     .buttonStyle(.bordered)
@@ -708,21 +708,21 @@ public struct SettingsView: View {
 
                 // Optional Manual Token
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("手动设置 Gemini OAuth Access Token (可选)")
+                    Text(I18n(.labelManualGeminiToken))
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
 
                     HStack {
-                        SecureField("输入 Access Token", text: $geminiTokenInput)
+                        SecureField(I18n(.placeholderGeminiToken), text: $geminiTokenInput)
                             .textFieldStyle(.roundedBorder)
                             .font(.system(size: 12))
 
-                        Button("保存") {
+                        Button(I18n(.save)) {
                             refreshManager.settings.geminiToken = geminiTokenInput
                             refreshManager.saveSettings()
                             Task {
                                 await refreshManager.refreshGemini()
-                                statusAlertMessage = "Gemini Token 已保存！"
+                                statusAlertMessage = I18n(.alertGeminiTokenSaved)
                                 showStatusAlert = true
                             }
                         }
@@ -803,7 +803,7 @@ public struct SettingsView: View {
                     .buttonStyle(.borderless)
                 }
 
-                Text("可在 DeepSeek 开放平台 (platform.deepseek.com) -> API Keys 中生成。")
+                Text(I18n(.hintDeepSeekKey))
                     .font(.system(size: 10))
                     .foregroundColor(.secondary)
             }
@@ -838,9 +838,9 @@ public struct SettingsView: View {
                     Task {
                         await refreshManager.refreshDeepSeek()
                         if refreshManager.quotas[.deepseek]?.isAuthorized == true {
-                            statusAlertMessage = "DeepSeek 连接成功！已查询到账户状态与余额。"
+                            statusAlertMessage = I18n(.alertDeepSeekSuccess)
                         } else {
-                            statusAlertMessage = "DeepSeek 连接失败: \(refreshManager.quotas[.deepseek]?.errorMessage ?? "未知错误")"
+                            statusAlertMessage = "\(I18n(.alertDeepSeekFailed))\(refreshManager.quotas[.deepseek]?.errorMessage ?? I18n(.alertUnknownError))"
                         }
                         showStatusAlert = true
                     }
@@ -910,10 +910,10 @@ public struct SettingsView: View {
 
                 HStack {
                     if isVolcengineKeyVisible {
-                        TextField("sk-... 或 API Key", text: $volcengineKeyInput)
+                        TextField(I18n(.placeholderApiKeyVolcengine), text: $volcengineKeyInput)
                             .textFieldStyle(.roundedBorder)
                     } else {
-                        SecureField("sk-... 或 API Key", text: $volcengineKeyInput)
+                        SecureField(I18n(.placeholderApiKeyVolcengine), text: $volcengineKeyInput)
                             .textFieldStyle(.roundedBorder)
                     }
 
@@ -925,7 +925,7 @@ public struct SettingsView: View {
                     .buttonStyle(.borderless)
                 }
 
-                Text("可在 火山引擎控制台 (console.volcengine.com/ark) -> API Key 管理中创建。")
+                Text(I18n(.hintVolcengineKey))
                     .font(.system(size: 10))
                     .foregroundColor(.secondary)
             }
@@ -941,7 +941,7 @@ public struct SettingsView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("接入点 ID (Endpoint ID, 选填)")
+                    Text(I18n(.labelVolcengineEndpointId))
                         .font(.system(size: 12, weight: .medium))
                     TextField("ep-xxxxxxxx-xxxx", text: $volcengineModelInput)
                         .textFieldStyle(.roundedBorder)
@@ -960,9 +960,9 @@ public struct SettingsView: View {
                     Task {
                         await refreshManager.refreshVolcengine()
                         if refreshManager.quotas[.volcengine]?.isAuthorized == true {
-                            statusAlertMessage = "火山方舟连接成功！已确认接口可用。"
+                            statusAlertMessage = I18n(.alertVolcengineSuccess)
                         } else {
-                            statusAlertMessage = "火山方舟连接失败: \(refreshManager.quotas[.volcengine]?.errorMessage ?? "未知错误")"
+                            statusAlertMessage = "\(I18n(.alertVolcengineFailed))\(refreshManager.quotas[.volcengine]?.errorMessage ?? I18n(.alertUnknownError))"
                         }
                         showStatusAlert = true
                     }
@@ -1047,7 +1047,7 @@ public struct SettingsView: View {
                     .buttonStyle(.borderless)
                 }
 
-                Text("可在 Moonshot 开放平台 (platform.moonshot.cn) -> API Key 管理中创建。")
+                Text(I18n(.hintKimiKey))
                     .font(.system(size: 10))
                     .foregroundColor(.secondary)
             }
@@ -1082,9 +1082,9 @@ public struct SettingsView: View {
                     Task {
                         await refreshManager.refreshKimi()
                         if refreshManager.quotas[.kimi]?.isAuthorized == true {
-                            statusAlertMessage = "KIMI 连接成功！已查询到可用余额。"
+                            statusAlertMessage = I18n(.alertKimiSuccess)
                         } else {
-                            statusAlertMessage = "KIMI 连接失败: \(refreshManager.quotas[.kimi]?.errorMessage ?? "未知错误")"
+                            statusAlertMessage = "\(I18n(.alertKimiFailed))\(refreshManager.quotas[.kimi]?.errorMessage ?? I18n(.alertUnknownError))"
                         }
                         showStatusAlert = true
                     }
@@ -1154,10 +1154,10 @@ public struct SettingsView: View {
 
                 HStack {
                     if isKeyVisible {
-                        TextField("例如: 75f...your_api_key", text: $glmKeyInput)
+                        TextField(I18n(.placeholderApiKeyGLM), text: $glmKeyInput)
                             .textFieldStyle(.roundedBorder)
                     } else {
-                        SecureField("例如: 75f...your_api_key", text: $glmKeyInput)
+                        SecureField(I18n(.placeholderApiKeyGLM), text: $glmKeyInput)
                             .textFieldStyle(.roundedBorder)
                     }
 
@@ -1169,27 +1169,26 @@ public struct SettingsView: View {
                     .buttonStyle(.borderless)
                 }
 
-                Text("可在 智谱开放平台 (open.bigmodel.cn) -> API Keys 中获取。")
+                Text(I18n(.hintGLMKey))
                     .font(.system(size: 10))
                     .foregroundColor(.secondary)
             }
 
             // Platform Endpoint
             VStack(alignment: .leading, spacing: 6) {
-                let isZh = LocalizationManager.shared.effectiveLanguage == "zh"
-                Text(isZh ? "接入协议与端点 (OpenAI Response 协议)" : "API Protocol & Endpoint (OpenAI Response Protocol)")
+                Text(I18n(.glmProtocolTitle))
                     .font(.system(size: 12, weight: .medium))
 
                 Picker("", selection: $glmEndpointInput) {
-                    Text(isZh ? "OpenAI Response 协议 (https://open.bigmodel.cn/api/v1)" : "OpenAI Response Protocol (https://open.bigmodel.cn/api/v1)").tag("https://open.bigmodel.cn/api/v1")
-                    Text(isZh ? "PaaS v4 协议 (https://open.bigmodel.cn/api/paas/v4)" : "PaaS v4 Protocol (https://open.bigmodel.cn/api/paas/v4)").tag("https://open.bigmodel.cn/api/paas/v4")
-                    Text(isZh ? "国际站 (https://api.z.ai/api/v1)" : "International (https://api.z.ai/api/v1)").tag("https://api.z.ai/api/v1")
+                    Text(I18n(.glmProtocolOpenAI)).tag("https://open.bigmodel.cn/api/v1")
+                    Text(I18n(.glmProtocolPaas)).tag("https://open.bigmodel.cn/api/paas/v4")
+                    Text(I18n(.glmProtocolInternational)).tag("https://api.z.ai/api/v1")
                 }
                 .pickerStyle(.radioGroup)
                 .id(i18n.currentLanguage)
 
                 HStack {
-                    Text(isZh ? "自定义端点:" : "Custom Endpoint:")
+                    Text(I18n(.glmCustomEndpoint))
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
                     TextField("https://open.bigmodel.cn/api/v1", text: $glmEndpointInput)
@@ -1209,9 +1208,9 @@ public struct SettingsView: View {
                     Task {
                         await refreshManager.refreshGLM()
                         if refreshManager.quotas[.glm]?.isAuthorized == true {
-                            statusAlertMessage = "GLM API Key 校验成功，已成功拉取额度数据！"
+                            statusAlertMessage = I18n(.alertGLMSuccess)
                         } else {
-                            statusAlertMessage = "GLM 校验失败: \(refreshManager.quotas[.glm]?.errorMessage ?? "请检查Key")"
+                            statusAlertMessage = "\(I18n(.alertGLMFailed))\(refreshManager.quotas[.glm]?.errorMessage ?? I18n(.alertCheckKey))"
                         }
                         showStatusAlert = true
                     }
@@ -1279,10 +1278,10 @@ public struct SettingsView: View {
                 HStack(spacing: 6) {
                     Image(systemName: "info.circle.fill")
                         .foregroundColor(.accentColor)
-                    Text("额度获取说明")
+                    Text(I18n(.aliyunQuotaNoticeTitle))
                         .font(.system(size: 12, weight: .semibold))
                 }
-                Text("阿里云百炼的 OpenAI 兼容端点（如 token-plan.../compatible-mode/v1）仅用于模型对话推理，并不提供配额查询接口。TokenBar 支持通过百炼官方 CLI (`bl`) 或控制台网页登录会话自动获取真实的 7 天周期额度 与 5 小时额度。")
+                Text(I18n(.aliyunQuotaNoticeDesc))
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1293,18 +1292,18 @@ public struct SettingsView: View {
 
             // Auth Actions
             VStack(alignment: .leading, spacing: 8) {
-                Text("推荐授权方式")
+                Text(I18n(.aliyunRecommendedAuthTitle))
                     .font(.system(size: 12, weight: .medium))
 
                 HStack(spacing: 12) {
                     Button {
                         AliyunBailianService.openTerminalToLoginCLI()
-                        statusAlertMessage = "已为你打开终端并运行 bl auth login --console。\n登录成功后，请返回此处点击「保存并刷新检测额度」即可！"
+                        statusAlertMessage = I18n(.alertAliyunCLIOpened)
                         showStatusAlert = true
                     } label: {
                         HStack {
                             Image(systemName: "terminal")
-                            Text("在终端登录百炼 CLI (推荐)")
+                            Text(I18n(.btnAliyunTerminalCLI))
                         }
                     }
                     .buttonStyle(.borderedProminent)
@@ -1316,7 +1315,7 @@ public struct SettingsView: View {
                                 refreshManager.saveSettings()
                                 Task {
                                     await refreshManager.refreshAliyun()
-                                    statusAlertMessage = "阿里云控制台网页登录授权成功！"
+                                    statusAlertMessage = I18n(.alertAliyunWebSuccess)
                                     showStatusAlert = true
                                 }
                             }
@@ -1324,7 +1323,7 @@ public struct SettingsView: View {
                     } label: {
                         HStack {
                             Image(systemName: "globe")
-                            Text("控制台网页登录授权")
+                            Text(I18n(.btnAliyunWebLogin))
                         }
                     }
                     .buttonStyle(.bordered)
@@ -1338,10 +1337,10 @@ public struct SettingsView: View {
 
                 HStack {
                     if isAliyunKeyVisible {
-                        TextField("例如: sk-sp-xxxxxxxx", text: $aliyunKeyInput)
+                        TextField(I18n(.placeholderApiKeyAliyun), text: $aliyunKeyInput)
                             .textFieldStyle(.roundedBorder)
                     } else {
-                        SecureField("例如: sk-sp-xxxxxxxx", text: $aliyunKeyInput)
+                        SecureField(I18n(.placeholderApiKeyAliyun), text: $aliyunKeyInput)
                             .textFieldStyle(.roundedBorder)
                     }
 
@@ -1353,7 +1352,7 @@ public struct SettingsView: View {
                     .buttonStyle(.borderless)
                 }
 
-                Text("百炼专属 API Key 通常以 sk-sp- 开头，供推理端点与工具使用。")
+                Text(I18n(.hintAliyunKey))
                     .font(.system(size: 10))
                     .foregroundColor(.secondary)
             }
@@ -1370,11 +1369,11 @@ public struct SettingsView: View {
 
             // Manual Cookie (Advanced)
             VStack(alignment: .leading, spacing: 6) {
-                Text("控制台 Session Cookie (可选/备用)")
+                Text(I18n(.labelAliyunCookie))
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
 
-                SecureField("通过网页登录会自动填入，亦可手动粘贴", text: $aliyunCookieInput)
+                SecureField(I18n(.placeholderAliyunCookie), text: $aliyunCookieInput)
                     .textFieldStyle(.roundedBorder)
                     .font(.system(size: 11))
             }
@@ -1390,16 +1389,16 @@ public struct SettingsView: View {
                     Task {
                         await refreshManager.refreshAliyun()
                         if refreshManager.quotas[.aliyunBailian]?.isAuthorized == true {
-                            statusAlertMessage = "百炼配额获取成功！已更新 7 天周期额度与 5 小时额度。"
+                            statusAlertMessage = I18n(.alertAliyunSuccess)
                         } else {
-                            statusAlertMessage = "百炼获取失败: \(refreshManager.quotas[.aliyunBailian]?.errorMessage ?? "请在终端执行 bl auth login --console 或使用网页登录")"
+                            statusAlertMessage = "\(I18n(.alertAliyunFailed))\(refreshManager.quotas[.aliyunBailian]?.errorMessage ?? "bl auth login --console")"
                         }
                         showStatusAlert = true
                     }
                 } label: {
                     HStack {
                         Image(systemName: "arrow.clockwise.circle")
-                        Text("保存并刷新检测额度")
+                        Text(I18n(.btnAliyunSaveAndRefresh))
                     }
                 }
                 .buttonStyle(.borderedProminent)
@@ -1430,13 +1429,13 @@ public struct SettingsView: View {
                 if !isAddingProvider {
                     Button {
                         if let first = DomesticProviderPreset.allPresets.first {
-                            customNameInput = first.name
+                            customNameInput = first.localizedName
                             customProtocolInput = first.apiProtocol
                             customEndpointInput = first.endpoint
                             customKeyInput = ""
                             customModelInput = first.defaultModel
                         } else {
-                            customNameInput = "OpenAI 兼容代理"
+                            customNameInput = I18n(.defaultCustomProviderName)
                             customProtocolInput = .openAIChat
                             customEndpointInput = "http://localhost:3000/v1"
                             customKeyInput = ""
@@ -1480,12 +1479,12 @@ public struct SettingsView: View {
                             HStack(spacing: 6) {
                                 ForEach(DomesticProviderPreset.allPresets) { preset in
                                     Button {
-                                        customNameInput = preset.name
+                                        customNameInput = preset.localizedName
                                         customEndpointInput = preset.endpoint
                                         customProtocolInput = preset.apiProtocol
                                         customModelInput = preset.defaultModel
                                     } label: {
-                                        Text(preset.name.split(separator: " ").first ?? "")
+                                        Text(preset.localizedName.split(separator: " ").first ?? "")
                                             .font(.system(size: 10))
                                     }
                                     .buttonStyle(.bordered)
@@ -1501,7 +1500,7 @@ public struct SettingsView: View {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(I18n(.providerNameLabel))
                                     .font(.system(size: 11, weight: .medium))
-                                TextField("例如: OpenAI 兼容代理", text: $customNameInput)
+                                TextField(I18n(.placeholderCustomName), text: $customNameInput)
                                     .textFieldStyle(.roundedBorder)
                                     .font(.system(size: 11))
                             }
@@ -1553,7 +1552,7 @@ public struct SettingsView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(I18n(.defaultModelLabel))
                                 .font(.system(size: 11, weight: .medium))
-                            TextField("例如: deepseek-chat 或 claude-3-5-sonnet", text: $customModelInput)
+                            TextField(I18n(.placeholderCustomModel), text: $customModelInput)
                                 .textFieldStyle(.roundedBorder)
                                 .font(.system(size: 11))
                         }
@@ -1563,7 +1562,7 @@ public struct SettingsView: View {
                     HStack(spacing: 10) {
                         Button {
                             let name = customNameInput.trimmingCharacters(in: .whitespacesAndNewlines)
-                            let finalName = name.isEmpty ? "自定义厂商" : name
+                            let finalName = name.isEmpty ? I18n(.fallbackCustomProviderName) : name
 
                             if let id = editingProviderId {
                                 let updated = CustomProviderConfig(
@@ -1588,7 +1587,7 @@ public struct SettingsView: View {
                                 refreshManager.addCustomProvider(newConfig)
                             }
                             isAddingProvider = false
-                            statusAlertMessage = "\(finalName) 已保存，正在检测连通性..."
+                            statusAlertMessage = "\(finalName)\(I18n(.alertCustomSavedPrefix))"
                             showStatusAlert = true
                         } label: {
                             HStack {

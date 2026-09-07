@@ -23,7 +23,7 @@ namespace TokenBar.Services
             var cleanKey = apiKey.Trim();
             if (string.IsNullOrEmpty(cleanKey))
             {
-                throw new ArgumentException("请输入火山方舟 API Key");
+                throw new ArgumentException(LocalizationManager.Instance.IsChinese ? "请输入火山方舟 API Key" : "Please enter Volcengine Ark API Key");
             }
 
             var baseEndpoint = endpoint.Trim().TrimEnd('/');
@@ -45,18 +45,18 @@ namespace TokenBar.Services
 
             if (resp.StatusCode == System.Net.HttpStatusCode.Unauthorized)
             {
-                throw new Exception("火山方舟 API Key 无效或未授权 (HTTP 401)");
+                throw new Exception(LocalizationManager.Instance.IsChinese ? "火山方舟 API Key 无效或未授权 (HTTP 401)" : "Volcengine Ark API Key is invalid or unauthorized (HTTP 401)");
             }
 
             if ((int)resp.StatusCode == 429)
             {
-                throw new Exception("火山方舟并发或速率超限 (HTTP 429)");
+                throw new Exception(LocalizationManager.Instance.IsChinese ? "火山方舟并发或速率超限 (HTTP 429)" : "Volcengine Ark rate limit or concurrency exceeded (HTTP 429)");
             }
 
             if (!resp.IsSuccessStatusCode)
             {
                 var snippet = body.Length > 100 ? body.Substring(0, 100) : body;
-                throw new Exception($"火山方舟响应异常 ({(int)resp.StatusCode}): {snippet}");
+                throw new Exception(LocalizationManager.Instance.IsChinese ? $"火山方舟响应异常 ({(int)resp.StatusCode}): {snippet}" : $"Volcengine Ark response error ({(int)resp.StatusCode}): {snippet}");
             }
 
             string? GetHeader(string name)
@@ -121,8 +121,9 @@ namespace TokenBar.Services
             }
 
             var keySuffix = cleanKey.Length > 6 ? cleanKey[^4..] : cleanKey;
-            var modelLabel = !string.IsNullOrEmpty(model) ? model : $"模型数: {modelCount}";
-            var account = $"火山方舟 ({modelLabel} • 尾号 {keySuffix})";
+            var isZh = LocalizationManager.Instance.IsChinese;
+            var modelLabel = !string.IsNullOrEmpty(model) ? model : (isZh ? $"模型数: {modelCount}" : $"{modelCount} models");
+            var account = isZh ? $"火山方舟 ({modelLabel} • 尾号 {keySuffix})" : $"Volcengine Ark ({modelLabel} • ...{keySuffix})";
 
             return (primaryWindow, null, account);
         }

@@ -102,6 +102,32 @@ public struct TokenWindow: Identifiable, Codable {
         return max(0.0, 100.0 - usedPercentage)
     }
 
+    public var localizedTitle: String {
+        let isZh = LocalizationManager.shared.effectiveLanguage == "zh"
+        if isZh { return title }
+
+        if title.hasPrefix("可用模型 (") {
+            let count = title.replacingOccurrences(of: "可用模型 (", with: "").replacingOccurrences(of: "个)", with: "").replacingOccurrences(of: ")", with: "").trimmingCharacters(in: .whitespaces)
+            return "Available Models (\(count))"
+        }
+
+        switch title {
+        case "5小时额度": return I18n(.fiveHourQuotaTitle)
+        case "每周额度": return I18n(.weeklyQuotaTitle)
+        case "7天额度", "7天周期额度": return I18n(.sevenDaysQuotaTitle)
+        case "账户可用余额", "账户余额": return I18n(.accountBalanceTitle)
+        case "RPM 速率配额", "RPM 请求速率": return I18n(.rpmRateLimitTitle)
+        case "TPM 速率配额", "TPM 速率剩余": return I18n(.tpmRateLimitTitle)
+        case "Token 速率配额": return I18n(.tokenRateLimitTitle)
+        case "5小时算力额度": return I18n(.fiveHourComputeQuotaTitle)
+        case "API 连接正常", "接口连接正常", "Anthropic 协议连接正常", "Anthropic API 连接正常", "DeepSeek 连接正常", "KIMI 连接正常", "接入点连接正常", "API 连接状态":
+            return I18n(.apiConnectedTitle)
+        case "AI Studio 配额":
+            return "AI Studio Quota"
+        default: return title
+        }
+    }
+
     public var isExpired: Bool {
         if isIdle { return false }
         return Date() >= endTime
@@ -319,6 +345,22 @@ public struct CustomProviderQuota: Identifiable, Codable {
 public struct DomesticProviderPreset: Identifiable {
     public var id: String { name }
     public let name: String
+    public var localizedName: String {
+        let isZh = LocalizationManager.shared.effectiveLanguage == "zh"
+        if isZh { return name }
+        switch name {
+        case "OpenAI 兼容代理": return "OpenAI Compatible Proxy"
+        case "Anthropic 兼容代理": return "Anthropic Compatible Proxy"
+        case "小米 MiMo (Xiaomi)": return "Xiaomi MiMo"
+        case "腾讯混元 (Tencent Hunyuan)": return "Tencent Hunyuan"
+        case "阶跃星辰 (StepFun)": return "StepFun"
+        case "硅基流动 (SiliconFlow)": return "SiliconFlow"
+        case "MiniMax (名之梦)": return "MiniMax"
+        case "零一万物 (01.AI)": return "01.AI"
+        case "百度千帆 (文心一言)": return "Baidu Qianfan"
+        default: return name
+        }
+    }
     public let endpoint: String
     public let apiProtocol: ApiProtocol
     public let placeholderKey: String

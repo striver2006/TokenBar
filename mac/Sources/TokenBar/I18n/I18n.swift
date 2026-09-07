@@ -111,6 +111,89 @@ public enum I18nKey: String {
     case alertNotice
     case alertOk
 
+    // Placeholders & Secondary Labels
+    case placeholderApiKeyOpenAI
+    case placeholderApiKeyVolcengine
+    case placeholderApiKeyGLM
+    case placeholderApiKeyAliyun
+    case placeholderOrgId
+    case placeholderCustomName
+    case placeholderCustomModel
+    case defaultCustomProviderName
+    case fallbackCustomProviderName
+
+    // Hints & Section Headers
+    case hintOpenAIKey
+    case hintOpenAIEndpoint
+    case methodAnthropicKey
+    case labelApiEndpointColon
+    case hintAnthropicKey
+    case methodClaudeSubscription
+    case btnWebLoginRecommended
+    case btnReadLocalCLIAuth
+    case placeholderClaudeManualToken
+
+    case methodGeminiApiKey
+    case labelRecommendedLifetime
+    case labelGetKeyColon
+    case methodGeminiOAuth
+    case btnGoogleWebLogin
+    case btnReadLocalGeminiConfig
+    case labelManualGeminiToken
+    case placeholderGeminiToken
+
+    case hintDeepSeekKey
+    case hintVolcengineKey
+    case labelVolcengineEndpointId
+    case hintKimiKey
+    case hintGLMKey
+    case glmProtocolTitle
+    case glmProtocolOpenAI
+    case glmProtocolPaas
+    case glmProtocolInternational
+    case glmCustomEndpoint
+
+    case aliyunQuotaNoticeTitle
+    case aliyunQuotaNoticeDesc
+    case aliyunRecommendedAuthTitle
+    case btnAliyunTerminalCLI
+    case aliyunMethodWebLogin
+    case btnAliyunWebLogin
+    case hintAliyunKey
+    case labelAliyunCookie
+    case placeholderAliyunCookie
+    case btnAliyunSaveAndRefresh
+
+    // Alert Messages
+    case alertOpenAISuccess
+    case alertOpenAIFailed
+    case alertAnthropicSuccess
+    case alertAnthropicFailed
+    case alertClaudeWebSuccess
+    case alertClaudeLocalSuccess
+    case alertClaudeLocalNotFound
+    case alertClaudeTokenSaved
+    case alertGeminiSuccess
+    case alertGeminiWebSuccess
+    case alertGeminiLocalSuccess
+    case alertGeminiLocalNotFound
+    case alertGeminiTokenSaved
+    case alertDeepSeekSuccess
+    case alertDeepSeekFailed
+    case alertVolcengineSuccess
+    case alertVolcengineFailed
+    case alertKimiSuccess
+    case alertKimiFailed
+    case alertGLMSuccess
+    case alertGLMFailed
+    case alertAliyunCLIOpened
+    case alertAliyunWebSuccess
+    case alertAliyunSuccess
+    case alertAliyunFailed
+    case alertCustomSavedPrefix
+    case alertUnknownError
+    case alertCheckKey
+
     // Menu Items
     case menuAbout
     case menuHide
@@ -129,6 +212,26 @@ public enum I18nKey: String {
     case menuWindow
     case menuMinimize
     case menuCloseWindow
+
+    // Quota Window Titles
+    case fiveHourQuotaTitle
+    case weeklyQuotaTitle
+    case sevenDaysQuotaTitle
+    case accountBalanceTitle
+    case rpmRateLimitTitle
+    case tpmRateLimitTitle
+    case tokenRateLimitTitle
+    case fiveHourComputeQuotaTitle
+    case apiConnectedTitle
+
+    // Error Messages
+    case errMissingAnthropicAuth
+    case errMissingGLMKey
+    case errMissingOpenAIKey
+    case errMissingDeepSeekKey
+    case errMissingVolcengineKey
+    case errMissingKimiKey
+    case errMissingCustomKey
 }
 
 public final class LocalizationManager: ObservableObject {
@@ -337,6 +440,163 @@ public final class LocalizationManager: ObservableObject {
         case .enableMonitoring:
             return isZh ? "启用监控" : "Enable Monitoring"
 
+        // Placeholders & Secondary Labels
+        case .placeholderApiKeyOpenAI:
+            return isZh ? "sk-... 或 sk-proj-..." : "sk-... or sk-proj-..."
+        case .placeholderApiKeyVolcengine:
+            return isZh ? "sk-... 或 API Key" : "sk-... or API Key"
+        case .placeholderApiKeyGLM:
+            return isZh ? "例如: 75f...your_api_key" : "e.g. 75f...your_api_key"
+        case .placeholderApiKeyAliyun:
+            return isZh ? "例如: sk-sp-xxxxxxxx" : "e.g. sk-sp-xxxxxxxx"
+        case .placeholderOrgId:
+            return isZh ? "org-xxxxxxxx (选填)" : "org-xxxxxxxx (Optional)"
+        case .placeholderCustomName:
+            return isZh ? "例如: OpenAI 兼容代理" : "e.g. OpenAI Compatible Proxy"
+        case .placeholderCustomModel:
+            return isZh ? "例如: deepseek-chat 或 claude-3-5-sonnet" : "e.g. deepseek-chat or claude-3-5-sonnet"
+        case .defaultCustomProviderName:
+            return isZh ? "OpenAI 兼容代理" : "OpenAI Compatible Proxy"
+        case .fallbackCustomProviderName:
+            return isZh ? "自定义厂商" : "Custom Provider"
+
+        // Hints & Section Headers
+        case .hintOpenAIKey:
+            return isZh ? "可在 OpenAI Platform (platform.openai.com) -> API Keys 中生成。" : "Can be generated in OpenAI Platform (platform.openai.com) -> API Keys."
+        case .hintOpenAIEndpoint:
+            return isZh ? "默认为官方接口，亦可配置中转反向代理地址。" : "Defaults to official endpoint. Reverse proxy URLs are supported."
+        case .methodAnthropicKey:
+            return isZh ? "方式一：Anthropic API Key (官方或代理)" : "Method 1: Anthropic API Key (Official or Proxy)"
+        case .labelApiEndpointColon:
+            return isZh ? "接入端点:" : "API Endpoint:"
+        case .hintAnthropicKey:
+            return isZh ? "可在 Anthropic Console (console.anthropic.com) 生成。" : "Can be generated in Anthropic Console (console.anthropic.com)."
+        case .methodClaudeSubscription:
+            return isZh ? "方式二：Claude Code 订阅 (监控 5小时与每周额度)" : "Method 2: Claude Code Subscription (5h & Weekly Quotas)"
+        case .btnWebLoginRecommended:
+            return isZh ? "网站登录授权 (推荐)" : "Web Login Authorization (Recommended)"
+        case .btnReadLocalCLIAuth:
+            return isZh ? "读取本地 CLI 授权" : "Read Local CLI Auth"
+        case .placeholderClaudeManualToken:
+            return isZh ? "手动输入 OAuth Token / Session (可选备用)" : "Enter OAuth Token / Session (Optional backup)"
+
+        case .methodGeminiApiKey:
+            return isZh ? "方式一：Google AI Studio API Key" : "Method 1: Google AI Studio API Key"
+        case .labelRecommendedLifetime:
+            return isZh ? "(推荐，永久有效)" : "(Recommended, Lifetime)"
+        case .labelGetKeyColon:
+            return isZh ? "获取密钥:" : "Get Key:"
+        case .methodGeminiOAuth:
+            return isZh ? "方式二：Google 账号网页登录 / 本地凭证 (OAuth)" : "Method 2: Google Account Web Login / Local Credentials (OAuth)"
+        case .btnGoogleWebLogin:
+            return isZh ? "Google 网站登录授权" : "Google Web Login Authorization"
+        case .btnReadLocalGeminiConfig:
+            return isZh ? "读取本地 Gemini 配置" : "Read Local Gemini Credentials"
+        case .labelManualGeminiToken:
+            return isZh ? "手动设置 Gemini OAuth Access Token (可选)" : "Manual Gemini OAuth Access Token (Optional)"
+        case .placeholderGeminiToken:
+            return isZh ? "输入 Access Token" : "Enter Access Token"
+
+        case .hintDeepSeekKey:
+            return isZh ? "可在 DeepSeek 开放平台 (platform.deepseek.com) -> API Keys 中生成。" : "Can be generated in DeepSeek Platform (platform.deepseek.com) -> API Keys."
+        case .hintVolcengineKey:
+            return isZh ? "可在 火山引擎控制台 (console.volcengine.com/ark) -> API Key 管理中创建。" : "Can be created in Volcengine Console (console.volcengine.com/ark) -> API Keys."
+        case .labelVolcengineEndpointId:
+            return isZh ? "接入点 ID (Endpoint ID, 选填)" : "Endpoint ID (Optional)"
+        case .hintKimiKey:
+            return isZh ? "可在 Moonshot 开放平台 (platform.moonshot.cn) -> API Key 管理中创建。" : "Can be created in Moonshot Platform (platform.moonshot.cn) -> API Keys."
+        case .hintGLMKey:
+            return isZh ? "可在 智谱开放平台 (open.bigmodel.cn) -> API Keys 中获取。" : "Can be obtained in Zhipu Platform (open.bigmodel.cn) -> API Keys."
+        case .glmProtocolTitle:
+            return isZh ? "接入协议与端点 (OpenAI Response 协议)" : "Protocol & Endpoint (OpenAI Response Protocol)"
+        case .glmProtocolOpenAI:
+            return isZh ? "OpenAI Response 协议 (https://open.bigmodel.cn/api/v1)" : "OpenAI Response Protocol (https://open.bigmodel.cn/api/v1)"
+        case .glmProtocolPaas:
+            return isZh ? "PaaS v4 协议 (https://open.bigmodel.cn/api/paas/v4)" : "PaaS v4 Protocol (https://open.bigmodel.cn/api/paas/v4)"
+        case .glmProtocolInternational:
+            return isZh ? "国际站 (https://api.z.ai/api/v1)" : "International (https://api.z.ai/api/v1)"
+        case .glmCustomEndpoint:
+            return isZh ? "自定义端点:" : "Custom Endpoint:"
+
+        case .aliyunQuotaNoticeTitle:
+            return isZh ? "额度获取说明" : "Quota Retrieval Notice"
+        case .aliyunQuotaNoticeDesc:
+            return isZh ? "阿里云百炼的 OpenAI 兼容端点（如 token-plan.../compatible-mode/v1）仅用于模型对话推理，并不提供配额查询接口。TokenBar 支持通过百炼官方 CLI (`bl`) 或控制台网页登录会话自动获取真实的 7 天周期额度 与 5 小时额度。" : "Aliyun Bailian's OpenAI-compatible endpoint is for model inference only and does not support quota lookup. TokenBar retrieves real 7-day and 5-hour quotas via the official CLI (`bl`) or console web login."
+        case .aliyunRecommendedAuthTitle:
+            return isZh ? "推荐授权方式" : "Recommended Authorization"
+        case .btnAliyunTerminalCLI:
+            return isZh ? "在终端登录百炼 CLI (推荐)" : "Login Bailian CLI in Terminal (Recommended)"
+        case .aliyunMethodWebLogin:
+            return isZh ? "控制台网页登录授权" : "Console Web Login Authorization"
+        case .btnAliyunWebLogin:
+            return isZh ? "控制台网页登录授权" : "Console Web Login Authorization"
+        case .hintAliyunKey:
+            return isZh ? "百炼专属 API Key 通常以 sk-sp- 开头，供推理端点与工具使用。" : "Bailian API Key usually starts with sk-sp-, used for model inference."
+        case .labelAliyunCookie:
+            return isZh ? "控制台 Session Cookie (可选/备用)" : "Console Session Cookie (Optional/Backup)"
+        case .placeholderAliyunCookie:
+            return isZh ? "通过网页登录会自动填入，亦可手动粘贴" : "Auto-filled via web login, or paste manually"
+        case .btnAliyunSaveAndRefresh:
+            return isZh ? "保存并刷新检测额度" : "Save & Refresh Quota"
+
+        // Alert Messages
+        case .alertOpenAISuccess:
+            return isZh ? "OpenAI 授权连接成功！已检测到接口状态与可用模型。" : "OpenAI connection successful! API status and available models detected."
+        case .alertOpenAIFailed:
+            return isZh ? "OpenAI 连接失败: " : "OpenAI connection failed: "
+        case .alertAnthropicSuccess:
+            return isZh ? "Anthropic API Key 校验成功！" : "Anthropic API Key verified successfully!"
+        case .alertAnthropicFailed:
+            return isZh ? "校验失败: " : "Verification failed: "
+        case .alertClaudeWebSuccess:
+            return isZh ? "Claude Code 网页登录授权成功！" : "Claude Code web login authorization successful!"
+        case .alertClaudeLocalSuccess:
+            return isZh ? "成功从 ~/.claude.json 读取并同步本地 Claude CLI 配额！" : "Successfully read and synced local Claude CLI quota from ~/.claude.json!"
+        case .alertClaudeLocalNotFound:
+            return isZh ? "未在本地找到 ~/.claude.json 配置文件，请先在终端运行 claude 进行登录，或使用上方网页登录授权。" : "Could not find ~/.claude.json locally. Please run claude login in terminal or use web login above."
+        case .alertClaudeTokenSaved:
+            return isZh ? "Claude Token 已保存并刷新！" : "Claude Token saved and refreshed!"
+        case .alertGeminiSuccess:
+            return isZh ? "Google AI Studio API 连接成功！" : "Google AI Studio API connected successfully!"
+        case .alertGeminiWebSuccess:
+            return isZh ? "Gemini 网站登录授权成功！" : "Gemini web login authorization successful!"
+        case .alertGeminiLocalSuccess:
+            return isZh ? "已从 ~/.gemini/oauth_creds.json 读取本地凭证！" : "Successfully read local credentials from ~/.gemini/oauth_creds.json!"
+        case .alertGeminiLocalNotFound:
+            return isZh ? "未检测到本地 ~/.gemini 配置文件，请使用网页登录授权。" : "No local ~/.gemini config found. Please use web login authorization."
+        case .alertGeminiTokenSaved:
+            return isZh ? "Gemini Token 已保存！" : "Gemini Token saved!"
+        case .alertDeepSeekSuccess:
+            return isZh ? "DeepSeek 连接成功！已查询到账户状态与余额。" : "DeepSeek connected successfully! Account status and balance retrieved."
+        case .alertDeepSeekFailed:
+            return isZh ? "DeepSeek 连接失败: " : "DeepSeek connection failed: "
+        case .alertVolcengineSuccess:
+            return isZh ? "火山方舟连接成功！已确认接口可用。" : "Volcengine Ark connected successfully! Service verified."
+        case .alertVolcengineFailed:
+            return isZh ? "火山方舟连接失败: " : "Volcengine Ark connection failed: "
+        case .alertKimiSuccess:
+            return isZh ? "KIMI 连接成功！已查询到可用余额。" : "KIMI connected successfully! Available balance retrieved."
+        case .alertKimiFailed:
+            return isZh ? "KIMI 连接失败: " : "KIMI connection failed: "
+        case .alertGLMSuccess:
+            return isZh ? "GLM API Key 校验成功，已成功拉取额度数据！" : "GLM API Key verified successfully, quota data retrieved!"
+        case .alertGLMFailed:
+            return isZh ? "GLM 校验失败: " : "GLM verification failed: "
+        case .alertAliyunCLIOpened:
+            return isZh ? "已为你打开终端并运行 bl auth login --console。\n登录成功后，请返回此处点击「保存并刷新检测额度」即可！" : "Opened Terminal running 'bl auth login --console'.\nAfter logging in, return here and click 'Save & Refresh Quota'!"
+        case .alertAliyunWebSuccess:
+            return isZh ? "阿里云控制台网页登录授权成功！" : "Aliyun Console web login authorization successful!"
+        case .alertAliyunSuccess:
+            return isZh ? "百炼配额获取成功！已更新 7 天周期额度与 5 小时额度。" : "Bailian quota retrieved successfully! 7-day and 5-hour quotas updated."
+        case .alertAliyunFailed:
+            return isZh ? "百炼获取失败: " : "Bailian retrieval failed: "
+        case .alertCustomSavedPrefix:
+            return isZh ? " 已保存，正在检测连通性..." : " saved, checking connectivity..."
+        case .alertUnknownError:
+            return isZh ? "未知错误" : "Unknown error"
+        case .alertCheckKey:
+            return isZh ? "请核对Key" : "Please check your key"
+
         case .menuAbout:
             return isZh ? "关于 TokenBar" : "About TokenBar"
         case .menuHide:
@@ -371,6 +631,38 @@ public final class LocalizationManager: ObservableObject {
             return isZh ? "最小化" : "Minimize"
         case .menuCloseWindow:
             return isZh ? "关闭窗口" : "Close Window"
+        case .fiveHourQuotaTitle:
+            return isZh ? "5小时额度" : "5-Hour Quota"
+        case .weeklyQuotaTitle:
+            return isZh ? "每周额度" : "Weekly Quota"
+        case .sevenDaysQuotaTitle:
+            return isZh ? "7天额度" : "7-Day Quota"
+        case .accountBalanceTitle:
+            return isZh ? "账户可用余额" : "Account Balance"
+        case .rpmRateLimitTitle:
+            return isZh ? "RPM 速率配额" : "RPM Rate Limit"
+        case .tpmRateLimitTitle:
+            return isZh ? "TPM 速率配额" : "TPM Rate Limit"
+        case .tokenRateLimitTitle:
+            return isZh ? "Token 速率配额" : "Token Rate Limit"
+        case .fiveHourComputeQuotaTitle:
+            return isZh ? "5小时算力额度" : "5-Hour Compute Quota"
+        case .apiConnectedTitle:
+            return isZh ? "API 连接正常" : "API Connected"
+        case .errMissingAnthropicAuth:
+            return isZh ? "未配置 Anthropic API Key 或 Claude Code 网页/本地授权" : "Anthropic API Key or Claude Code authorization not configured"
+        case .errMissingGLMKey:
+            return isZh ? "请在配置中输入 GLM API KEY" : "Please enter GLM API Key in settings"
+        case .errMissingOpenAIKey:
+            return isZh ? "请在配置中输入 OpenAI API Key" : "Please enter OpenAI API Key in settings"
+        case .errMissingDeepSeekKey:
+            return isZh ? "请在配置中输入 DeepSeek API Key" : "Please enter DeepSeek API Key in settings"
+        case .errMissingVolcengineKey:
+            return isZh ? "请在配置中输入火山方舟 API Key" : "Please enter Volcengine Ark API Key in settings"
+        case .errMissingKimiKey:
+            return isZh ? "请在配置中输入 KIMI API Key" : "Please enter KIMI API Key in settings"
+        case .errMissingCustomKey:
+            return isZh ? "请在配置中填入 API KEY" : "Please enter API Key in settings"
         }
     }
 }

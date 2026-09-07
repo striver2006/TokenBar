@@ -122,7 +122,7 @@ struct WindowQuotaRow: View {
                     .background(Color.primary.opacity(0.08))
                     .cornerRadius(4)
 
-                Text(window.title)
+                Text(window.localizedTitle)
                     .font(.system(size: 11, weight: .medium))
                     .foregroundColor(.primary)
 

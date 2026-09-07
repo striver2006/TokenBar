@@ -218,7 +218,7 @@ public final class RefreshManager: ObservableObject {
         if !foundAuth {
             quota.isAuthorized = false
             if quota.errorMessage == nil {
-                quota.errorMessage = "未配置 Anthropic API Key 或 Claude Code 网页/本地授权"
+                quota.errorMessage = I18n(.errMissingAnthropicAuth)
             }
         }
 
@@ -325,7 +325,7 @@ public final class RefreshManager: ObservableObject {
 
         guard !settings.glmApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             quota.isAuthorized = false
-            quota.errorMessage = "请在配置中输入 GLM API KEY"
+            quota.errorMessage = I18n(.errMissingGLMKey)
             quota.isLoading = false
             quotas[.glm] = quota
             return
@@ -408,7 +408,7 @@ public final class RefreshManager: ObservableObject {
 
         guard !settings.openAIApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             quota.isAuthorized = false
-            quota.errorMessage = "请在配置中输入 OpenAI API Key"
+            quota.errorMessage = I18n(.errMissingOpenAIKey)
             quota.isLoading = false
             quotas[.openAI] = quota
             return
@@ -442,7 +442,7 @@ public final class RefreshManager: ObservableObject {
 
         guard !settings.deepseekApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             quota.isAuthorized = false
-            quota.errorMessage = "请在配置中输入 DeepSeek API Key"
+            quota.errorMessage = I18n(.errMissingDeepSeekKey)
             quota.isLoading = false
             quotas[.deepseek] = quota
             return
@@ -476,7 +476,7 @@ public final class RefreshManager: ObservableObject {
 
         guard !settings.volcengineApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             quota.isAuthorized = false
-            quota.errorMessage = "请在配置中输入火山方舟 API Key"
+            quota.errorMessage = I18n(.errMissingVolcengineKey)
             quota.isLoading = false
             quotas[.volcengine] = quota
             return
@@ -510,7 +510,7 @@ public final class RefreshManager: ObservableObject {
 
         guard !settings.kimiApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             quota.isAuthorized = false
-            quota.errorMessage = "请在配置中输入 KIMI API Key"
+            quota.errorMessage = I18n(.errMissingKimiKey)
             quota.isLoading = false
             quotas[.kimi] = quota
             return
@@ -549,7 +549,7 @@ public final class RefreshManager: ObservableObject {
 
         guard !config.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             q.isAuthorized = false
-            q.errorMessage = "请在配置中填入 API KEY"
+            q.errorMessage = I18n(.errMissingCustomKey)
             q.isLoading = false
             customQuotas[config.id] = q
             return

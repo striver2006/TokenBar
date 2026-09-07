@@ -24,10 +24,10 @@
                         </Border>
                         <StackPanel Orientation="Vertical">
                             <TextBlock Text="TokenBar" FontWeight="Bold" FontSize="13" Foreground="#111827"/>
-                            <TextBlock x:Name="TxtSubtitle" Text="模型额度监控" FontSize="9" Foreground="#6B7280"/>
+                            <TextBlock x:Name="TxtSubtitle" Text="" FontSize="9" Foreground="#6B7280"/>
                         </StackPanel>
                     </StackPanel>
-                    <Button x:Name="BtnRefresh" Content="刷新" HorizontalAlignment="Right" VerticalAlignment="Center"
+                    <Button x:Name="BtnRefresh" Content="" HorizontalAlignment="Right" VerticalAlignment="Center"
                             Padding="10,4" Background="#F3F4F6" BorderBrush="#D1D5DB"
                             FontSize="11" Cursor="Hand" Click="BtnRefresh_Click">
                         <Button.Resources>
@@ -47,14 +47,14 @@
             <!-- Footer -->
             <Border Grid.Row="2" Background="#F3F4F6" Padding="14,8" CornerRadius="0,0,12,12" BorderBrush="#E5E7EB" BorderThickness="0,1,0,0">
                 <DockPanel>
-                    <TextBlock x:Name="TxtFooter" Text="准备就绪" FontSize="10" Foreground="#6B7280" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="TxtFooter" Text="" FontSize="10" Foreground="#6B7280" VerticalAlignment="Center"/>
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                         <Button x:Name="BtnSettings" Content="⚙" Width="26" Height="26" Margin="0,0,6,0"
                                 Background="Transparent" BorderThickness="0" FontSize="13" Foreground="#4B5563"
-                                Cursor="Hand" Click="BtnSettings_Click" ToolTip="偏好设置..."/>
+                                Cursor="Hand" Click="BtnSettings_Click"/>
                         <Button x:Name="BtnClose" Content="✕" Width="26" Height="26"
                                 Background="Transparent" BorderThickness="0" FontSize="12" Foreground="#9CA3AF"
-                                Cursor="Hand" Click="BtnClose_Click" ToolTip="关闭浮窗"/>
+                                Cursor="Hand" Click="BtnClose_Click"/>
                     </StackPanel>
                 </DockPanel>
             </Border>

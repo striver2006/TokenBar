@@ -103,6 +103,35 @@ namespace TokenBar.Models
     {
         public Guid Id { get; set; } = Guid.NewGuid();
         public string Title { get; set; } = string.Empty;
+        public string LocalizedTitle
+        {
+            get
+            {
+                var isZh = LocalizationManager.Instance.IsChinese;
+                if (isZh) return Title;
+
+                if (Title.StartsWith("可用模型 (", StringComparison.Ordinal))
+                {
+                    var count = Title.Replace("可用模型 (", "").Replace("个)", "").Replace(")", "").Trim();
+                    return $"Available Models ({count})";
+                }
+
+                return Title switch
+                {
+                    "5小时额度" => "5-Hour Quota",
+                    "每周额度" => "Weekly Quota",
+                    "7天额度" or "7天周期额度" => "7-Day Quota",
+                    "账户可用余额" or "账户余额" => "Account Balance",
+                    "RPM 速率配额" or "RPM 请求速率" => "RPM Rate Limit",
+                    "TPM 速率配额" or "TPM 速率剩余" => "TPM Rate Limit",
+                    "Token 速率配额" => "Token Rate Limit",
+                    "5小时算力额度" => "5-Hour Compute Quota",
+                    "API 连接正常" or "接口连接正常" or "Anthropic 协议连接正常" or "Anthropic API 连接正常" or "DeepSeek 连接正常" or "KIMI 连接正常" or "接入点连接正常" or "API 连接状态" => "API Connected",
+                    "AI Studio 配额" => "AI Studio Quota",
+                    _ => Title
+                };
+            }
+        }
         public double UsedPercentage { get; set; }
         public DateTime StartTime { get; set; }
         public DateTime EndTime { get; set; }
@@ -202,6 +231,19 @@ namespace TokenBar.Models
     public class DomesticProviderPreset
     {
         public string Name { get; set; } = string.Empty;
+        public string LocalizedName => LocalizationManager.Instance.IsChinese ? Name : Name switch
+        {
+            "OpenAI 兼容代理" => "OpenAI Compatible Proxy",
+            "Anthropic 兼容代理" => "Anthropic Compatible Proxy",
+            "小米 MiMo (Xiaomi)" => "Xiaomi MiMo",
+            "腾讯混元 (Tencent Hunyuan)" => "Tencent Hunyuan",
+            "阶跃星辰 (StepFun)" => "StepFun",
+            "硅基流动 (SiliconFlow)" => "SiliconFlow",
+            "MiniMax (名之梦)" => "MiniMax",
+            "零一万物 (01.AI)" => "01.AI",
+            "百度千帆 (文心一言)" => "Baidu Qianfan",
+            _ => Name
+        };
         public string Endpoint { get; set; } = string.Empty;
         public ApiProtocol ApiProtocol { get; set; } = ApiProtocol.OpenAIChat;
         public string PlaceholderKey { get; set; } = "sk-...";

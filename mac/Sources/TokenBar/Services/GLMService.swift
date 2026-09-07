@@ -9,8 +9,9 @@ public final class GLMService {
         endpoint: String = "https://open.bigmodel.cn/api/v1"
     ) async throws -> (fiveHour: TokenWindow?, weekly: TokenWindow?, account: String?) {
         let cleanKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let isZh = LocalizationManager.shared.effectiveLanguage == "zh"
         guard !cleanKey.isEmpty else {
-            throw NSError(domain: "GLMService", code: 400, userInfo: [NSLocalizedDescriptionKey: "API Key 不能为空"])
+            throw NSError(domain: "GLMService", code: 400, userInfo: [NSLocalizedDescriptionKey: isZh ? "API Key 不能为空" : "API Key cannot be empty"])
         }
 
         // Normalize OpenAI endpoint and Base Host
@@ -47,14 +48,14 @@ public final class GLMService {
                 let (openAiData, openAiResp) = try await URLSession.shared.data(for: openAiReq)
                 if let httpResp = openAiResp as? HTTPURLResponse {
                     if httpResp.statusCode == 401 || httpResp.statusCode == 403 {
-                        throw NSError(domain: "GLMService", code: httpResp.statusCode, userInfo: [NSLocalizedDescriptionKey: "GLM API Key 无效或未授权"])
+                        throw NSError(domain: "GLMService", code: httpResp.statusCode, userInfo: [NSLocalizedDescriptionKey: isZh ? "GLM API Key 无效或未授权" : "GLM API Key is invalid or unauthorized"])
                     }
 
                     // Check error body in case of 200 with code != 200
                     if let jsonObj = try? JSONSerialization.jsonObject(with: openAiData) as? [String: Any] {
                         if let code = jsonObj["code"] as? Int, code == 1001 {
-                            let msg = jsonObj["msg"] as? String ?? "未收到有效 Authorization 参数"
-                            throw NSError(domain: "GLMService", code: 1001, userInfo: [NSLocalizedDescriptionKey: "身份验证失败: \(msg)"])
+                            let msg = jsonObj["msg"] as? String ?? (isZh ? "未收到有效 Authorization 参数" : "Valid Authorization parameter not received")
+                            throw NSError(domain: "GLMService", code: 1001, userInfo: [NSLocalizedDescriptionKey: isZh ? "身份验证失败: \(msg)" : "Authentication failed: \(msg)"])
                         }
                     }
 

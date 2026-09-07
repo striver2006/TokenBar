@@ -115,13 +115,14 @@ public final class GeminiService {
 
     /// Fetch Gemini usage quota and window limits
     public func fetchQuota(token: String?) async throws -> (fiveHour: TokenWindow?, weekly: TokenWindow?, account: String?) {
+        let isZh = LocalizationManager.shared.effectiveLanguage == "zh"
         let local = readLocalGeminiConfig()
         var activeToken = token?.isEmpty == false ? token : local.token
         let refreshToken = local.refreshToken
         var detectedAccount = local.account
 
         if activeToken == nil && refreshToken == nil {
-            throw NSError(domain: "GeminiService", code: 401, userInfo: [NSLocalizedDescriptionKey: "请在设置中通过网站登录授权 Gemini"])
+            throw NSError(domain: "GeminiService", code: 401, userInfo: [NSLocalizedDescriptionKey: isZh ? "请在设置中通过网站登录授权 Gemini" : "Please authorize Gemini via web login in settings"])
         }
 
         // Test activeToken or refresh if needed
@@ -145,7 +146,7 @@ public final class GeminiService {
         }
 
         guard isValid, let validToken = activeToken else {
-            throw NSError(domain: "GeminiService", code: 401, userInfo: [NSLocalizedDescriptionKey: "Gemini 凭证已过期，请重新登录授权"])
+            throw NSError(domain: "GeminiService", code: 401, userInfo: [NSLocalizedDescriptionKey: isZh ? "Gemini 凭证已过期，请重新登录授权" : "Gemini credentials expired. Please log in and authorize again"])
         }
 
         // Query Gemini API / models to check quota & rate limits
@@ -197,7 +198,7 @@ public final class GeminiService {
             unit: "%"
         )
 
-        return (fiveHour, weekly, detectedAccount ?? "Google 账号")
+        return (fiveHour, weekly, detectedAccount ?? (isZh ? "Google 账号" : "Google Account"))
     }
 
     private func fetchUserInfo(token: String) async -> String? {
@@ -217,8 +218,9 @@ public final class GeminiService {
     /// Fetch Gemini usage quota and test connection using Google AI Studio API Key
     public func fetchQuotaWithApiKey(apiKey: String, endpoint: String) async throws -> (fiveHour: TokenWindow?, weekly: TokenWindow?, account: String?) {
         let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let isZh = LocalizationManager.shared.effectiveLanguage == "zh"
         guard !trimmedKey.isEmpty else {
-            throw NSError(domain: "GeminiService", code: 401, userInfo: [NSLocalizedDescriptionKey: "请输入有效的 Google AI Studio API Key"])
+            throw NSError(domain: "GeminiService", code: 401, userInfo: [NSLocalizedDescriptionKey: isZh ? "请输入有效的 Google AI Studio API Key" : "Please enter a valid Google AI Studio API Key"])
         }
 
         var cleanBase = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -237,7 +239,7 @@ public final class GeminiService {
         }
 
         guard let url = URL(string: urlString) else {
-            throw NSError(domain: "GeminiService", code: 400, userInfo: [NSLocalizedDescriptionKey: "无效的 Gemini API 终端地址"])
+            throw NSError(domain: "GeminiService", code: 400, userInfo: [NSLocalizedDescriptionKey: isZh ? "无效的 Gemini API 终端地址" : "Invalid Gemini API endpoint address"])
         }
 
         var request = URLRequest(url: url)
@@ -255,10 +257,10 @@ public final class GeminiService {
             if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let errObj = json["error"] as? [String: Any],
                let msg = errObj["message"] as? String {
-                throw NSError(domain: "GeminiService", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: "Gemini API 错误: \(msg)"])
+                throw NSError(domain: "GeminiService", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: isZh ? "Gemini API 错误: \(msg)" : "Gemini API error: \(msg)"])
             }
             let rawMsg = String(data: data, encoding: .utf8) ?? "HTTP \(http.statusCode)"
-            throw NSError(domain: "GeminiService", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: "Gemini API 响应异常 (\(http.statusCode)): \(rawMsg)"])
+            throw NSError(domain: "GeminiService", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: isZh ? "Gemini API 响应异常 (\(http.statusCode)): \(rawMsg)" : "Gemini API response error (\(http.statusCode)): \(rawMsg)"])
         }
 
         var modelCount = 0

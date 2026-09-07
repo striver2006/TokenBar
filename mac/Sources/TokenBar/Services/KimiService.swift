@@ -12,7 +12,8 @@ public final class KimiService: @unchecked Sendable {
     ) async throws -> (fiveHour: TokenWindow?, weekly: TokenWindow?, account: String?) {
         let cleanKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanKey.isEmpty else {
-            throw NSError(domain: "KimiService", code: 400, userInfo: [NSLocalizedDescriptionKey: "请输入 KIMI / Moonshot API Key"])
+            let isZh = LocalizationManager.shared.effectiveLanguage == "zh"
+            throw NSError(domain: "KimiService", code: 400, userInfo: [NSLocalizedDescriptionKey: isZh ? "请输入 KIMI / Moonshot API Key" : "Please enter KIMI / Moonshot API Key"])
         }
 
         var baseEndpoint = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -43,17 +44,18 @@ public final class KimiService: @unchecked Sendable {
             throw URLError(.badServerResponse)
         }
 
+        let isZh = LocalizationManager.shared.effectiveLanguage == "zh"
         if httpResp.statusCode == 401 {
-            throw NSError(domain: "KimiService", code: 401, userInfo: [NSLocalizedDescriptionKey: "KIMI API Key 无效或未授权 (HTTP 401)"])
+            throw NSError(domain: "KimiService", code: 401, userInfo: [NSLocalizedDescriptionKey: isZh ? "KIMI API Key 无效或未授权 (HTTP 401)" : "KIMI API Key is invalid or unauthorized (HTTP 401)"])
         }
 
         if httpResp.statusCode == 429 {
-            throw NSError(domain: "KimiService", code: 429, userInfo: [NSLocalizedDescriptionKey: "KIMI 请求并发超限或额度不足 (HTTP 429)"])
+            throw NSError(domain: "KimiService", code: 429, userInfo: [NSLocalizedDescriptionKey: isZh ? "KIMI 请求并发超限或额度不足 (HTTP 429)" : "KIMI concurrency or quota limit exceeded (HTTP 429)"])
         }
 
         guard httpResp.statusCode >= 200 && httpResp.statusCode < 300 else {
             let msg = String(data: data, encoding: .utf8) ?? "HTTP \(httpResp.statusCode)"
-            throw NSError(domain: "KimiService", code: httpResp.statusCode, userInfo: [NSLocalizedDescriptionKey: "KIMI 接口响应异常 (\(httpResp.statusCode)): \(msg.prefix(100))"])
+            throw NSError(domain: "KimiService", code: httpResp.statusCode, userInfo: [NSLocalizedDescriptionKey: isZh ? "KIMI 接口响应异常 (\(httpResp.statusCode)): \(msg.prefix(100))" : "KIMI API response error (\(httpResp.statusCode)): \(msg.prefix(100))"])
         }
 
         let allHeaders = httpResp.allHeaderFields
@@ -117,7 +119,7 @@ public final class KimiService: @unchecked Sendable {
         }
 
         let keySuffix = cleanKey.count > 6 ? String(cleanKey.suffix(4)) : cleanKey
-        let account = balanceString != nil ? "余额: \(balanceString!)" : "KIMI (尾号 \(keySuffix))"
+        let account = balanceString != nil ? (isZh ? "余额: \(balanceString!)" : "Balance: \(balanceString!)") : (isZh ? "KIMI (尾号 \(keySuffix))" : "KIMI (... \(keySuffix))")
 
         return (primaryWindow, secondaryWindow, account)
     }

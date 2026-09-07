@@ -24,7 +24,7 @@ namespace TokenBar.Services
             var trimmedKey = apiKey.Trim();
             if (string.IsNullOrEmpty(trimmedKey))
             {
-                throw new ArgumentException("请输入 OpenAI API Key");
+                throw new ArgumentException(LocalizationManager.Instance.IsChinese ? "请输入 OpenAI API Key" : "Please enter OpenAI API Key");
             }
 
             var baseEndpoint = endpoint.Trim().TrimEnd('/');
@@ -53,19 +53,19 @@ namespace TokenBar.Services
             }
             catch (Exception ex)
             {
-                throw new Exception($"OpenAI 网络连接失败: {ex.Message}", ex);
+                throw new Exception(LocalizationManager.Instance.IsChinese ? $"OpenAI 网络连接失败: {ex.Message}" : $"OpenAI network connection failed: {ex.Message}", ex);
             }
 
             var responseBody = await response.Content.ReadAsStringAsync();
 
             if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
             {
-                throw new Exception("OpenAI API Key 无效或已过期 (HTTP 401)");
+                throw new Exception(LocalizationManager.Instance.IsChinese ? "OpenAI API Key 无效或已过期 (HTTP 401)" : "OpenAI API Key is invalid or expired (HTTP 401)");
             }
 
             if ((int)response.StatusCode == 429)
             {
-                var msg = "请求过于频繁或额度已耗尽 (HTTP 429)";
+                var msg = LocalizationManager.Instance.IsChinese ? "请求过于频繁或额度已耗尽 (HTTP 429)" : "Rate limit reached or quota exhausted (HTTP 429)";
                 try
                 {
                     using var doc = JsonDocument.Parse(responseBody);
@@ -82,7 +82,7 @@ namespace TokenBar.Services
             if (!response.IsSuccessStatusCode)
             {
                 var snippet = responseBody.Length > 120 ? responseBody.Substring(0, 120) : responseBody;
-                throw new Exception($"OpenAI 接口请求失败 ({(int)response.StatusCode}): {snippet}");
+                throw new Exception(LocalizationManager.Instance.IsChinese ? $"OpenAI 接口请求失败 ({(int)response.StatusCode}): {snippet}" : $"OpenAI request failed ({(int)response.StatusCode}): {snippet}");
             }
 
             // Parse rate limit headers
@@ -184,7 +184,9 @@ namespace TokenBar.Services
             var accountInfo = orgHeader ?? organizationId;
             if (string.IsNullOrWhiteSpace(accountInfo))
             {
-                accountInfo = modelCount > 0 ? $"OpenAI (可用模型: {modelCount}个)" : "OpenAI API";
+                accountInfo = modelCount > 0
+                    ? (LocalizationManager.Instance.IsChinese ? $"OpenAI (可用模型: {modelCount}个)" : $"OpenAI ({modelCount} models available)")
+                    : "OpenAI API";
             }
 
             return (primaryWindow, secondaryWindow, accountInfo);

@@ -156,7 +156,7 @@ namespace TokenBar.Services
             var trimmedKey = apiKey.Trim();
             if (string.IsNullOrEmpty(trimmedKey))
             {
-                throw new ArgumentException("请输入有效的 Google AI Studio API Key");
+                throw new ArgumentException(LocalizationManager.Instance.IsChinese ? "请输入有效的 Google AI Studio API Key" : "Please enter a valid Google AI Studio API Key");
             }
 
             var cleanBase = endpoint.Trim().TrimEnd('/');
@@ -185,13 +185,13 @@ namespace TokenBar.Services
                     if (doc.RootElement.TryGetProperty("error", out var err) &&
                         err.TryGetProperty("message", out var msg))
                     {
-                        throw new Exception($"Gemini API 错误: {msg.GetString()}");
+                        throw new Exception(LocalizationManager.Instance.IsChinese ? $"Gemini API 错误: {msg.GetString()}" : $"Gemini API error: {msg.GetString()}");
                     }
                 }
                 catch (Exception ex) when (!ex.Message.StartsWith("Gemini API"))
                 {
                 }
-                throw new Exception($"Gemini API 响应异常 ({(int)resp.StatusCode}): {body}");
+                throw new Exception(LocalizationManager.Instance.IsChinese ? $"Gemini API 响应异常 ({(int)resp.StatusCode}): {body}" : $"Gemini API response error ({(int)resp.StatusCode}): {body}");
             }
 
             int modelCount = 0;
@@ -284,7 +284,7 @@ namespace TokenBar.Services
 
             if (string.IsNullOrEmpty(activeToken))
             {
-                throw new Exception("请在设置中配置 Google AI Studio Key 或检测 Google 本地登录凭证");
+                throw new Exception(LocalizationManager.Instance.IsChinese ? "请在设置中配置 Google AI Studio Key 或检测 Google 本地登录凭证" : "Please configure a Google AI Studio Key in Settings, or detect local Google credentials");
             }
 
             // Query models
@@ -339,7 +339,7 @@ namespace TokenBar.Services
                 detectedAccount = await FetchUserInfoAsync(activeToken);
             }
 
-            return (fiveHour, weekly, detectedAccount ?? "Google 账号");
+            return (fiveHour, weekly, detectedAccount ?? (LocalizationManager.Instance.IsChinese ? "Google 账号" : "Google Account"));
         }
 
         public async Task<string?> FetchUserInfoAsync(string token)

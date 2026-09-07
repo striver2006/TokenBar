@@ -11,8 +11,9 @@ public final class DeepSeekService: @unchecked Sendable {
         model: String = "deepseek-chat"
     ) async throws -> (fiveHour: TokenWindow?, weekly: TokenWindow?, account: String?) {
         let cleanKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let isZh = LocalizationManager.shared.effectiveLanguage == "zh"
         guard !cleanKey.isEmpty else {
-            throw NSError(domain: "DeepSeekService", code: 400, userInfo: [NSLocalizedDescriptionKey: "请输入 DeepSeek API Key"])
+            throw NSError(domain: "DeepSeekService", code: 400, userInfo: [NSLocalizedDescriptionKey: isZh ? "请输入 DeepSeek API Key" : "Please enter DeepSeek API Key"])
         }
 
         var baseEndpoint = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -44,16 +45,16 @@ public final class DeepSeekService: @unchecked Sendable {
         }
 
         if httpResp.statusCode == 401 {
-            throw NSError(domain: "DeepSeekService", code: 401, userInfo: [NSLocalizedDescriptionKey: "DeepSeek API Key 无效或未授权 (HTTP 401)"])
+            throw NSError(domain: "DeepSeekService", code: 401, userInfo: [NSLocalizedDescriptionKey: isZh ? "DeepSeek API Key 无效或未授权 (HTTP 401)" : "DeepSeek API Key is invalid or unauthorized (HTTP 401)"])
         }
 
         if httpResp.statusCode == 429 {
-            throw NSError(domain: "DeepSeekService", code: 429, userInfo: [NSLocalizedDescriptionKey: "DeepSeek 请求达到速率限制或额度不足 (HTTP 429)"])
+            throw NSError(domain: "DeepSeekService", code: 429, userInfo: [NSLocalizedDescriptionKey: isZh ? "DeepSeek 请求达到速率限制或额度不足 (HTTP 429)" : "DeepSeek rate limit reached or quota insufficient (HTTP 429)"])
         }
 
         guard httpResp.statusCode >= 200 && httpResp.statusCode < 300 else {
             let msg = String(data: data, encoding: .utf8) ?? "HTTP \(httpResp.statusCode)"
-            throw NSError(domain: "DeepSeekService", code: httpResp.statusCode, userInfo: [NSLocalizedDescriptionKey: "DeepSeek 接口异常: \(msg.prefix(100))"])
+            throw NSError(domain: "DeepSeekService", code: httpResp.statusCode, userInfo: [NSLocalizedDescriptionKey: isZh ? "DeepSeek 接口异常: \(msg.prefix(100))" : "DeepSeek API error: \(msg.prefix(100))"])
         }
 
         let allHeaders = httpResp.allHeaderFields
@@ -117,7 +118,7 @@ public final class DeepSeekService: @unchecked Sendable {
         }
 
         let keySuffix = cleanKey.count > 6 ? String(cleanKey.suffix(4)) : cleanKey
-        let account = balanceString != nil ? "余额: \(balanceString!)" : "已授权 (... \(keySuffix))"
+        let account = balanceString != nil ? (isZh ? "余额: \(balanceString!)" : "Balance: \(balanceString!)") : (isZh ? "已授权 (... \(keySuffix))" : "Authorized (... \(keySuffix))")
 
         return (primaryWindow, secondaryWindow, account)
     }

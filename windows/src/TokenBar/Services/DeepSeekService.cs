@@ -23,7 +23,7 @@ namespace TokenBar.Services
             var cleanKey = apiKey.Trim();
             if (string.IsNullOrEmpty(cleanKey))
             {
-                throw new ArgumentException("请输入 DeepSeek API Key");
+                throw new ArgumentException(LocalizationManager.Instance.IsChinese ? "请输入 DeepSeek API Key" : "Please enter DeepSeek API Key");
             }
 
             var baseEndpoint = endpoint.Trim().TrimEnd('/');
@@ -49,18 +49,18 @@ namespace TokenBar.Services
 
             if (resp.StatusCode == System.Net.HttpStatusCode.Unauthorized)
             {
-                throw new Exception("DeepSeek API Key 无效或未授权 (HTTP 401)");
+                throw new Exception(LocalizationManager.Instance.IsChinese ? "DeepSeek API Key 无效或未授权 (HTTP 401)" : "DeepSeek API Key is invalid or unauthorized (HTTP 401)");
             }
 
             if ((int)resp.StatusCode == 429)
             {
-                throw new Exception("DeepSeek 请求达到速率限制或额度不足 (HTTP 429)");
+                throw new Exception(LocalizationManager.Instance.IsChinese ? "DeepSeek 请求达到速率限制或额度不足 (HTTP 429)" : "DeepSeek rate limit reached or quota insufficient (HTTP 429)");
             }
 
             if (!resp.IsSuccessStatusCode)
             {
                 var snippet = body.Length > 100 ? body.Substring(0, 100) : body;
-                throw new Exception($"DeepSeek 接口异常: {snippet}");
+                throw new Exception(LocalizationManager.Instance.IsChinese ? $"DeepSeek 接口异常: {snippet}" : $"DeepSeek API error: {snippet}");
             }
 
             string? GetHeader(string name)
@@ -128,7 +128,10 @@ namespace TokenBar.Services
             }
 
             var keySuffix = cleanKey.Length > 6 ? cleanKey[^4..] : cleanKey;
-            var account = balanceString != null ? $"余额: {balanceString}" : $"已授权 (...{keySuffix})";
+            var isZh = LocalizationManager.Instance.IsChinese;
+            var account = balanceString != null
+                ? (isZh ? $"余额: {balanceString}" : $"Balance: {balanceString}")
+                : (isZh ? $"已授权 (...{keySuffix})" : $"Authorized (...{keySuffix})");
 
             return (primaryWindow, secondaryWindow, account);
         }

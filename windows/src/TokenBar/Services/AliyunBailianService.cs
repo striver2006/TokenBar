@@ -58,7 +58,7 @@ namespace TokenBar.Services
                 throw cliError;
             }
 
-            throw new Exception("百炼兼容 OpenAI 接口仅用于模型对话，不支持配额查询。请在终端登录百炼 CLI (`bl auth login --console`) 或使用网页登录授权获取 7天 与 5小时额度。");
+            throw new Exception(LocalizationManager.Instance.IsChinese ? "百炼兼容 OpenAI 接口仅用于模型对话，不支持配额查询。请在终端登录百炼 CLI (`bl auth login --console`) 或使用网页登录授权获取 7天 与 5小时额度。" : "Aliyun Bailian OpenAI-compatible endpoint only supports chat, not quota queries. Please run `bl auth login --console` in terminal or configure web cookies to monitor 7-day and 5-hour quotas.");
         }
 
         public async Task<(TokenWindow? FiveHour, TokenWindow? Weekly, string? Account)> FetchViaCLIAsync()
@@ -66,7 +66,7 @@ namespace TokenBar.Services
             string? blPath = FindBlExecutable();
             if (blPath == null)
             {
-                throw new FileNotFoundException("未检测到百炼 CLI ('bl')。可在终端通过 npm install -g @modelstudio/cli 安装，或使用网页登录授权。");
+                throw new FileNotFoundException(LocalizationManager.Instance.IsChinese ? "未检测到百炼 CLI ('bl')。可在终端通过 npm install -g @modelstudio/cli 安装，或使用网页登录授权。" : "Bailian CLI ('bl') not detected. Install via npm install -g @modelstudio/cli in terminal, or configure web cookies.");
             }
 
             var psi = new ProcessStartInfo
@@ -82,7 +82,7 @@ namespace TokenBar.Services
             using var proc = Process.Start(psi);
             if (proc == null)
             {
-                throw new Exception("无法启动百炼 CLI 进程");
+                throw new Exception(LocalizationManager.Instance.IsChinese ? "无法启动百炼 CLI 进程" : "Unable to launch Bailian CLI process");
             }
 
             var outputTask = proc.StandardOutput.ReadToEndAsync();
@@ -96,17 +96,17 @@ namespace TokenBar.Services
             {
                 try
                 {
-                    return ParseTokenPlanJson(stdout, "百炼 CLI (cn-beijing)");
+                    return ParseTokenPlanJson(stdout, LocalizationManager.Instance.IsChinese ? "百炼 CLI (cn-beijing)" : "Bailian CLI (cn-beijing)");
                 }
                 catch { }
             }
 
             if (!string.IsNullOrWhiteSpace(stderr))
             {
-                throw new Exception($"百炼 CLI 错误: {stderr}");
+                throw new Exception(LocalizationManager.Instance.IsChinese ? $"百炼 CLI 错误: {stderr}" : $"Bailian CLI error: {stderr}");
             }
 
-            throw new Exception("百炼 CLI 未返回有效的额度数据，请先运行 bl auth login --console 进行登录");
+            throw new Exception(LocalizationManager.Instance.IsChinese ? "百炼 CLI 未返回有效的额度数据，请先运行 bl auth login --console 进行登录" : "Bailian CLI returned no valid quota data. Please run `bl auth login --console` to authenticate.");
         }
 
         private static string? FindBlExecutable()
@@ -182,10 +182,10 @@ namespace TokenBar.Services
 
             if (resp.StatusCode == System.Net.HttpStatusCode.Unauthorized || resp.StatusCode == System.Net.HttpStatusCode.Forbidden)
             {
-                throw new Exception("控制台 Cookie 已失效，请重新登录授权");
+                throw new Exception(LocalizationManager.Instance.IsChinese ? "控制台 Cookie 已失效，请重新登录授权" : "Console Cookie expired. Please log in and authorize again");
             }
 
-            return ParseTokenPlanJson(body, "控制台网页授权");
+            return ParseTokenPlanJson(body, LocalizationManager.Instance.IsChinese ? "控制台网页授权" : "Console Web Auth");
         }
 
         public (TokenWindow? FiveHour, TokenWindow? Weekly, string? Account) ParseTokenPlanJson(string jsonText, string accountLabel)
@@ -195,8 +195,9 @@ namespace TokenBar.Services
 
             if (root.TryGetProperty("error", out var errObj) && errObj.TryGetProperty("message", out var msgProp))
             {
-                var msg = msgProp.GetString() ?? "未知错误";
-                var hint = errObj.TryGetProperty("hint", out var hp) ? hp.GetString() : "请运行 bl auth login --console 登录";
+                var isZh = LocalizationManager.Instance.IsChinese;
+                var msg = msgProp.GetString() ?? (isZh ? "未知错误" : "Unknown error");
+                var hint = errObj.TryGetProperty("hint", out var hp) ? hp.GetString() : (isZh ? "请运行 bl auth login --console 登录" : "Please run bl auth login --console to login");
                 throw new Exception($"{msg} ({hint})");
             }
 
@@ -213,7 +214,7 @@ namespace TokenBar.Services
 
             if (!per1WeekPctVal.HasValue && !per5HourPctVal.HasValue)
             {
-                throw new Exception("返回数据中未包含 7天或5小时配额字段");
+                throw new Exception(LocalizationManager.Instance.IsChinese ? "返回数据中未包含 7天或5小时配额字段" : "Response data missing 7-day or 5-hour quota fields");
             }
 
             TokenWindow? weeklyWindow = null;

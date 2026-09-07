@@ -12,7 +12,8 @@ public final class VolcengineService: @unchecked Sendable {
     ) async throws -> (fiveHour: TokenWindow?, weekly: TokenWindow?, account: String?) {
         let cleanKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanKey.isEmpty else {
-            throw NSError(domain: "VolcengineService", code: 400, userInfo: [NSLocalizedDescriptionKey: "请输入火山方舟 API Key"])
+            let isZh = LocalizationManager.shared.effectiveLanguage == "zh"
+            throw NSError(domain: "VolcengineService", code: 400, userInfo: [NSLocalizedDescriptionKey: isZh ? "请输入火山方舟 API Key" : "Please enter Volcengine Ark API Key"])
         }
 
         var baseEndpoint = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -39,17 +40,18 @@ public final class VolcengineService: @unchecked Sendable {
             throw URLError(.badServerResponse)
         }
 
+        let isZh = LocalizationManager.shared.effectiveLanguage == "zh"
         if httpResp.statusCode == 401 {
-            throw NSError(domain: "VolcengineService", code: 401, userInfo: [NSLocalizedDescriptionKey: "火山方舟 API Key 无效或未授权 (HTTP 401)"])
+            throw NSError(domain: "VolcengineService", code: 401, userInfo: [NSLocalizedDescriptionKey: isZh ? "火山方舟 API Key 无效或未授权 (HTTP 401)" : "Volcengine Ark API Key is invalid or unauthorized (HTTP 401)"])
         }
 
         if httpResp.statusCode == 429 {
-            throw NSError(domain: "VolcengineService", code: 429, userInfo: [NSLocalizedDescriptionKey: "火山方舟并发或速率超限 (HTTP 429)"])
+            throw NSError(domain: "VolcengineService", code: 429, userInfo: [NSLocalizedDescriptionKey: isZh ? "火山方舟并发或速率超限 (HTTP 429)" : "Volcengine Ark concurrency or rate limit exceeded (HTTP 429)"])
         }
 
         guard httpResp.statusCode >= 200 && httpResp.statusCode < 300 else {
             let msg = String(data: data, encoding: .utf8) ?? "HTTP \(httpResp.statusCode)"
-            throw NSError(domain: "VolcengineService", code: httpResp.statusCode, userInfo: [NSLocalizedDescriptionKey: "火山方舟响应异常 (\(httpResp.statusCode)): \(msg.prefix(100))"])
+            throw NSError(domain: "VolcengineService", code: httpResp.statusCode, userInfo: [NSLocalizedDescriptionKey: isZh ? "火山方舟响应异常 (\(httpResp.statusCode)): \(msg.prefix(100))" : "Volcengine Ark response error (\(httpResp.statusCode)): \(msg.prefix(100))"])
         }
 
         let allHeaders = httpResp.allHeaderFields
@@ -108,8 +110,8 @@ public final class VolcengineService: @unchecked Sendable {
         }
 
         let keySuffix = cleanKey.count > 6 ? String(cleanKey.suffix(4)) : cleanKey
-        let modelLabel = !model.isEmpty ? model : "模型数: \(modelCount)"
-        let account = "火山方舟 (\(modelLabel) • 尾号 \(keySuffix))"
+        let modelLabel = !model.isEmpty ? model : (isZh ? "模型数: \(modelCount)" : "\(modelCount) models")
+        let account = isZh ? "火山方舟 (\(modelLabel) • 尾号 \(keySuffix))" : "Volcengine Ark (\(modelLabel) • ...\(keySuffix))"
 
         return (primaryWindow, secondaryWindow, account)
     }
