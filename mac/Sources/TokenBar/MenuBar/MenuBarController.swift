@@ -43,6 +43,7 @@ public final class MenuBarController: NSObject {
 
     public func setup() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        statusItem.autosaveName = "TokenBarStatusItem"
 
         if let button = statusItem.button {
             let config = NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
@@ -190,6 +191,18 @@ public final class MenuBarController: NSObject {
     public func closePopover() {
         popover.performClose(nil)
         isPinnedByClick = false
+    }
+
+    public func togglePopoverOrOpenWindow() {
+        if popover.isShown {
+            closePopover()
+        } else {
+            isPinnedByClick = true
+            showPopover()
+            if !popover.isShown {
+                openSettings(tab: .openAI)
+            }
+        }
     }
 
     private func showContextMenu() {

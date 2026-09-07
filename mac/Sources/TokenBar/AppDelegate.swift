@@ -12,6 +12,13 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         MenuBarController.shared.setup()
     }
 
+    public func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        Task { @MainActor in
+            MenuBarController.shared.togglePopoverOrOpenWindow()
+        }
+        return true
+    }
+
     public func applicationWillTerminate(_ notification: Notification) {
         // Cleanup if needed
     }
