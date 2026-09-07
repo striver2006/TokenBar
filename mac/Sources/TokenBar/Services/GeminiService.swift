@@ -13,8 +13,13 @@ public final class GeminiService {
         return []
     }
 
-    // Antigravity (Google Code Assist) quota backend.
-    private static let cloudCodeQuotaBase = "https://cloudcode-pa.googleapis.com"
+    // Antigravity (Google Code Assist) quota backend endpoints.
+    // Antigravity uses daily-cloudcode-pa.googleapis.com for actual user quota tracking;
+    // cloudcode-pa.googleapis.com is kept as fallback.
+    private static let cloudCodeEndpoints = [
+        "https://daily-cloudcode-pa.googleapis.com",
+        "https://cloudcode-pa.googleapis.com"
+    ]
 
     // The OAuth client pair used for token refresh is the public "installed app" client that
     // Google ships inside the agy CLI / Antigravity IDE binaries. Nothing is embedded here:
@@ -113,7 +118,48 @@ public final class GeminiService {
 
     private var isZh: Bool { LocalizationManager.shared.effectiveLanguage == "zh" }
 
-    /// Read local Gemini config from ~/.gemini (checking both jetski token and oauth_creds)
+    /// Read Antigravity credentials from macOS Keychain (service: "gemini", account: "antigravity")
+    private func readKeychainToken() -> (token: String?, refreshToken: String?, expiry: Date?) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+        process.arguments = ["find-generic-password", "-s", "gemini", "-a", "antigravity", "-w"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = Pipe()
+        do {
+            try process.run()
+            process.waitUntilExit()
+            guard process.terminationStatus == 0 else { return (nil, nil, nil) }
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            guard let raw = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !raw.isEmpty else {
+                return (nil, nil, nil)
+            }
+            let jsonString: String
+            if raw.hasPrefix("go-keyring-base64:") {
+                let b64 = String(raw.dropFirst("go-keyring-base64:".count))
+                guard let dec = Data(base64Encoded: b64), let s = String(data: dec, encoding: .utf8) else {
+                    return (nil, nil, nil)
+                }
+                jsonString = s
+            } else {
+                jsonString = raw
+            }
+            guard let jsonData = jsonString.data(using: .utf8),
+                  let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
+                  let tokDict = json["token"] as? [String: Any] else {
+                return (nil, nil, nil)
+            }
+            let token = tokDict["access_token"] as? String
+            let refreshToken = tokDict["refresh_token"] as? String
+            let expiry = parseServerDate(tokDict["expiry"])
+            return (token, refreshToken, expiry)
+        } catch {
+            return (nil, nil, nil)
+        }
+    }
+
+    /// Read local Gemini config from macOS Keychain and ~/.gemini
     public func readLocalGeminiConfig() -> (token: String?, refreshToken: String?, account: String?, expiry: Date?) {
         let homeDir = FileManager.default.homeDirectoryForCurrentUser
         let jetskiTokenPath = homeDir.appendingPathComponent(".gemini/jetski-standalone-oauth-token")
@@ -125,25 +171,41 @@ public final class GeminiService {
         var account: String? = nil
         var expiry: Date? = nil
 
-        // 1. Check jetski-standalone-oauth-token first (newer)
+        // 0. Check macOS Keychain first (most up-to-date token managed by Antigravity)
+        let kc = readKeychainToken()
+        if kc.token != nil || kc.refreshToken != nil {
+            token = kc.token
+            refreshToken = kc.refreshToken
+            expiry = kc.expiry
+        }
+
+        // 1. Check jetski-standalone-oauth-token (fallback/merge if keychain was empty)
         if FileManager.default.fileExists(atPath: jetskiTokenPath.path) {
             do {
                 let data = try Data(contentsOf: jetskiTokenPath)
                 if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                    let tokDict = json["token"] as? [String: Any] {
-                    token = tokDict["access_token"] as? String
-                    refreshToken = tokDict["refresh_token"] as? String
-                    expiry = parseServerDate(tokDict["expiry"])
+                    if token == nil {
+                        token = tokDict["access_token"] as? String
+                    }
+                    if refreshToken == nil {
+                        refreshToken = tokDict["refresh_token"] as? String
+                    }
+                    if expiry == nil {
+                        expiry = parseServerDate(tokDict["expiry"])
+                    }
                 }
             } catch {}
         }
 
         // 2. Fallback to oauth_creds.json
-        if token == nil && FileManager.default.fileExists(atPath: oauthCredsPath.path) {
+        if (token == nil || refreshToken == nil) && FileManager.default.fileExists(atPath: oauthCredsPath.path) {
             do {
                 let data = try Data(contentsOf: oauthCredsPath)
                 if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                    token = json["access_token"] as? String
+                    if token == nil {
+                        token = json["access_token"] as? String
+                    }
                     if refreshToken == nil {
                         refreshToken = json["refresh_token"] as? String
                     }
@@ -156,8 +218,10 @@ public final class GeminiService {
             do {
                 let data = try Data(contentsOf: accountsPath)
                 if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                    if let active = json["active"] as? String {
+                    if let active = json["active"] as? String, !active.isEmpty {
                         account = active
+                    } else if let old = json["old"] as? [String], let first = old.first, !first.isEmpty {
+                        account = first
                     }
                 }
             } catch {}
@@ -246,13 +310,14 @@ public final class GeminiService {
         let refreshToken = local.refreshToken
         var detectedAccount = local.account
 
-        // Resolve an access token: explicit setting > cached refresh result > stored token (if not near expiry) > refreshed.
+        // Resolve an access token: cached refresh result > valid local token (keychain/jetski) > explicit setting (if valid) > refreshed.
         let accessToken: String
         if let cached = cachedAccessToken, Date() < cachedAccessTokenExpiry {
             accessToken = cached
-        } else if let stored = (token?.isEmpty == false ? token : local.token),
-                  local.expiry == nil || local.expiry! > Date().addingTimeInterval(120) {
-            accessToken = stored
+        } else if let localToken = local.token, local.expiry != nil && local.expiry! > Date().addingTimeInterval(120) {
+            accessToken = localToken
+        } else if let explicitToken = token, !explicitToken.isEmpty, local.expiry == nil || local.expiry! > Date().addingTimeInterval(120) {
+            accessToken = explicitToken
         } else if let refreshToken {
             guard let refreshed = await refreshGoogleAccessToken(refreshToken: refreshToken) else {
                 throw NSError(domain: "GeminiService", code: 401, userInfo: [NSLocalizedDescriptionKey: isZh ? "Google 凭证刷新失败，请重新运行 agy 登录或在设置中更新凭证" : "Failed to refresh Google credentials. Please log in again via agy or update credentials in Settings"])
@@ -321,32 +386,44 @@ public final class GeminiService {
     }
 
     private func postCloudCode(accessToken: String, path: String) async throws -> [String: Any] {
-        guard let url = URL(string: Self.cloudCodeQuotaBase + path) else {
-            throw URLError(.badURL)
-        }
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-        req.setValue("antigravity", forHTTPHeaderField: "User-Agent")
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = Data("{}".utf8)
-        req.timeoutInterval = 15
+        var lastError: Error?
+        for base in Self.cloudCodeEndpoints {
+            guard let url = URL(string: base + path) else { continue }
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+            req.setValue("antigravity", forHTTPHeaderField: "User-Agent")
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = Data("{}".utf8)
+            req.timeoutInterval = 15
 
-        let (data, resp) = try await URLSession.shared.data(for: req)
-        guard let http = resp as? HTTPURLResponse else {
-            throw URLError(.badServerResponse)
+            do {
+                let (data, resp) = try await URLSession.shared.data(for: req)
+                guard let http = resp as? HTTPURLResponse else { continue }
+                if http.statusCode == 401 || http.statusCode == 403 {
+                    throw QuotaAuthError()
+                }
+                guard (200..<300).contains(http.statusCode) else {
+                    let raw = String(data: data.prefix(300), encoding: .utf8) ?? ""
+                    lastError = NSError(domain: "GeminiService", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: isZh ? "Antigravity 额度接口响应异常 (\(http.statusCode)): \(raw)" : "Antigravity quota API error (\(http.statusCode)): \(raw)"])
+                    continue
+                }
+                guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    lastError = NSError(domain: "GeminiService", code: 0, userInfo: [NSLocalizedDescriptionKey: isZh ? "Antigravity 额度响应解析失败" : "Failed to parse the Antigravity quota response"])
+                    continue
+                }
+                return json
+            } catch is QuotaAuthError {
+                throw QuotaAuthError()
+            } catch {
+                lastError = error
+                continue
+            }
         }
-        if http.statusCode == 401 || http.statusCode == 403 {
-            throw QuotaAuthError()
+        if let lastError = lastError {
+            throw lastError
         }
-        guard (200..<300).contains(http.statusCode) else {
-            let raw = String(data: data.prefix(300), encoding: .utf8) ?? ""
-            throw NSError(domain: "GeminiService", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: isZh ? "Antigravity 额度接口响应异常 (\(http.statusCode)): \(raw)" : "Antigravity quota API error (\(http.statusCode)): \(raw)"])
-        }
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw NSError(domain: "GeminiService", code: 0, userInfo: [NSLocalizedDescriptionKey: isZh ? "Antigravity 额度响应解析失败" : "Failed to parse the Antigravity quota response"])
-        }
-        return json
+        throw URLError(.badServerResponse)
     }
 
     /// Maps one quota bucket ({window/bucketId, remainingFraction, resetTime}) to a TokenWindow.
@@ -377,7 +454,7 @@ public final class GeminiService {
 
         let usedPct = min(max((1.0 - remainingFraction!) * 100.0, 0.0), 100.0)
         let window = TokenWindow(
-            title: isWeekly ? "每周额度" : "5小时算力额度",
+            title: isWeekly ? "每周额度" : "5小时额度",
             usedPercentage: usedPct,
             startTime: end.addingTimeInterval(-span),
             endTime: end,
@@ -412,7 +489,7 @@ public final class GeminiService {
         while end <= Date() { end = end.addingTimeInterval(span) }
 
         let window = TokenWindow(
-            title: "5小时算力额度",
+            title: "5小时额度",
             usedPercentage: min(max((1.0 - remaining) * 100.0, 0.0), 100.0),
             startTime: end.addingTimeInterval(-span),
             endTime: end,

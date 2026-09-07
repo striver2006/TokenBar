@@ -18,8 +18,14 @@ namespace TokenBar.Services
 
         private GeminiService() { }
 
-        // Antigravity (Google Code Assist) quota backend.
-        private const string CloudCodeQuotaBase = "https://cloudcode-pa.googleapis.com";
+        // Antigravity (Google Code Assist) quota backend endpoints.
+        // Antigravity uses daily-cloudcode-pa.googleapis.com for actual user quota tracking;
+        // cloudcode-pa.googleapis.com is kept as fallback.
+        private static readonly string[] CloudCodeQuotaBases = new[]
+        {
+            "https://daily-cloudcode-pa.googleapis.com",
+            "https://cloudcode-pa.googleapis.com"
+        };
 
         // The OAuth client pair used for token refresh is the public "installed app" client that
         // Google ships inside the agy CLI / Antigravity IDE binaries. Nothing is embedded here:
@@ -248,8 +254,10 @@ namespace TokenBar.Services
                 try
                 {
                     using var doc = JsonDocument.Parse(File.ReadAllText(accountsPath));
-                    if (doc.RootElement.TryGetProperty("active", out var act))
+                    if (doc.RootElement.TryGetProperty("active", out var act) && act.ValueKind == JsonValueKind.String && !string.IsNullOrEmpty(act.GetString()))
                         account = act.GetString();
+                    else if (doc.RootElement.TryGetProperty("old", out var old) && old.ValueKind == JsonValueKind.Array && old.GetArrayLength() > 0)
+                        account = old[0].GetString();
                 }
                 catch { }
             }
@@ -403,26 +411,29 @@ namespace TokenBar.Services
             var refreshToken = local.RefreshToken;
             var detectedAccount = local.Account;
 
-            // Resolve an access token: explicit setting > cached refresh result > stored token (if not near expiry) > refreshed.
+            // Resolve an access token: cached refresh result > valid local token > explicit setting (if valid) > refreshed.
             string accessToken;
             var cached = (_cachedAccessToken != null && DateTime.UtcNow < _cachedAccessTokenExpiryUtc) ? _cachedAccessToken : null;
-            var stored = !string.IsNullOrWhiteSpace(token) ? token : local.Token;
             if (cached != null)
             {
                 accessToken = cached;
             }
-            else if (!string.IsNullOrWhiteSpace(stored) && (local.Expiry == null || local.Expiry > DateTime.Now.AddMinutes(2)))
+            else if (!string.IsNullOrWhiteSpace(local.Token) && local.Expiry != null && local.Expiry > DateTime.Now.AddMinutes(2))
             {
-                accessToken = stored!;
+                accessToken = local.Token!;
+            }
+            else if (!string.IsNullOrWhiteSpace(token) && (local.Expiry == null || local.Expiry > DateTime.Now.AddMinutes(2)))
+            {
+                accessToken = token!;
             }
             else if (!string.IsNullOrWhiteSpace(refreshToken))
             {
                 accessToken = await RefreshAntigravityTokenAsync(refreshToken!);
             }
-            else if (!string.IsNullOrWhiteSpace(stored))
+            else if (!string.IsNullOrWhiteSpace(token ?? local.Token))
             {
                 // No expiry info and no refresh token: try it, auth errors surface a clear message below.
-                accessToken = stored!;
+                accessToken = (token ?? local.Token)!;
             }
             else
             {
@@ -575,26 +586,45 @@ namespace TokenBar.Services
 
         private async Task<string> PostCloudCodeAsync(string accessToken, string path)
         {
-            using var req = new HttpRequestMessage(HttpMethod.Post, CloudCodeQuotaBase + path);
-            req.Headers.TryAddWithoutValidation("Authorization", $"Bearer {accessToken}");
-            req.Headers.TryAddWithoutValidation("User-Agent", "antigravity");
-            req.Content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
-
-            var resp = await HttpClient.SendAsync(req);
-            var body = await resp.Content.ReadAsStringAsync();
-
-            if ((int)resp.StatusCode == 401 || (int)resp.StatusCode == 403)
+            Exception? lastEx = null;
+            foreach (var baseUrl in CloudCodeQuotaBases)
             {
-                throw new QuotaAuthException();
+                try
+                {
+                    using var req = new HttpRequestMessage(HttpMethod.Post, baseUrl + path);
+                    req.Headers.TryAddWithoutValidation("Authorization", $"Bearer {accessToken}");
+                    req.Headers.TryAddWithoutValidation("User-Agent", "antigravity");
+                    req.Content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
+
+                    var resp = await HttpClient.SendAsync(req);
+                    var body = await resp.Content.ReadAsStringAsync();
+
+                    if ((int)resp.StatusCode == 401 || (int)resp.StatusCode == 403)
+                    {
+                        throw new QuotaAuthException();
+                    }
+                    if (!resp.IsSuccessStatusCode)
+                    {
+                        var trimmed = body.Length > 300 ? body[..300] : body;
+                        lastEx = new Exception(LocalizationManager.Instance.IsChinese
+                            ? $"Antigravity 额度接口响应异常 ({(int)resp.StatusCode}): {trimmed}"
+                            : $"Antigravity quota API error ({(int)resp.StatusCode}): {trimmed}");
+                        continue;
+                    }
+                    return body;
+                }
+                catch (QuotaAuthException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    lastEx = ex;
+                }
             }
-            if (!resp.IsSuccessStatusCode)
-            {
-                var trimmed = body.Length > 300 ? body[..300] : body;
-                throw new Exception(LocalizationManager.Instance.IsChinese
-                    ? $"Antigravity 额度接口响应异常 ({(int)resp.StatusCode}): {trimmed}"
-                    : $"Antigravity quota API error ({(int)resp.StatusCode}): {trimmed}");
-            }
-            return body;
+
+            if (lastEx != null) throw lastEx;
+            throw new Exception("Antigravity request failed");
         }
 
         /// <summary>Maps one quota bucket ({window/bucketId, remainingFraction, resetTime}) to a TokenWindow.</summary>
@@ -653,7 +683,7 @@ namespace TokenBar.Services
             var usedPct = Math.Clamp((1.0 - remainingFraction.Value) * 100.0, 0.0, 100.0);
             return new TokenWindow
             {
-                Title = isWeekly ? "每周额度" : "5小时算力额度",
+                Title = isWeekly ? "每周额度" : "5小时额度",
                 UsedPercentage = usedPct,
                 StartTime = start,
                 EndTime = end,
@@ -705,7 +735,7 @@ namespace TokenBar.Services
 
             var window = new TokenWindow
             {
-                Title = "5小时算力额度",
+                Title = "5小时额度",
                 UsedPercentage = Math.Clamp((1.0 - minRemaining.Value) * 100.0, 0.0, 100.0),
                 StartTime = end.Subtract(span),
                 EndTime = end,

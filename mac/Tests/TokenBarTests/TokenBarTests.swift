@@ -291,5 +291,47 @@ final class TokenBarTests: XCTestCase {
         // Reset
         LocalizationManager.shared.setLanguage(.system)
     }
+
+    func testGeminiLocalConfig() {
+        let local = GeminiService.shared.readLocalGeminiConfig()
+        // If antigravity/gemini CLI is present locally on developer machine, test that account and token are detected
+        if let localToken = local.token {
+            XCTAssertFalse(localToken.isEmpty)
+            print("Gemini Local Token detected, length:", localToken.count)
+        }
+        if let account = local.account {
+            XCTAssertFalse(account.isEmpty)
+            XCTAssertTrue(account.contains("@"), "Account should be a valid email if present")
+            print("Gemini Local Account detected:", account)
+        }
+    }
+
+    func testGeminiFetchLiveQuota() async throws {
+        do {
+            let result = try await GeminiService.shared.fetchQuota(token: nil)
+            print("=== Live Gemini Fetch Result ===")
+            print("Account:", result.account ?? "nil")
+            XCTAssertEqual(result.account, "chenzhenbo@gmail.com")
+            if let weekly = result.weekly {
+                print("Weekly remaining: \(weekly.remainingPercentage)% | Reset: \(weekly.timeRemainingFormatted)")
+                XCTAssertGreaterThan(weekly.remainingPercentage, 0)
+                XCTAssertLessThanOrEqual(weekly.remainingPercentage, 100)
+            } else {
+                XCTFail("Weekly quota should not be nil")
+            }
+            if let fiveHour = result.fiveHour {
+                print("5-Hour remaining: \(fiveHour.remainingPercentage)% | Reset: \(fiveHour.timeRemainingFormatted)")
+                XCTAssertGreaterThan(fiveHour.remainingPercentage, 0)
+                XCTAssertLessThanOrEqual(fiveHour.remainingPercentage, 100)
+            } else {
+                XCTFail("5-Hour quota should not be nil")
+            }
+            print("================================")
+        } catch {
+            XCTFail("Fetch quota threw error: \(error)")
+        }
+    }
 }
+
+
 
