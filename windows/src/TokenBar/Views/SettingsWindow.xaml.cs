@@ -304,25 +304,6 @@ namespace TokenBar.Views
                 _ => 1
             };
 
-            // Input watermarks (WPF TextBox has no native placeholder)
-            TextBoxWatermark.SetPlaceholder(TxtOpenAIKey, i18n.PlaceholderApiKeyOpenAI);
-            TextBoxWatermark.SetPlaceholder(TxtOpenAIOrgId, i18n.PlaceholderOrgId);
-            TextBoxWatermark.SetPlaceholder(TxtAnthropicKey, "sk-ant-...");
-            TextBoxWatermark.SetPlaceholder(TxtClaudeToken, i18n.PlaceholderClaudeManualToken);
-            TextBoxWatermark.SetPlaceholder(TxtGeminiKey, "AIzaSy...");
-            TextBoxWatermark.SetPlaceholder(TxtGeminiToken, i18n.PlaceholderGeminiToken);
-            TextBoxWatermark.SetPlaceholder(TxtDeepSeekKey, "sk-...");
-            TextBoxWatermark.SetPlaceholder(TxtDeepSeekModel, "deepseek-chat");
-            TextBoxWatermark.SetPlaceholder(TxtVolcengineKey, i18n.PlaceholderApiKeyVolcengine);
-            TextBoxWatermark.SetPlaceholder(TxtVolcengineModel, "ep-xxxxxxxx-xxxx");
-            TextBoxWatermark.SetPlaceholder(TxtKimiKey, "sk-...");
-            TextBoxWatermark.SetPlaceholder(TxtKimiModel, "moonshot-v1-8k");
-            TextBoxWatermark.SetPlaceholder(TxtGLMKey, i18n.PlaceholderApiKeyGLM);
-            TextBoxWatermark.SetPlaceholder(TxtAliyunCookie, i18n.PlaceholderAliyunCookie);
-            TextBoxWatermark.SetPlaceholder(TxtCustomName, i18n.PlaceholderCustomName);
-            TextBoxWatermark.SetPlaceholder(TxtCustomKey, "sk-...");
-            TextBoxWatermark.SetPlaceholder(TxtCustomModel, i18n.PlaceholderCustomModel);
-
             UpdateStatuses();
         }
 

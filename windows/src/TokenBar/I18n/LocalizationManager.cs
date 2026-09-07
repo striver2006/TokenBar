@@ -143,14 +143,7 @@ namespace TokenBar.I18n
         public string AlertNotice => IsChinese ? "提示" : "Notice";
         public string AlertOk => IsChinese ? "好的" : "OK";
 
-        // Placeholders & Secondary Labels
-        public string PlaceholderApiKeyOpenAI => IsChinese ? "sk-... 或 sk-proj-..." : "sk-... or sk-proj-...";
-        public string PlaceholderApiKeyVolcengine => IsChinese ? "sk-... 或 API Key" : "sk-... or API Key";
-        public string PlaceholderApiKeyGLM => IsChinese ? "例如: 75f...your_api_key" : "e.g. 75f...your_api_key";
-        public string PlaceholderApiKeyAliyun => IsChinese ? "例如: sk-sp-xxxxxxxx" : "e.g. sk-sp-xxxxxxxx";
-        public string PlaceholderOrgId => IsChinese ? "org-xxxxxxxx (选填)" : "org-xxxxxxxx (Optional)";
-        public string PlaceholderCustomName => IsChinese ? "例如: OpenAI 兼容代理" : "e.g. OpenAI Compatible Proxy";
-        public string PlaceholderCustomModel => IsChinese ? "例如: deepseek-chat 或 claude-3-5-sonnet" : "e.g. deepseek-chat or claude-3-5-sonnet";
+        // Secondary Labels
         public string DefaultCustomProviderName => IsChinese ? "OpenAI 兼容代理" : "OpenAI Compatible Proxy";
         public string FallbackCustomProviderName => IsChinese ? "自定义厂商" : "Custom Provider";
 
@@ -165,7 +158,6 @@ namespace TokenBar.I18n
         public string MethodClaudeSubscription => IsChinese ? "方式二：Claude Code 订阅 (监控 5小时与每周额度)" : "Method 2: Claude Code Subscription (5h & Weekly Quota)";
         public string BtnReadLocalCLIAuth => IsChinese ? "读取本地 CLI 授权 (~/.claude.json)" : "Read Local CLI Auth (~/.claude.json)";
         public string LabelClaudeManualToken => IsChinese ? "手动输入 OAuth Token / Session (备用):" : "Manual OAuth Token / Session (Backup):";
-        public string PlaceholderClaudeManualToken => IsChinese ? "手动输入 OAuth Token / Session (可选备用)" : "Enter OAuth Token / Session (Optional backup)";
 
         public string MethodGeminiApiKey => IsChinese ? "方式一：Google AI Studio API Key (推荐，永久有效)" : "Method 1: Google AI Studio API Key (Recommended, Lifetime)";
         public string LabelRecommendedLifetime => IsChinese ? "(推荐，永久有效)" : "(Recommended, Lifetime)";
@@ -174,8 +166,6 @@ namespace TokenBar.I18n
         public string BtnGoogleWebLogin => IsChinese ? "Google 网站登录授权" : "Google Web Login Authorization";
         public string BtnReadLocalGeminiConfig => IsChinese ? "读取本地 Gemini / Antigravity 配置" : "Read Local Gemini / Antigravity Credentials";
         public string LabelManualGeminiToken => IsChinese ? "手动输入 Access Token (可选):" : "Manual Access Token (Optional):";
-        public string PlaceholderGeminiToken => IsChinese ? "输入 Access Token" : "Enter Access Token";
-        public string PlaceholderAliyunCookie => IsChinese ? "通过网页登录会自动填入，亦可手动粘贴" : "Auto-filled via web login, or paste manually";
 
         public string HintDeepSeekKey => IsChinese ? "可在 DeepSeek 开放平台 (platform.deepseek.com) -> API Keys 生成。" : "Can be generated in DeepSeek Platform (platform.deepseek.com) -> API Keys.";
         public string LabelDefaultModel => IsChinese ? "默认模型名称" : "Default Model Name";

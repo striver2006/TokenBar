@@ -246,7 +246,6 @@ namespace TokenBar.Models
         };
         public string Endpoint { get; set; } = string.Empty;
         public ApiProtocol ApiProtocol { get; set; } = ApiProtocol.OpenAIChat;
-        public string PlaceholderKey { get; set; } = "sk-...";
         public string DefaultModel { get; set; } = string.Empty;
         public string Hint { get; set; } = string.Empty;
 
@@ -257,8 +256,7 @@ namespace TokenBar.Models
                 Name = "OpenAI 兼容代理",
                 Endpoint = "http://localhost:3000/v1",
                 ApiProtocol = ApiProtocol.OpenAIChat,
-                PlaceholderKey = "sk-...",
-                DefaultModel = "gpt-4o",
+                DefaultModel ="gpt-4o",
                 Hint = "适用于自建 OneAPI / NewAPI / 本地或第三方代理服务"
             },
             new DomesticProviderPreset
@@ -266,7 +264,6 @@ namespace TokenBar.Models
                 Name = "Anthropic 兼容代理",
                 Endpoint = "http://localhost:8080/v1",
                 ApiProtocol = ApiProtocol.Anthropic,
-                PlaceholderKey = "sk-ant-...",
                 DefaultModel = "claude-3-5-sonnet-20241022",
                 Hint = "适用于自建或本地中转代理服务"
             },
@@ -275,8 +272,7 @@ namespace TokenBar.Models
                 Name = "小米 MiMo (Xiaomi)",
                 Endpoint = "https://api.xiaomimimo.com/v1",
                 ApiProtocol = ApiProtocol.OpenAIChat,
-                PlaceholderKey = "sk-...",
-                DefaultModel = "mimo-v2.5-pro",
+                DefaultModel ="mimo-v2.5-pro",
                 Hint = "小米 MiMo 开放平台 (支持按量付费与 Token Plan)"
             },
             new DomesticProviderPreset
@@ -284,8 +280,7 @@ namespace TokenBar.Models
                 Name = "腾讯混元 (Tencent Hunyuan)",
                 Endpoint = "https://tokenhub.tencentmaas.com/v1",
                 ApiProtocol = ApiProtocol.OpenAIChat,
-                PlaceholderKey = "sk-...",
-                DefaultModel = "hunyuan-standard",
+                DefaultModel ="hunyuan-standard",
                 Hint = "腾讯云大模型服务平台 TokenHub / 混元 API"
             },
             new DomesticProviderPreset
@@ -293,8 +288,7 @@ namespace TokenBar.Models
                 Name = "阶跃星辰 (StepFun)",
                 Endpoint = "https://api.stepfun.com/v1",
                 ApiProtocol = ApiProtocol.OpenAIChat,
-                PlaceholderKey = "sk-...",
-                DefaultModel = "step-1-8k",
+                DefaultModel ="step-1-8k",
                 Hint = "阶跃星辰开放平台 (Step-1 / Step-2 系列大模型)"
             },
             new DomesticProviderPreset
@@ -302,8 +296,7 @@ namespace TokenBar.Models
                 Name = "硅基流动 (SiliconFlow)",
                 Endpoint = "https://api.siliconflow.cn/v1",
                 ApiProtocol = ApiProtocol.OpenAIChat,
-                PlaceholderKey = "sk-...",
-                DefaultModel = "deepseek-ai/DeepSeek-V3",
+                DefaultModel ="deepseek-ai/DeepSeek-V3",
                 Hint = "支持用户中心余额与全系列主流模型"
             },
             new DomesticProviderPreset
@@ -311,8 +304,7 @@ namespace TokenBar.Models
                 Name = "MiniMax (名之梦)",
                 Endpoint = "https://api.minimax.chat/v1",
                 ApiProtocol = ApiProtocol.OpenAIChat,
-                PlaceholderKey = "sk-...",
-                DefaultModel = "MiniMax-Text-01",
+                DefaultModel ="MiniMax-Text-01",
                 Hint = "国内自研通用大模型平台"
             },
             new DomesticProviderPreset
@@ -320,8 +312,7 @@ namespace TokenBar.Models
                 Name = "零一万物 (01.AI)",
                 Endpoint = "https://api.lingyiwanwu.com/v1",
                 ApiProtocol = ApiProtocol.OpenAIChat,
-                PlaceholderKey = "sk-...",
-                DefaultModel = "yi-lightning",
+                DefaultModel ="yi-lightning",
                 Hint = "零一万物开放平台 (Yi 系列大模型)"
             },
             new DomesticProviderPreset
@@ -329,7 +320,6 @@ namespace TokenBar.Models
                 Name = "百度千帆 (文心一言)",
                 Endpoint = "https://qianfan.baidubce.com/v2",
                 ApiProtocol = ApiProtocol.OpenAIChat,
-                PlaceholderKey = "bce-v3/...",
                 DefaultModel = "ernie-4.0-8k-latest",
                 Hint = "百度智能云千帆大模型平台 (兼容 OpenAI 规范)"
             }
