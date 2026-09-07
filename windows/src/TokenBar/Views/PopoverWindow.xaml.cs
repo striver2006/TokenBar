@@ -568,14 +568,19 @@ namespace TokenBar.Views
             return rowStack;
         }
 
-        public void ShowNearTray()
+        public void ShowNearTray(bool activate = true)
         {
             var workArea = SystemParameters.WorkArea;
             Left = workArea.Right - Width - 10;
             Top = workArea.Bottom - Height - 10;
 
+            // 悬停预览时不能抢焦点，否则会打断用户当前的操作
+            ShowActivated = activate;
             Show();
-            Activate();
+            if (activate)
+            {
+                Activate();
+            }
         }
 
         private async void BtnRefresh_Click(object sender, RoutedEventArgs e)
