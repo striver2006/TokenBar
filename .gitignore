@@ -43,3 +43,9 @@ publish/
 *.log
 scratch/
 tmp/
+
+# AI Assistant Sessions & Working Docs
+.zcode/
+.claude/
+.agents/
+implementation_plan.md
