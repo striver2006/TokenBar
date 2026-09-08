@@ -42,6 +42,13 @@ chmod +x "$MACOS_DIR/$APP_NAME"
 # 复制 Info.plist
 cp "Resources/Info.plist" "$APP_BUNDLE/Contents/Info.plist"
 
+# 复制应用图标
+if [ -f "Resources/AppIcon.icns" ]; then
+    cp "Resources/AppIcon.icns" "$RESOURCES_DIR/AppIcon.icns"
+else
+    echo "警告：未找到 Resources/AppIcon.icns，应用将使用默认图标" >&2
+fi
+
 # 复制 PkgInfo
 echo -n "APPL????" > "$APP_BUNDLE/Contents/PkgInfo"
 
