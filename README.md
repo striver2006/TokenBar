@@ -55,7 +55,7 @@
   - **macOS**：纯 Swift 5.9+ / SwiftUI 构建，深度适配深浅色外观。
   - **Windows**：现代 .NET 8 / C# WPF 架构，完美融入 Windows 10/11 任务栏托盘。
 - 👁️ **悬停即览与点击固定**：
-  - 鼠标悬停在状态栏图标上 0.15 秒即可自动弹出用量面板，无需额外点击。
+  - 鼠标悬停在状态栏图标上短暂停留（macOS 0.15 秒 / Windows 0.2 秒）即可自动弹出用量面板，无需额外点击。
   - 单击图标可锁定面板，方便长时间对照或查阅。
 - 🌐 **广泛的模型厂商生态**：
   - **海外主流**：OpenAI (TPM/RPM)、Anthropic (Claude Code 5h/每周双窗口)、Google Gemini / Google One (AI Studio / OAuth 网页授权 / Antigravity 凭据管理器)。
@@ -87,10 +87,13 @@ TokenBar/
 │   ├── Sources/TokenBar/           # Swift 源码 (含 I18n、Models、Services、Views)
 │   ├── Resources/Info.plist        # 应用包配置
 │   ├── Scripts/build_app.sh        # 一键构建打包脚本
-│   └── Tests/                      # 自动化单元测试集
+│   ├── Tests/                      # 自动化单元测试集
+│   └── README.md                   # macOS 构建指引
 └── windows/                        # Windows 原生客户端代码
     ├── TokenBar.sln                # Visual Studio 解决方案
+    ├── install.ps1                 # 一键安装/升级脚本
     ├── README.md                   # Windows 构建指引
+    ├── tools/gui/                  # 托盘实机测试辅助脚本 (PowerShell)
     └── src/TokenBar/               # .NET 8 / WPF 源码与托盘服务
 ```
 
@@ -126,8 +129,13 @@ cd windows
 dotnet run --project src/TokenBar/TokenBar.csproj
 
 # 2. 发布为独立免安装单文件 (.exe)
-dotnet publish src/TokenBar/TokenBar.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o ./publish
+dotnet publish src/TokenBar/TokenBar.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o ./publish
+
+# 3. （可选）一键安装/升级到本机：停旧进程 + 复制 exe + 建快捷方式
+powershell -ExecutionPolicy Bypass -File install.ps1
 ```
+
+详细说明见 [windows/README.md](windows/README.md)。
 
 ---
 

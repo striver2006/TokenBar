@@ -33,7 +33,7 @@ As AI-assisted programming tools like Claude Code, Cursor, and Continue gain wid
   - **macOS**: Built with Swift 5.9+ and SwiftUI, seamlessly supporting Light and Dark modes.
   - **Windows**: Built with .NET 8 / C# WPF, integrating cleanly with the taskbar tray notification area.
 - 👁️ **Hover Preview & Click to Pin**:
-  - Automatically pops up the quota card panel after hovering over the tray icon for 0.15s.
+  - Automatically pops up the quota card panel after hovering over the tray icon (0.15s on macOS / 0.2s on Windows).
   - Click the icon to pin the panel open for continuous reference during coding sessions.
 - 🌐 **Extensive AI Provider Ecosystem**:
   - **Global**: OpenAI (TPM/RPM rate limits), Anthropic (Claude Code 5-hour rolling window & weekly quota), Google Gemini / Google One (AI Studio / OAuth / Antigravity Credential Manager).
@@ -63,10 +63,13 @@ TokenBar/
 │   ├── Sources/TokenBar/           # Swift source code
 │   ├── Resources/Info.plist        # Bundle plist configuration
 │   ├── Scripts/build_app.sh        # Release packaging script
-│   └── Tests/                      # Automated unit test suite
+│   ├── Tests/                      # Automated unit test suite
+│   └── README.md                   # macOS build instructions
 └── windows/                        # Windows Native Client
     ├── TokenBar.sln                # Visual Studio solution
+    ├── install.ps1                 # One-click install/upgrade script
     ├── README.md                   # Windows build instructions
+    ├── tools/gui/                  # Live GUI test helpers (PowerShell)
     └── src/TokenBar/               # .NET 8 / WPF source code & tray services
 ```
 
@@ -102,8 +105,13 @@ cd windows
 dotnet run --project src/TokenBar/TokenBar.csproj
 
 # 2. Publish self-contained single-file executable
-dotnet publish src/TokenBar/TokenBar.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o ./publish
+dotnet publish src/TokenBar/TokenBar.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o ./publish
+
+# 3. (Optional) One-click local install/upgrade: stop old process, copy exe, create shortcuts
+powershell -ExecutionPolicy Bypass -File install.ps1
 ```
+
+See [windows/README.md](windows/README.md) for details.
 
 ---
 

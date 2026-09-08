@@ -22,6 +22,11 @@
 3. **启动应用**：
    - 双击运行 `TokenBar.exe`。
    - 启动后，TokenBar 会自动常驻在右下角任务栏通知区域（系统托盘）中。
+4. **从源码构建安装（可选）**：克隆仓库后在 `windows/` 目录执行
+   `dotnet publish src/TokenBar/TokenBar.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish`，
+   再运行 `powershell -ExecutionPolicy Bypass -File install.ps1` 即可一键安装/升级到本机
+   （自动停止旧实例、复制 exe 至 `%LOCALAPPDATA%\Programs\TokenBar\` 并创建快捷方式）。
+   注意必须使用自包含单文件参数发布，否则安装后应用无法启动。
 
 ---
 
@@ -29,7 +34,7 @@
 
 ### 2.1 状态看板 (Popover 浮窗)
 - **呼出看板**：
-  - **鼠标悬停**：将鼠标移至状态栏图标上方，卡片将在 0.15 秒后自动滑出（可在设置中开启或关闭此功能）。
+  - **鼠标悬停**：将鼠标移至状态栏图标上方，卡片将自动滑出（macOS 约 0.15 秒 / Windows 约 0.2 秒后触发，可在设置中开启或关闭此功能）。
   - **鼠标左键单击**：点击图标即可固定展开看板，此时移开鼠标不会自动关闭。再次点击可收起。
 - **看板元素说明**：
   - **顶部标题**：展示 `TokenBar` 标识与副标题 `模型额度监控 / Model Quota Monitor`。
