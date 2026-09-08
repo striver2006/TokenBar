@@ -30,15 +30,16 @@ swift run
 ### 2. 打包为独立应用 (TokenBar.app)
 
 ```bash
-# 一键 Release 编译 + 组装 .app 包
+# 一键 Release 编译 + 组装 .app 包（universal：同时支持 Apple Silicon 与 Intel）
 ./Scripts/build_app.sh
 
 # 运行
 open build/TokenBar.app
 ```
 
-`build_app.sh` 会执行 `swift build -c release`，将可执行文件与 `Resources/Info.plist`
-组装为标准的 `build/TokenBar.app` 包结构（Contents/MacOS + Contents/Resources + PkgInfo）。
+`build_app.sh` 会执行 `swift build -c release --arch arm64 --arch x86_64` 交叉编译出
+双架构可执行文件，并与 `Resources/Info.plist` 组装为标准的 `build/TokenBar.app`
+包结构（Contents/MacOS + Contents/Resources + PkgInfo）。
 
 ---
 

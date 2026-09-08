@@ -108,8 +108,9 @@ TokenBar/
 
 | 平台 | 下载产物 | 说明 |
 | --- | --- | --- |
-| Windows 10/11 (x64) | `TokenBar-v*-win-x64.exe` | 单文件自包含，免装 .NET，双击即可运行；如需快捷方式与卸载项，将下载的 exe 复制为 `windows/publish/TokenBar.exe` 后执行 `windows/install.ps1` |
-| macOS 13+ (Apple Silicon) | `TokenBar-v*-macOS-arm64.zip` | 解压后将 `TokenBar.app` 拖入「应用程序」；产物未公证，首次打开需在 系统设置 → 隐私与安全性 中「仍要打开」 |
+| Windows 10/11 (Intel/AMD) | `TokenBar-v*-win-x64.exe` | 单文件自包含，免装 .NET，双击即可运行；如需快捷方式与卸载项，将下载的 exe 复制为 `windows/publish/TokenBar.exe` 后执行 `windows/install.ps1` |
+| Windows 10/11 (ARM 设备) | `TokenBar-v*-win-arm64.exe` | 同上；ARM64 Windows 也可运行 x64 版（系统模拟），原生版内存占用更低 |
+| macOS 13+（Intel 与 Apple Silicon 通用） | `TokenBar-v*-macOS-universal.zip` | 解压后将 `TokenBar.app` 拖入「应用程序」；产物未公证，首次打开需在 系统设置 → 隐私与安全性 中「仍要打开」 |
 
 下载后可使用各 Release 附带的 `SHA256SUMS.txt` 校验文件完整性。
 

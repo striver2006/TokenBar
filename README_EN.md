@@ -84,8 +84,9 @@ Prebuilt binaries are available for released versions — no build required:
 
 | Platform | Artifact | Notes |
 | --- | --- | --- |
-| Windows 10/11 (x64) | `TokenBar-v*-win-x64.exe` | Self-contained single file, no .NET install needed — just run it. For shortcuts & uninstall entries, copy the downloaded exe to `windows/publish/TokenBar.exe` and run `windows/install.ps1` |
-| macOS 13+ (Apple Silicon) | `TokenBar-v*-macOS-arm64.zip` | Unzip and drag `TokenBar.app` into /Applications. The build is unsigned/notarized — on first launch allow it via System Settings → Privacy & Security → "Open Anyway" |
+| Windows 10/11 (Intel/AMD) | `TokenBar-v*-win-x64.exe` | Self-contained single file, no .NET install needed — just run it. For shortcuts & uninstall entries, copy the downloaded exe to `windows/publish/TokenBar.exe` and run `windows/install.ps1` |
+| Windows 10/11 (ARM devices) | `TokenBar-v*-win-arm64.exe` | Same as above. ARM64 Windows can also run the x64 build via emulation, but the native build uses less memory |
+| macOS 13+ (Universal: Intel & Apple Silicon) | `TokenBar-v*-macOS-universal.zip` | Unzip and drag `TokenBar.app` into /Applications. The build is unsigned/notarized — on first launch allow it via System Settings → Privacy & Security → "Open Anyway" |
 
 Verify downloads with the `SHA256SUMS.txt` attached to each release.
 
