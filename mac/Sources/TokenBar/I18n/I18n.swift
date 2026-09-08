@@ -403,7 +403,7 @@ public final class LocalizationManager: ObservableObject {
         case .openRouterTitle:
             return "OpenRouter"
         case .openRouterSubtitle:
-            return isZh ? "纯按量扣费聚合平台，监控美元账户余额与 Key 额度" : "Pay-as-you-go aggregator: monitor USD balance & key quota"
+            return isZh ? "纯按量扣费聚合平台，监控美元账户余额（查询余额需 Management Key）" : "Pay-as-you-go aggregator: monitor USD balance (Management key required)"
         case .glmTitle:
             return isZh ? "GLM (智谱清言)" : "GLM (Zhipu AI)"
         case .glmSubtitle:

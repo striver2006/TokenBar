@@ -385,7 +385,7 @@
                                 <Path x:Name="IconOpenRouter" Width="20" Height="20" Stretch="Uniform" Fill="#9CA3AF" Margin="0,0,8,0" VerticalAlignment="Center"/>
                                 <StackPanel>
                                     <TextBlock x:Name="TxtOpenRouterTitle" Text="OpenRouter" FontSize="16" FontWeight="Bold" Foreground="#111827"/>
-                                    <TextBlock x:Name="TxtOpenRouterSubtitle" Text="纯按量扣费聚合平台，监控美元账户余额与 Key 额度" FontSize="11" Foreground="#6B7280" Margin="0,3,0,0"/>
+                                    <TextBlock x:Name="TxtOpenRouterSubtitle" Text="纯按量扣费聚合平台，监控美元账户余额（查询余额需 Management Key）" FontSize="11" Foreground="#6B7280" Margin="0,3,0,0"/>
                                 </StackPanel>
                             </StackPanel>
                             <CheckBox x:Name="ChkOpenRouterEnabled" Content="启用监控" HorizontalAlignment="Right" VerticalAlignment="Center" FontWeight="SemiBold"/>

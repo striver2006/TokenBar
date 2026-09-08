@@ -1,4 +1,5 @@
 import XCTest
+import SwiftUI
 @testable import TokenBar
 
 final class TokenBarTests: XCTestCase {

@@ -129,7 +129,8 @@ namespace TokenBar.Services
                     : "OpenRouter API error: neither credits nor key info is available");
             }
 
-            // 3. 组装窗口：余额为主窗口；Key 有上限时附加"Key 额度"百分比窗口
+            // 3. 组装窗口：余额为主窗口。OpenRouter 的 Key 上限是累计消费上限
+            //    （不按周期重置），无周期语义，故不展示为时间窗口。
             TokenWindow? balanceWindow = null;
             if (accountBalance.HasValue)
             {
@@ -161,24 +162,7 @@ namespace TokenBar.Services
                 };
             }
 
-            TokenWindow? keyWindow = null;
-            if (keyLimit.HasValue && keyLimit.Value > 0)
-            {
-                var usedPct = Math.Clamp((double)((keyUsage ?? 0) / keyLimit.Value) * 100.0, 0.0, 100.0);
-                keyWindow = new TokenWindow
-                {
-                    Title = "Key 额度",
-                    UsedPercentage = usedPct,
-                    StartTime = DateTime.Now,
-                    EndTime = DateTime.Now.AddDays(30),
-                    UsedAmount = (double?)(keyUsage ?? 0),
-                    TotalLimit = (double)keyLimit.Value,
-                    Unit = "$",
-                    IsIdle = usedPct <= 0
-                };
-            }
-
-            if (balanceWindow == null && keyWindow == null)
+            if (balanceWindow == null)
             {
                 balanceWindow = new TokenWindow
                 {
@@ -209,7 +193,7 @@ namespace TokenBar.Services
                 account = isZh ? "Key 有效" : "Key valid";
             }
 
-            return (balanceWindow, keyWindow, account);
+            return (balanceWindow, null, account);
         }
     }
 }

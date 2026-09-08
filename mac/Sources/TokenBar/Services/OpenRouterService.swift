@@ -84,7 +84,8 @@ public final class OpenRouterService: @unchecked Sendable {
             throw NSError(domain: "OpenRouterService", code: 502, userInfo: [NSLocalizedDescriptionKey: isZh ? "OpenRouter 接口异常，余额与 Key 信息均不可用" : "OpenRouter API error: neither credits nor key info is available"])
         }
 
-        // 3. 组装窗口：余额为主窗口；Key 有上限时附加"Key 额度"百分比窗口
+        // 3. 组装窗口：余额为主窗口。OpenRouter 的 Key 上限是累计消费上限
+        //    （不按周期重置），无周期语义，故不展示为时间窗口。
         var balanceWindow: TokenWindow? = nil
         if let balance = accountBalance {
             balanceWindow = TokenWindow.balance(
@@ -106,23 +107,7 @@ public final class OpenRouterService: @unchecked Sendable {
             )
         }
 
-        var keyWindow: TokenWindow? = nil
-        if let limit = keyLimit {
-            let used = keyUsage ?? 0
-            let usedPct = min(max(used / limit * 100.0, 0.0), 100.0)
-            keyWindow = TokenWindow(
-                title: "Key 额度",
-                usedPercentage: usedPct,
-                startTime: Date(),
-                endTime: Date().addingTimeInterval(30 * 86400),
-                usedAmount: used,
-                totalLimit: limit,
-                unit: "$",
-                isIdle: usedPct <= 0
-            )
-        }
-
-        if balanceWindow == nil && keyWindow == nil {
+        if balanceWindow == nil {
             balanceWindow = TokenWindow(
                 title: "OpenRouter 连接正常",
                 usedPercentage: 0.0,
@@ -146,6 +131,6 @@ public final class OpenRouterService: @unchecked Sendable {
             account = isZh ? "Key 有效" : "Key valid"
         }
 
-        return (balanceWindow, keyWindow, account)
+        return (balanceWindow, nil, account)
     }
 }
