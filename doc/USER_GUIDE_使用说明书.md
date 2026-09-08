@@ -43,6 +43,7 @@
     - 状态指示灯：🟢 绿色代表连接正常且额度同步成功；🟠 橙色代表未授权或需要核对 Key；转圈动画代表正在拉取。
     - 额度进度条：展示 5 小时滚动窗口与每周配额的剩余百分比，配合醒目的红/橙/绿渐变色。
     - 重置倒计时：实时呈现剩余天数、小时数和分钟数。
+    - **余额行（纯扣费厂商专属）**：DeepSeek、KIMI、OpenRouter 及识别到余额接口的自定义厂商（如硅基流动、Moonshot 中转）以**金额**展示（如 `¥27.05` / `$12.00`），不再显示进度条与重置倒计时；金额下方左侧为「较上次刷新」的变化量，右侧为「预计可用 ~X 天」（基于近 7 天本地消耗记录估算，样本不足时显示「消耗统计中…」）。
   - **底部栏**：展示最后更新时间戳，右侧提供偏好设置齿轮入口与退出按钮。
 
 ### 2.2 右键菜单 (Context Menu)
@@ -83,9 +84,9 @@ TokenBar 独家支持双重模式：
     - **macOS**：支持从 Keychain 以及 `~/.gemini/` 自动读取凭证，额度数据来源与 Windows 端一致。
 
 ### 3.4 国内主流厂商配置
-- **DeepSeek (深度求索)**：在 [platform.deepseek.com](https://platform.deepseek.com) 获取 API Key，填入后将自动同步账户可用余额。
+- **DeepSeek (深度求索)**：在 [platform.deepseek.com](https://platform.deepseek.com) 获取 API Key，填入后将自动同步账户可用余额。可在设置中配置「**余额提醒阈值**」：余额低于该值时托盘弹气泡提醒，看板金额变为橙/红色。
 - **火山方舟 (字节跳动)**：前往火山引擎大模型控制台获取 API Key，支持自定义 Endpoint。
-- **月之暗面 KIMI**：在 [platform.moonshot.cn](https://platform.moonshot.cn) 获取 Key，支持监测 RPM/TPM 限额。
+- **月之暗面 KIMI**：在 [platform.moonshot.cn](https://platform.moonshot.cn) 获取 Key，支持监测 RPM/TPM 限额与账户余额（同样支持余额提醒阈值）。
 - **智谱清言 GLM**：在 [open.bigmodel.cn](https://open.bigmodel.cn) 获取 API Key。
 
 ### 3.5 阿里云百炼 (Token Plan) 专属配置与多端同步
@@ -123,6 +124,37 @@ TokenBar 支持实时监控阿里云百炼的 **5 小时滚动滑动窗口** 与
 在「国内厂商 / 自定义」标签页，点击「＋ 添加新厂商」：
 - 提供丰富的快捷预填：**硅基流动 (SiliconFlow)、MiniMax、阶跃星辰 (StepFun)、零一万物 (01.AI)、百度千帆、腾讯混元、小米 MiMo** 等。
 - 支持指定协议：`OpenAI Chat`、`OpenAI Response` 或 `Anthropic` 兼容格式。
+- 端点为 DeepSeek / Moonshot / 硅基流动时会自动识别并查询账户余额，可在表单中选填「余额提醒阈值」。
+
+#### 小米 MiMo 双模式监控（订阅 Token Plan + 按量余额自动识别）
+小米 MiMo 同时提供按量付费与 Token Plan 订阅套餐，TokenBar 通过**双通道自动识别**同时监控：
+
+1. 用预设快捷添加「小米 MiMo (Xiaomi)」，填入 API Key（按量计费监控，展示速率限制）。
+2. 若你订阅了 Token Plan 或想看余额：浏览器登录 [platform.xiaomimimo.com](https://platform.xiaomimimo.com)，按 `F12` -> **网络 (Network)** 刷新页面，任选一个 `/api/` 请求，复制其请求头中的完整 `Cookie` 值，粘贴到表单的「**控制台 Cookie**」字段。
+3. 保存后卡片将自动展示（有什么显示什么）：
+   - **Token Plan 额度**：套餐用量百分比（订阅通道）；
+   - **账户余额**：按量余额金额，支持余额提醒阈值与"预计可用 X 天"（按量通道）。
+
+> 说明：MiMo 的余额与套餐查询接口**只接受官网登录态 Cookie**，不接受 API Key（官方限制）。Cookie 失效后对应行会自动消失，重新复制即可；两通道互不影响，只填 API Key 时行为与旧版完全一致。
+
+### 3.7 OpenRouter 配置（聚合平台，美元按量计费）
+OpenRouter 为纯按量扣费平台，TokenBar 以**美元余额**方式展示：
+
+1. 登录 [openrouter.ai/keys](https://openrouter.ai/keys) 创建 API Key（`sk-or-...`）。
+2. 在 TokenBar 的 OpenRouter 设置页粘贴 Key，点击「保存并测试连接」。
+3. **Key 类型说明**：
+   - **普通 Key**：只能查询该 Key 自身的用量与限额。若 Key 设置了消费上限，看板会展示「Key 可用额度」金额与「Key 额度」使用百分比。
+   - **Management Key**（后台管理密钥）：可查询**账户总余额**（`总充值 - 总消耗`），看板将以「账户可用余额」展示。推荐使用 Management Key 获得完整余额监控。
+4. 余额提醒阈值默认为 5（美元），可自行修改。
+
+### 3.8 纯扣费厂商的余额监控说明（消耗统计与提醒）
+
+DeepSeek、KIMI、OpenRouter 等按量计费厂商没有"5 小时/每周"的时间窗口概念，TokenBar 使用不同的展示与提醒逻辑：
+
+- **金额展示**：看板直接显示余额金额，低于阈值变橙、低于阈值一半变红。
+- **低余额提醒**：余额首次跌破阈值时弹托盘气泡（macOS 为系统通知），恢复到阈值的 1.2 倍以上后重新武装，避免反复打扰。
+- **消耗统计**：每次刷新在本地记录余额（Windows：`%LOCALAPPDATA%\TokenBar\balance_history.json`；macOS：`~/Library/Application Support/TokenBar/balance_history.json`），累积满 1 天以上样本后自动估算日均消耗，显示「预计可用 ~X 天」。全程纯本地计算，不联网上传。
+- **较上次变化**：金额下方展示与上一次刷新相比的余额增减（如 `-¥0.85`）。
 
 ---
 
