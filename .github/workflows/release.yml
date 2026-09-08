@@ -1,0 +1,93 @@
+name: Release
+
+# 推送 v* 标签时触发：双平台构建并自动创建 GitHub Release
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+env:
+  TAG_NAME: ${{ github.ref_name }}
+
+jobs:
+  build-windows:
+    name: Build Windows exe (win-x64, single-file)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Publish single-file exe
+        run: dotnet publish windows/src/TokenBar/TokenBar.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish
+
+      - name: Rename artifact and show SHA256
+        shell: pwsh
+        run: |
+          Move-Item publish/TokenBar.exe "TokenBar-$env:TAG_NAME-win-x64.exe"
+          Get-FileHash "TokenBar-$env:TAG_NAME-win-x64.exe" -Algorithm SHA256 | Format-List
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-artifact
+          path: TokenBar-*-win-x64.exe
+          if-no-files-found: error
+
+  build-macos:
+    name: Build macOS app (arm64)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build TokenBar.app
+        run: bash mac/Scripts/build_app.sh
+
+      - name: Package zip and show SHA256
+        run: |
+          ditto -c -k --keepParent mac/build/TokenBar.app "TokenBar-$TAG_NAME-macOS-arm64.zip"
+          shasum -a 256 "TokenBar-$TAG_NAME-macOS-arm64.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-artifact
+          path: TokenBar-*-macOS-arm64.zip
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Generate SHA256SUMS.txt
+        run: sha256sum TokenBar-* | tee SHA256SUMS.txt
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          body: |
+            ## 安装说明
+
+            ### Windows (x64)
+            - 下载 `TokenBar-${{ github.ref_name }}-win-x64.exe`，单文件自包含，无需安装 .NET，双击即可运行
+            - 如需注册开始菜单/桌面快捷方式与卸载项：将 exe 与仓库中的 `windows/install.ps1` 放在同一目录后执行该脚本
+
+            ### macOS (Apple Silicon, macOS 13+)
+            - 下载并解压 `TokenBar-${{ github.ref_name }}-macOS-arm64.zip`，将 `TokenBar.app` 拖入「应用程序」
+            - 产物未做开发者签名与公证，首次打开若被 Gatekeeper 拦截：系统设置 → 隐私与安全性 → 「仍要打开」，或执行 `xattr -dr com.apple.quarantine /Applications/TokenBar.app`
+
+            ### 校验下载完整性
+            - macOS / Linux：`shasum -a 256 -c SHA256SUMS.txt`
+            - Windows (PowerShell)：`Get-FileHash <文件名> -Algorithm SHA256`
+          files: |
+            TokenBar-*-win-x64.exe
+            TokenBar-*-macOS-arm64.zip
+            SHA256SUMS.txt

@@ -75,6 +75,22 @@ TokenBar/
 
 ---
 
+## ⬇️ Download & Install
+
+Prebuilt binaries are available for released versions — no build required:
+
+- **GitHub Releases**: https://github.com/striver2006/TokenBar/releases
+- **GitCode Releases**: https://gitcode.com/czb99/TokenBar/releases
+
+| Platform | Artifact | Notes |
+| --- | --- | --- |
+| Windows 10/11 (x64) | `TokenBar-v*-win-x64.exe` | Self-contained single file, no .NET install needed — just run it. For shortcuts & uninstall entries, place the exe next to `windows/install.ps1` and run the script |
+| macOS 13+ (Apple Silicon) | `TokenBar-v*-macOS-arm64.zip` | Unzip and drag `TokenBar.app` into /Applications. The build is unsigned/notarized — on first launch allow it via System Settings → Privacy & Security → "Open Anyway" |
+
+Verify downloads with the `SHA256SUMS.txt` attached to each release.
+
+---
+
 ## 🚀 Quick Start
 
 ### macOS
