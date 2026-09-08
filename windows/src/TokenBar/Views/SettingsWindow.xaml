@@ -589,7 +589,7 @@
         <!-- Bottom Footer Bar -->
         <Border Grid.Row="1" Background="#FFFFFF" BorderBrush="#E5E7EB" BorderThickness="0,1,0,0" Padding="20,12">
             <DockPanel>
-                <TextBlock x:Name="TxtAppAboutFooter" Text="TokenBar v1.0.0 • 模型额度监控" FontSize="11" Foreground="#9CA3AF" VerticalAlignment="Center"/>
+                <TextBlock x:Name="TxtAppAboutFooter" Text="TokenBar v1.1.0 • 模型额度监控" FontSize="11" Foreground="#9CA3AF" VerticalAlignment="Center"/>
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                     <Button x:Name="BtnSaveAll" Content="保存全部设置" Width="110" Height="30" Margin="0,0,10,0" Background="#2563EB" Foreground="White" BorderThickness="0" Cursor="Hand" Click="BtnSaveAll_Click"/>
                     <Button x:Name="BtnCloseWindow" Content="关闭" Width="70" Height="30" Background="#F3F4F6" BorderBrush="#D1D5DB" Cursor="Hand" Click="BtnClose_Click"/>

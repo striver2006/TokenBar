@@ -2132,7 +2132,7 @@ public struct SettingsView: View {
 
             HStack {
                 Spacer()
-                Text("TokenBar v1.0.0 • \(I18n(.subtitle))")
+                Text("TokenBar v1.1.0 • \(I18n(.subtitle))")
                     .font(.system(size: 10))
                     .foregroundColor(.secondary)
                 Spacer()
