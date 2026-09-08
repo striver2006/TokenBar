@@ -1,7 +1,7 @@
 <Window x:Class="TokenBar.Views.SettingsWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="TokenBar - Settings" Height="620" Width="760"
+        Title="TokenBar - Settings" Height="620" Width="840"
         WindowStartupLocation="CenterScreen" Background="#F9FAFB" MinWidth="700" MinHeight="550">
     <Grid>
         <Grid.RowDefinitions>
@@ -136,34 +136,32 @@
                     <!-- Tab 0: OpenAI -->
                     <StackPanel x:Name="PnlOpenAI" Visibility="Visible">
                         <DockPanel Margin="0,0,0,16">
-                            <StackPanel Orientation="Horizontal">
-                                <Path x:Name="IconOpenAI" Width="20" Height="20" Stretch="Uniform" Fill="#9CA3AF" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                                <StackPanel>
-                                    <TextBlock x:Name="TxtOpenAITitle" Text="OpenAI API 授权" FontSize="16" FontWeight="Bold" Foreground="#111827"/>
-                                    <TextBlock x:Name="TxtOpenAISubtitle" Text="配置官方或代理 API KEY，监控 TPM/RPM 速率限制与可用模型" FontSize="11" Foreground="#6B7280" Margin="0,3,0,0"/>
-                                </StackPanel>
+                            <CheckBox x:Name="ChkOpenAIEnabled" Content="启用监控" DockPanel.Dock="Right" VerticalAlignment="Center" FontWeight="SemiBold" Margin="12,0,0,0"/>
+                            <Path x:Name="IconOpenAI" Width="20" Height="20" Stretch="Uniform" Fill="#9CA3AF" Margin="0,0,8,0" VerticalAlignment="Center" DockPanel.Dock="Left"/>
+                            <StackPanel>
+                                <TextBlock x:Name="TxtOpenAITitle" TextWrapping="Wrap" Text="OpenAI API 授权" FontSize="16" FontWeight="Bold" Foreground="#111827"/>
+                                <TextBlock x:Name="TxtOpenAISubtitle" TextWrapping="Wrap" Text="配置官方或代理 API KEY，监控 TPM/RPM 速率限制与可用模型" FontSize="11" Foreground="#6B7280" Margin="0,3,0,0"/>
                             </StackPanel>
-                            <CheckBox x:Name="ChkOpenAIEnabled" Content="启用监控" HorizontalAlignment="Right" VerticalAlignment="Center" FontWeight="SemiBold"/>
                         </DockPanel>
 
                         <!-- Status Card -->
                         <Border Background="#F9FAFB" BorderBrush="#E5E7EB" BorderThickness="1" CornerRadius="8" Padding="12,10" Margin="0,0,0,16">
                             <DockPanel>
-                                <TextBlock x:Name="TxtOpenAIStatusDot" Text="●" Foreground="#F59E0B" FontSize="14" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                                <TextBlock x:Name="TxtOpenAIStatus" Text="" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center"/>
-                                <TextBlock x:Name="TxtOpenAIAccount" Text="" FontSize="11" Foreground="#6B7280" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="TxtOpenAIStatusDot" TextWrapping="Wrap" Text="●" Foreground="#F59E0B" FontSize="14" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="TxtOpenAIStatus" TextWrapping="Wrap" Text="" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="TxtOpenAIAccount" TextWrapping="Wrap" Text="" FontSize="11" Foreground="#6B7280" Margin="8,0,0,0" VerticalAlignment="Center"/>
                             </DockPanel>
                         </Border>
 
-                        <TextBlock x:Name="TxtOpenAIKeyLabel" Text="OpenAI API KEY" FontWeight="Medium" FontSize="12" Margin="0,0,0,6"/>
+                        <TextBlock x:Name="TxtOpenAIKeyLabel" TextWrapping="Wrap" Text="OpenAI API KEY" FontWeight="Medium" FontSize="12" Margin="0,0,0,6"/>
                         <TextBox x:Name="TxtOpenAIKey" Margin="0,0,0,4" Padding="6"/>
-                        <TextBlock x:Name="TxtOpenAIKeyHint" Text="可在 OpenAI Platform (platform.openai.com) -> API Keys 中生成。" FontSize="10" Foreground="#6B7280" Margin="0,0,0,14"/>
+                        <TextBlock x:Name="TxtOpenAIKeyHint" TextWrapping="Wrap" Text="可在 OpenAI Platform (platform.openai.com) -> API Keys 中生成。" FontSize="10" Foreground="#6B7280" Margin="0,0,0,14"/>
 
-                        <TextBlock x:Name="TxtOpenAIEndpointLabel" Text="API 接入端点" FontWeight="Medium" FontSize="12" Margin="0,0,0,6"/>
+                        <TextBlock x:Name="TxtOpenAIEndpointLabel" TextWrapping="Wrap" Text="API 接入端点" FontWeight="Medium" FontSize="12" Margin="0,0,0,6"/>
                         <TextBox x:Name="TxtOpenAIEndpoint" Text="https://api.openai.com/v1" Margin="0,0,0,4" Padding="6"/>
-                        <TextBlock x:Name="TxtOpenAIEndpointHint" Text="默认为官方接口，亦可配置中转反向代理地址。" FontSize="10" Foreground="#6B7280" Margin="0,0,0,14"/>
+                        <TextBlock x:Name="TxtOpenAIEndpointHint" TextWrapping="Wrap" Text="默认为官方接口，亦可配置中转反向代理地址。" FontSize="10" Foreground="#6B7280" Margin="0,0,0,14"/>
 
-                        <TextBlock x:Name="TxtOpenAIOrgIdLabel" Text="组织 ID (OpenAI-Organization, 可选)" FontWeight="Medium" FontSize="12" Margin="0,0,0,6"/>
+                        <TextBlock x:Name="TxtOpenAIOrgIdLabel" TextWrapping="Wrap" Text="组织 ID (OpenAI-Organization, 可选)" FontWeight="Medium" FontSize="12" Margin="0,0,0,6"/>
                         <TextBox x:Name="TxtOpenAIOrgId" Margin="0,0,0,18" Padding="6"/>
 
                         <Button x:Name="BtnTestOpenAI" Content="保存并测试连接" Width="140" Height="32" HorizontalAlignment="Left"
@@ -173,31 +171,29 @@
                     <!-- Tab 1: Anthropic -->
                     <StackPanel x:Name="PnlAnthropic" Visibility="Collapsed">
                         <DockPanel Margin="0,0,0,16">
-                            <StackPanel Orientation="Horizontal">
-                                <Path x:Name="IconAnthropic" Width="20" Height="20" Stretch="Uniform" Fill="#9CA3AF" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                                <StackPanel>
-                                    <TextBlock x:Name="TxtClaudeTitle" Text="Anthropic (Claude) 统一授权" FontSize="16" FontWeight="Bold" Foreground="#111827"/>
-                                    <TextBlock x:Name="TxtClaudeSubtitle" Text="同时支持 Anthropic API Key (官方/代理) 与 Claude Code 订阅授权 (网页/本地)" FontSize="11" Foreground="#6B7280" Margin="0,3,0,0"/>
-                                </StackPanel>
+                            <CheckBox x:Name="ChkClaudeEnabled" Content="启用监控" DockPanel.Dock="Right" VerticalAlignment="Center" FontWeight="SemiBold" Margin="12,0,0,0"/>
+                            <Path x:Name="IconAnthropic" Width="20" Height="20" Stretch="Uniform" Fill="#9CA3AF" Margin="0,0,8,0" VerticalAlignment="Center" DockPanel.Dock="Left"/>
+                            <StackPanel>
+                                <TextBlock x:Name="TxtClaudeTitle" TextWrapping="Wrap" Text="Anthropic (Claude) 统一授权" FontSize="16" FontWeight="Bold" Foreground="#111827"/>
+                                <TextBlock x:Name="TxtClaudeSubtitle" TextWrapping="Wrap" Text="同时支持 Anthropic API Key (官方/代理) 与 Claude Code 订阅授权 (网页/本地)" FontSize="11" Foreground="#6B7280" Margin="0,3,0,0"/>
                             </StackPanel>
-                            <CheckBox x:Name="ChkClaudeEnabled" Content="启用监控" HorizontalAlignment="Right" VerticalAlignment="Center" FontWeight="SemiBold"/>
                         </DockPanel>
 
                         <Border Background="#F9FAFB" BorderBrush="#E5E7EB" BorderThickness="1" CornerRadius="8" Padding="12,10" Margin="0,0,0,16">
                             <DockPanel>
-                                <TextBlock x:Name="TxtClaudeStatusDot" Text="●" Foreground="#F59E0B" FontSize="14" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                                <TextBlock x:Name="TxtClaudeStatus" Text="" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center"/>
-                                <TextBlock x:Name="TxtClaudeAccount" Text="" FontSize="11" Foreground="#6B7280" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="TxtClaudeStatusDot" TextWrapping="Wrap" Text="●" Foreground="#F59E0B" FontSize="14" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="TxtClaudeStatus" TextWrapping="Wrap" Text="" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="TxtClaudeAccount" TextWrapping="Wrap" Text="" FontSize="11" Foreground="#6B7280" Margin="8,0,0,0" VerticalAlignment="Center"/>
                             </DockPanel>
                         </Border>
 
                         <!-- Method 1: API Key -->
                         <Border Background="#F9FAFB" BorderBrush="#E5E7EB" BorderThickness="1" CornerRadius="8" Padding="14" Margin="0,0,0,14">
                             <StackPanel>
-                                <TextBlock x:Name="TxtClaudeMethod1Title" Text="方式一：Anthropic API Key (官方或代理)" FontWeight="Bold" FontSize="12" Margin="0,0,0,10"/>
-                                <TextBlock x:Name="TxtAnthropicKeyLabel" Text="API KEY:" FontSize="11" Margin="0,0,0,4"/>
+                                <TextBlock x:Name="TxtClaudeMethod1Title" TextWrapping="Wrap" Text="方式一：Anthropic API Key (官方或代理)" FontWeight="Bold" FontSize="12" Margin="0,0,0,10"/>
+                                <TextBlock x:Name="TxtAnthropicKeyLabel" TextWrapping="Wrap" Text="API KEY:" FontSize="11" Margin="0,0,0,4"/>
                                 <TextBox x:Name="TxtAnthropicKey" Margin="0,0,0,8" Padding="6"/>
-                                <TextBlock x:Name="TxtAnthropicEndpointLabel" Text="接入端点:" FontSize="11" Margin="0,0,0,4"/>
+                                <TextBlock x:Name="TxtAnthropicEndpointLabel" TextWrapping="Wrap" Text="接入端点:" FontSize="11" Margin="0,0,0,4"/>
                                 <TextBox x:Name="TxtAnthropicEndpoint" Text="https://api.anthropic.com/v1" Margin="0,0,0,10" Padding="6"/>
                                 <Button x:Name="BtnTestAnthropicKey" Content="保存并测试 API Key" Width="140" Height="28" HorizontalAlignment="Left" Background="#F3F4F6" BorderBrush="#D1D5DB" Click="BtnTestAnthropicKey_Click"/>
                             </StackPanel>
@@ -206,11 +202,11 @@
                         <!-- Method 2: Claude Code CLI -->
                         <Border Background="#F9FAFB" BorderBrush="#E5E7EB" BorderThickness="1" CornerRadius="8" Padding="14">
                             <StackPanel>
-                                <TextBlock x:Name="TxtClaudeMethod2Title" Text="方式二：Claude Code 订阅 (监控 5小时与每周额度)" FontWeight="Bold" FontSize="12" Margin="0,0,0,10"/>
+                                <TextBlock x:Name="TxtClaudeMethod2Title" TextWrapping="Wrap" Text="方式二：Claude Code 订阅 (监控 5小时与每周额度)" FontWeight="Bold" FontSize="12" Margin="0,0,0,10"/>
                                 <WrapPanel Margin="0,0,0,10">
                                     <Button x:Name="BtnImportClaudeLocal" Content="读取本地 CLI 授权 (~/.claude.json)" Padding="10,6" Background="#EFF6FF" BorderBrush="#93C5FD" Foreground="#1D4ED8" Margin="0,0,8,0" Click="BtnImportClaudeLocal_Click"/>
                                 </WrapPanel>
-                                <TextBlock x:Name="TxtClaudeManualTokenLabel" Text="手动输入 OAuth Token / Session (备用):" FontSize="11" Margin="0,0,0,4"/>
+                                <TextBlock x:Name="TxtClaudeManualTokenLabel" TextWrapping="Wrap" Text="手动输入 OAuth Token / Session (备用):" FontSize="11" Margin="0,0,0,4"/>
                                 <DockPanel>
                                     <Button x:Name="BtnSaveClaudeToken" Content="保存" Width="70" DockPanel.Dock="Right" Margin="8,0,0,0" Click="BtnSaveClaudeToken_Click"/>
                                     <TextBox x:Name="TxtClaudeToken" Padding="6"/>
@@ -222,30 +218,28 @@
                     <!-- Tab 2: Gemini -->
                     <StackPanel x:Name="PnlGemini" Visibility="Collapsed">
                         <DockPanel Margin="0,0,0,16">
-                            <StackPanel Orientation="Horizontal">
-                                <Path x:Name="IconGemini" Width="20" Height="20" Stretch="Uniform" Fill="#9CA3AF" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                                <StackPanel>
-                                    <TextBlock x:Name="TxtGeminiTitle" Text="Google Gemini 授权" FontSize="16" FontWeight="Bold" Foreground="#111827"/>
-                                    <TextBlock x:Name="TxtGeminiSubtitle" Text="支持 Google AI Studio API Key (永久有效) 或 Google 账号本地凭证" FontSize="11" Foreground="#6B7280" Margin="0,3,0,0"/>
-                                </StackPanel>
+                            <CheckBox x:Name="ChkGeminiEnabled" Content="启用监控" DockPanel.Dock="Right" VerticalAlignment="Center" FontWeight="SemiBold" Margin="12,0,0,0"/>
+                            <Path x:Name="IconGemini" Width="20" Height="20" Stretch="Uniform" Fill="#9CA3AF" Margin="0,0,8,0" VerticalAlignment="Center" DockPanel.Dock="Left"/>
+                            <StackPanel>
+                                <TextBlock x:Name="TxtGeminiTitle" TextWrapping="Wrap" Text="Google Gemini 授权" FontSize="16" FontWeight="Bold" Foreground="#111827"/>
+                                <TextBlock x:Name="TxtGeminiSubtitle" TextWrapping="Wrap" Text="支持 Google AI Studio API Key (永久有效) 或 Google 账号本地凭证" FontSize="11" Foreground="#6B7280" Margin="0,3,0,0"/>
                             </StackPanel>
-                            <CheckBox x:Name="ChkGeminiEnabled" Content="启用监控" HorizontalAlignment="Right" VerticalAlignment="Center" FontWeight="SemiBold"/>
                         </DockPanel>
 
                         <Border Background="#F9FAFB" BorderBrush="#E5E7EB" BorderThickness="1" CornerRadius="8" Padding="12,10" Margin="0,0,0,16">
                             <DockPanel>
-                                <TextBlock x:Name="TxtGeminiStatusDot" Text="●" Foreground="#F59E0B" FontSize="14" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                                <TextBlock x:Name="TxtGeminiStatus" Text="" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center"/>
-                                <TextBlock x:Name="TxtGeminiAccount" Text="" FontSize="11" Foreground="#6B7280" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="TxtGeminiStatusDot" TextWrapping="Wrap" Text="●" Foreground="#F59E0B" FontSize="14" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="TxtGeminiStatus" TextWrapping="Wrap" Text="" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="TxtGeminiAccount" TextWrapping="Wrap" Text="" FontSize="11" Foreground="#6B7280" Margin="8,0,0,0" VerticalAlignment="Center"/>
                             </DockPanel>
                         </Border>
 
                         <Border Background="#F9FAFB" BorderBrush="#E5E7EB" BorderThickness="1" CornerRadius="8" Padding="14" Margin="0,0,0,14">
                             <StackPanel>
-                                <TextBlock x:Name="TxtGeminiMethod1Title" Text="方式一：Google AI Studio API Key (推荐，永久有效)" FontWeight="Bold" FontSize="12" Margin="0,0,0,10" Foreground="#16A34A"/>
-                                <TextBlock x:Name="TxtGeminiKeyLabel" Text="API Key (AIzaSy...):" FontSize="11" Margin="0,0,0,4"/>
+                                <TextBlock x:Name="TxtGeminiMethod1Title" TextWrapping="Wrap" Text="方式一：Google AI Studio API Key (推荐，永久有效)" FontWeight="Bold" FontSize="12" Margin="0,0,0,10" Foreground="#16A34A"/>
+                                <TextBlock x:Name="TxtGeminiKeyLabel" TextWrapping="Wrap" Text="API Key (AIzaSy...):" FontSize="11" Margin="0,0,0,4"/>
                                 <TextBox x:Name="TxtGeminiKey" Margin="0,0,0,8" Padding="6"/>
-                                <TextBlock x:Name="TxtGeminiEndpointLabel" Text="API 接入端点:" FontSize="11" Margin="0,0,0,4"/>
+                                <TextBlock x:Name="TxtGeminiEndpointLabel" TextWrapping="Wrap" Text="API 接入端点:" FontSize="11" Margin="0,0,0,4"/>
                                 <TextBox x:Name="TxtGeminiEndpoint" Text="https://generativelanguage.googleapis.com" Margin="0,0,0,10" Padding="6"/>
                                 <StackPanel Orientation="Horizontal">
                                     <Button x:Name="BtnTestGeminiKey" Content="保存并测试连接" Width="130" Height="28" Background="#2563EB" Foreground="White" BorderThickness="0" Margin="0,0,8,0" Click="BtnTestGeminiKey_Click"/>
@@ -256,12 +250,12 @@
 
                         <Border Background="#F9FAFB" BorderBrush="#E5E7EB" BorderThickness="1" CornerRadius="8" Padding="14">
                             <StackPanel>
-                                <TextBlock x:Name="TxtGeminiMethod2Title" Text="方式二：Google 账号授权 / 本地凭证 (Google One / Antigravity)" FontWeight="Bold" FontSize="12" Margin="0,0,0,10"/>
+                                <TextBlock x:Name="TxtGeminiMethod2Title" TextWrapping="Wrap" Text="方式二：Google 账号授权 / 本地凭证 (Google One / Antigravity)" FontWeight="Bold" FontSize="12" Margin="0,0,0,10"/>
                                 <WrapPanel Margin="0,0,0,10">
                                     <Button x:Name="BtnGeminiWebLogin" Content="Google 网站登录授权" Padding="12,6" Background="#2563EB" Foreground="White" BorderThickness="0" Margin="0,0,8,0" Click="BtnGeminiWebLogin_Click"/>
                                     <Button x:Name="BtnImportGeminiLocal" Content="读取本地 Gemini / Antigravity 配置" Padding="10,6" Background="#EFF6FF" BorderBrush="#93C5FD" Foreground="#1D4ED8" Click="BtnImportGeminiLocal_Click"/>
                                 </WrapPanel>
-                                <TextBlock x:Name="TxtGeminiManualTokenLabel" Text="手动输入 Access Token (可选):" FontSize="11" Margin="0,0,0,4"/>
+                                <TextBlock x:Name="TxtGeminiManualTokenLabel" TextWrapping="Wrap" Text="手动输入 Access Token (可选):" FontSize="11" Margin="0,0,0,4"/>
                                 <DockPanel>
                                     <Button x:Name="BtnSaveGeminiToken" Content="保存" Width="70" DockPanel.Dock="Right" Margin="8,0,0,0" Click="BtnSaveGeminiToken_Click"/>
                                     <TextBox x:Name="TxtGeminiToken" Padding="6"/>
@@ -273,37 +267,35 @@
                     <!-- Tab 3: DeepSeek -->
                     <StackPanel x:Name="PnlDeepSeek" Visibility="Collapsed">
                         <DockPanel Margin="0,0,0,16">
-                            <StackPanel Orientation="Horizontal">
-                                <Path x:Name="IconDeepSeek" Width="20" Height="20" Stretch="Uniform" Fill="#9CA3AF" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                                <StackPanel>
-                                    <TextBlock x:Name="TxtDeepSeekTitle" Text="DeepSeek (深度求索) 授权" FontSize="16" FontWeight="Bold" Foreground="#111827"/>
-                                    <TextBlock x:Name="TxtDeepSeekSubtitle" Text="配置 DeepSeek API Key，自动查询账户可用余额与 TPM/RPM 速率限制" FontSize="11" Foreground="#6B7280" Margin="0,3,0,0"/>
-                                </StackPanel>
+                            <CheckBox x:Name="ChkDeepSeekEnabled" Content="启用监控" DockPanel.Dock="Right" VerticalAlignment="Center" FontWeight="SemiBold" Margin="12,0,0,0"/>
+                            <Path x:Name="IconDeepSeek" Width="20" Height="20" Stretch="Uniform" Fill="#9CA3AF" Margin="0,0,8,0" VerticalAlignment="Center" DockPanel.Dock="Left"/>
+                            <StackPanel>
+                                <TextBlock x:Name="TxtDeepSeekTitle" TextWrapping="Wrap" Text="DeepSeek (深度求索) 授权" FontSize="16" FontWeight="Bold" Foreground="#111827"/>
+                                <TextBlock x:Name="TxtDeepSeekSubtitle" TextWrapping="Wrap" Text="配置 DeepSeek API Key，自动查询账户可用余额与 TPM/RPM 速率限制" FontSize="11" Foreground="#6B7280" Margin="0,3,0,0"/>
                             </StackPanel>
-                            <CheckBox x:Name="ChkDeepSeekEnabled" Content="启用监控" HorizontalAlignment="Right" VerticalAlignment="Center" FontWeight="SemiBold"/>
                         </DockPanel>
 
                         <Border Background="#F9FAFB" BorderBrush="#E5E7EB" BorderThickness="1" CornerRadius="8" Padding="12,10" Margin="0,0,0,16">
                             <DockPanel>
-                                <TextBlock x:Name="TxtDeepSeekStatusDot" Text="●" Foreground="#F59E0B" FontSize="14" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                                <TextBlock x:Name="TxtDeepSeekStatus" Text="" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center"/>
-                                <TextBlock x:Name="TxtDeepSeekAccount" Text="" FontSize="11" Foreground="#6B7280" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="TxtDeepSeekStatusDot" TextWrapping="Wrap" Text="●" Foreground="#F59E0B" FontSize="14" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="TxtDeepSeekStatus" TextWrapping="Wrap" Text="" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="TxtDeepSeekAccount" TextWrapping="Wrap" Text="" FontSize="11" Foreground="#6B7280" Margin="8,0,0,0" VerticalAlignment="Center"/>
                             </DockPanel>
                         </Border>
 
-                        <TextBlock x:Name="TxtDeepSeekKeyLabel" Text="DeepSeek API KEY" FontWeight="Medium" FontSize="12" Margin="0,0,0,6"/>
+                        <TextBlock x:Name="TxtDeepSeekKeyLabel" TextWrapping="Wrap" Text="DeepSeek API KEY" FontWeight="Medium" FontSize="12" Margin="0,0,0,6"/>
                         <TextBox x:Name="TxtDeepSeekKey" Margin="0,0,0,4" Padding="6"/>
-                        <TextBlock x:Name="TxtDeepSeekKeyHint" Text="可在 DeepSeek 开放平台 (platform.deepseek.com) -> API Keys 生成。" FontSize="10" Foreground="#6B7280" Margin="0,0,0,14"/>
+                        <TextBlock x:Name="TxtDeepSeekKeyHint" TextWrapping="Wrap" Text="可在 DeepSeek 开放平台 (platform.deepseek.com) -> API Keys 生成。" FontSize="10" Foreground="#6B7280" Margin="0,0,0,14"/>
 
-                        <TextBlock x:Name="TxtDeepSeekEndpointLabel" Text="API 接入端点" FontWeight="Medium" FontSize="12" Margin="0,0,0,6"/>
+                        <TextBlock x:Name="TxtDeepSeekEndpointLabel" TextWrapping="Wrap" Text="API 接入端点" FontWeight="Medium" FontSize="12" Margin="0,0,0,6"/>
                         <TextBox x:Name="TxtDeepSeekEndpoint" Text="https://api.deepseek.com/v1" Margin="0,0,0,14" Padding="6"/>
 
-                        <TextBlock x:Name="TxtDeepSeekModelLabel" Text="默认模型名称" FontWeight="Medium" FontSize="12" Margin="0,0,0,6"/>
+                        <TextBlock x:Name="TxtDeepSeekModelLabel" TextWrapping="Wrap" Text="默认模型名称" FontWeight="Medium" FontSize="12" Margin="0,0,0,6"/>
                         <TextBox x:Name="TxtDeepSeekModel" Text="deepseek-chat" Margin="0,0,0,14" Padding="6"/>
 
-                        <TextBlock x:Name="TxtDeepSeekThresholdLabel" Text="余额提醒阈值 (按账户币种)" FontWeight="Medium" FontSize="12" Margin="0,0,0,6"/>
+                        <TextBlock x:Name="TxtDeepSeekThresholdLabel" TextWrapping="Wrap" Text="余额提醒阈值 (按账户币种)" FontWeight="Medium" FontSize="12" Margin="0,0,0,6"/>
                         <TextBox x:Name="TxtDeepSeekThreshold" Text="10" Margin="0,0,0,4" Padding="6"/>
-                        <TextBlock x:Name="TxtDeepSeekThresholdHint" Text="余额低于该值时托盘气泡提醒，并在额度卡片中变为橙/红色。" FontSize="10" Foreground="#6B7280" Margin="0,0,0,14"/>
+                        <TextBlock x:Name="TxtDeepSeekThresholdHint" TextWrapping="Wrap" Text="余额低于该值时托盘气泡提醒，并在额度卡片中变为橙/红色。" FontSize="10" Foreground="#6B7280" Margin="0,0,0,14"/>
 
                         <Button x:Name="BtnTestDeepSeek" Content="保存并测试连接" Width="140" Height="32" HorizontalAlignment="Left" Background="#2563EB" Foreground="White" BorderThickness="0" Click="BtnTestDeepSeek_Click"/>
                     </StackPanel>
@@ -311,31 +303,29 @@
                     <!-- Tab 4: Volcengine -->
                     <StackPanel x:Name="PnlVolcengine" Visibility="Collapsed">
                         <DockPanel Margin="0,0,0,16">
-                            <StackPanel Orientation="Horizontal">
-                                <Path x:Name="IconVolcengine" Width="20" Height="20" Stretch="Uniform" Fill="#9CA3AF" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                                <StackPanel>
-                                    <TextBlock x:Name="TxtVolcengineTitle" Text="火山方舟 (字节跳动)" FontSize="16" FontWeight="Bold" Foreground="#111827"/>
-                                    <TextBlock x:Name="TxtVolcengineSubtitle" Text="配置火山方舟 API Key，监控大模型接入点与调用配额" FontSize="11" Foreground="#6B7280" Margin="0,3,0,0"/>
-                                </StackPanel>
+                            <CheckBox x:Name="ChkVolcengineEnabled" Content="启用监控" DockPanel.Dock="Right" VerticalAlignment="Center" FontWeight="SemiBold" Margin="12,0,0,0"/>
+                            <Path x:Name="IconVolcengine" Width="20" Height="20" Stretch="Uniform" Fill="#9CA3AF" Margin="0,0,8,0" VerticalAlignment="Center" DockPanel.Dock="Left"/>
+                            <StackPanel>
+                                <TextBlock x:Name="TxtVolcengineTitle" TextWrapping="Wrap" Text="火山方舟 (字节跳动)" FontSize="16" FontWeight="Bold" Foreground="#111827"/>
+                                <TextBlock x:Name="TxtVolcengineSubtitle" TextWrapping="Wrap" Text="配置火山方舟 API Key，监控大模型接入点与调用配额" FontSize="11" Foreground="#6B7280" Margin="0,3,0,0"/>
                             </StackPanel>
-                            <CheckBox x:Name="ChkVolcengineEnabled" Content="启用监控" HorizontalAlignment="Right" VerticalAlignment="Center" FontWeight="SemiBold"/>
                         </DockPanel>
 
                         <Border Background="#F9FAFB" BorderBrush="#E5E7EB" BorderThickness="1" CornerRadius="8" Padding="12,10" Margin="0,0,0,16">
                             <DockPanel>
-                                <TextBlock x:Name="TxtVolcengineStatusDot" Text="●" Foreground="#F59E0B" FontSize="14" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                                <TextBlock x:Name="TxtVolcengineStatus" Text="" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center"/>
-                                <TextBlock x:Name="TxtVolcengineAccount" Text="" FontSize="11" Foreground="#6B7280" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="TxtVolcengineStatusDot" TextWrapping="Wrap" Text="●" Foreground="#F59E0B" FontSize="14" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="TxtVolcengineStatus" TextWrapping="Wrap" Text="" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="TxtVolcengineAccount" TextWrapping="Wrap" Text="" FontSize="11" Foreground="#6B7280" Margin="8,0,0,0" VerticalAlignment="Center"/>
                             </DockPanel>
                         </Border>
 
-                        <TextBlock x:Name="TxtVolcengineKeyLabel" Text="火山方舟 API Key" FontWeight="Medium" FontSize="12" Margin="0,0,0,6"/>
+                        <TextBlock x:Name="TxtVolcengineKeyLabel" TextWrapping="Wrap" Text="火山方舟 API Key" FontWeight="Medium" FontSize="12" Margin="0,0,0,6"/>
                         <TextBox x:Name="TxtVolcengineKey" Margin="0,0,0,14" Padding="6"/>
 
-                        <TextBlock x:Name="TxtVolcengineEndpointLabel" Text="API 接入端点" FontWeight="Medium" FontSize="12" Margin="0,0,0,6"/>
+                        <TextBlock x:Name="TxtVolcengineEndpointLabel" TextWrapping="Wrap" Text="API 接入端点" FontWeight="Medium" FontSize="12" Margin="0,0,0,6"/>
                         <TextBox x:Name="TxtVolcengineEndpoint" Text="https://ark.cn-beijing.volces.com/api/v3" Margin="0,0,0,14" Padding="6"/>
 
-                        <TextBlock x:Name="TxtVolcengineModelLabel" Text="模型接入点 ID (Endpoint / Model, 选填)" FontWeight="Medium" FontSize="12" Margin="0,0,0,6"/>
+                        <TextBlock x:Name="TxtVolcengineModelLabel" TextWrapping="Wrap" Text="模型接入点 ID (Endpoint / Model, 选填)" FontWeight="Medium" FontSize="12" Margin="0,0,0,6"/>
                         <TextBox x:Name="TxtVolcengineModel" Margin="0,0,0,18" Padding="6"/>
 
                         <Button x:Name="BtnTestVolcengine" Content="保存并测试连接" Width="140" Height="32" HorizontalAlignment="Left" Background="#2563EB" Foreground="White" BorderThickness="0" Click="BtnTestVolcengine_Click"/>
@@ -344,36 +334,34 @@
                     <!-- Tab 5: Kimi -->
                     <StackPanel x:Name="PnlKimi" Visibility="Collapsed">
                         <DockPanel Margin="0,0,0,16">
-                            <StackPanel Orientation="Horizontal">
-                                <Path x:Name="IconKimi" Width="20" Height="20" Stretch="Uniform" Fill="#9CA3AF" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                                <StackPanel>
-                                    <TextBlock x:Name="TxtKimiTitle" Text="KIMI (月之暗面)" FontSize="16" FontWeight="Bold" Foreground="#111827"/>
-                                    <TextBlock x:Name="TxtKimiSubtitle" Text="配置 Moonshot API Key，查询账户余额与 RPM/TPM 限额" FontSize="11" Foreground="#6B7280" Margin="0,3,0,0"/>
-                                </StackPanel>
+                            <CheckBox x:Name="ChkKimiEnabled" Content="启用监控" DockPanel.Dock="Right" VerticalAlignment="Center" FontWeight="SemiBold" Margin="12,0,0,0"/>
+                            <Path x:Name="IconKimi" Width="20" Height="20" Stretch="Uniform" Fill="#9CA3AF" Margin="0,0,8,0" VerticalAlignment="Center" DockPanel.Dock="Left"/>
+                            <StackPanel>
+                                <TextBlock x:Name="TxtKimiTitle" TextWrapping="Wrap" Text="KIMI (月之暗面)" FontSize="16" FontWeight="Bold" Foreground="#111827"/>
+                                <TextBlock x:Name="TxtKimiSubtitle" TextWrapping="Wrap" Text="配置 Moonshot API Key，查询账户余额与 RPM/TPM 限额" FontSize="11" Foreground="#6B7280" Margin="0,3,0,0"/>
                             </StackPanel>
-                            <CheckBox x:Name="ChkKimiEnabled" Content="启用监控" HorizontalAlignment="Right" VerticalAlignment="Center" FontWeight="SemiBold"/>
                         </DockPanel>
 
                         <Border Background="#F9FAFB" BorderBrush="#E5E7EB" BorderThickness="1" CornerRadius="8" Padding="12,10" Margin="0,0,0,16">
                             <DockPanel>
-                                <TextBlock x:Name="TxtKimiStatusDot" Text="●" Foreground="#F59E0B" FontSize="14" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                                <TextBlock x:Name="TxtKimiStatus" Text="" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center"/>
-                                <TextBlock x:Name="TxtKimiAccount" Text="" FontSize="11" Foreground="#6B7280" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="TxtKimiStatusDot" TextWrapping="Wrap" Text="●" Foreground="#F59E0B" FontSize="14" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="TxtKimiStatus" TextWrapping="Wrap" Text="" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="TxtKimiAccount" TextWrapping="Wrap" Text="" FontSize="11" Foreground="#6B7280" Margin="8,0,0,0" VerticalAlignment="Center"/>
                             </DockPanel>
                         </Border>
 
-                        <TextBlock x:Name="TxtKimiKeyLabel" Text="Moonshot API Key" FontWeight="Medium" FontSize="12" Margin="0,0,0,6"/>
+                        <TextBlock x:Name="TxtKimiKeyLabel" TextWrapping="Wrap" Text="Moonshot API Key" FontWeight="Medium" FontSize="12" Margin="0,0,0,6"/>
                         <TextBox x:Name="TxtKimiKey" Margin="0,0,0,14" Padding="6"/>
 
-                        <TextBlock x:Name="TxtKimiEndpointLabel" Text="API 接入端点" FontWeight="Medium" FontSize="12" Margin="0,0,0,6"/>
+                        <TextBlock x:Name="TxtKimiEndpointLabel" TextWrapping="Wrap" Text="API 接入端点" FontWeight="Medium" FontSize="12" Margin="0,0,0,6"/>
                         <TextBox x:Name="TxtKimiEndpoint" Text="https://api.moonshot.cn/v1" Margin="0,0,0,14" Padding="6"/>
 
-                        <TextBlock x:Name="TxtKimiModelLabel" Text="模型名称" FontWeight="Medium" FontSize="12" Margin="0,0,0,6"/>
+                        <TextBlock x:Name="TxtKimiModelLabel" TextWrapping="Wrap" Text="模型名称" FontWeight="Medium" FontSize="12" Margin="0,0,0,6"/>
                         <TextBox x:Name="TxtKimiModel" Text="moonshot-v1-8k" Margin="0,0,0,14" Padding="6"/>
 
-                        <TextBlock x:Name="TxtKimiThresholdLabel" Text="余额提醒阈值 (按账户币种)" FontWeight="Medium" FontSize="12" Margin="0,0,0,6"/>
+                        <TextBlock x:Name="TxtKimiThresholdLabel" TextWrapping="Wrap" Text="余额提醒阈值 (按账户币种)" FontWeight="Medium" FontSize="12" Margin="0,0,0,6"/>
                         <TextBox x:Name="TxtKimiThreshold" Text="10" Margin="0,0,0,4" Padding="6"/>
-                        <TextBlock x:Name="TxtKimiThresholdHint" Text="余额低于该值时托盘气泡提醒，并在额度卡片中变为橙/红色。" FontSize="10" Foreground="#6B7280" Margin="0,0,0,14"/>
+                        <TextBlock x:Name="TxtKimiThresholdHint" TextWrapping="Wrap" Text="余额低于该值时托盘气泡提醒，并在额度卡片中变为橙/红色。" FontSize="10" Foreground="#6B7280" Margin="0,0,0,14"/>
 
                         <Button x:Name="BtnTestKimi" Content="保存并测试连接" Width="140" Height="32" HorizontalAlignment="Left" Background="#2563EB" Foreground="White" BorderThickness="0" Click="BtnTestKimi_Click"/>
                     </StackPanel>
@@ -381,34 +369,32 @@
                     <!-- Tab 6: OpenRouter -->
                     <StackPanel x:Name="PnlOpenRouter" Visibility="Collapsed">
                         <DockPanel Margin="0,0,0,16">
-                            <StackPanel Orientation="Horizontal">
-                                <Path x:Name="IconOpenRouter" Width="20" Height="20" Stretch="Uniform" Fill="#9CA3AF" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                                <StackPanel>
-                                    <TextBlock x:Name="TxtOpenRouterTitle" Text="OpenRouter" FontSize="16" FontWeight="Bold" Foreground="#111827"/>
-                                    <TextBlock x:Name="TxtOpenRouterSubtitle" Text="纯按量扣费聚合平台，监控美元账户余额（查询余额需 Management Key）" FontSize="11" Foreground="#6B7280" Margin="0,3,0,0"/>
-                                </StackPanel>
+                            <CheckBox x:Name="ChkOpenRouterEnabled" Content="启用监控" DockPanel.Dock="Right" VerticalAlignment="Center" FontWeight="SemiBold" Margin="12,0,0,0"/>
+                            <Path x:Name="IconOpenRouter" Width="20" Height="20" Stretch="Uniform" Fill="#9CA3AF" Margin="0,0,8,0" VerticalAlignment="Center" DockPanel.Dock="Left"/>
+                            <StackPanel>
+                                <TextBlock x:Name="TxtOpenRouterTitle" TextWrapping="Wrap" Text="OpenRouter" FontSize="16" FontWeight="Bold" Foreground="#111827"/>
+                                <TextBlock x:Name="TxtOpenRouterSubtitle" TextWrapping="Wrap" Text="纯按量扣费聚合平台，监控美元账户余额（查询余额需 Management Key）" FontSize="11" Foreground="#6B7280" Margin="0,3,0,0"/>
                             </StackPanel>
-                            <CheckBox x:Name="ChkOpenRouterEnabled" Content="启用监控" HorizontalAlignment="Right" VerticalAlignment="Center" FontWeight="SemiBold"/>
                         </DockPanel>
 
                         <Border Background="#F9FAFB" BorderBrush="#E5E7EB" BorderThickness="1" CornerRadius="8" Padding="12,10" Margin="0,0,0,16">
                             <DockPanel>
-                                <TextBlock x:Name="TxtOpenRouterStatusDot" Text="●" Foreground="#F59E0B" FontSize="14" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                                <TextBlock x:Name="TxtOpenRouterStatus" Text="" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center"/>
-                                <TextBlock x:Name="TxtOpenRouterAccount" Text="" FontSize="11" Foreground="#6B7280" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="TxtOpenRouterStatusDot" TextWrapping="Wrap" Text="●" Foreground="#F59E0B" FontSize="14" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="TxtOpenRouterStatus" TextWrapping="Wrap" Text="" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="TxtOpenRouterAccount" TextWrapping="Wrap" Text="" FontSize="11" Foreground="#6B7280" Margin="8,0,0,0" VerticalAlignment="Center"/>
                             </DockPanel>
                         </Border>
 
-                        <TextBlock x:Name="TxtOpenRouterKeyLabel" Text="API KEY" FontWeight="Medium" FontSize="12" Margin="0,0,0,6"/>
+                        <TextBlock x:Name="TxtOpenRouterKeyLabel" TextWrapping="Wrap" Text="API KEY" FontWeight="Medium" FontSize="12" Margin="0,0,0,6"/>
                         <TextBox x:Name="TxtOpenRouterKey" Margin="0,0,0,4" Padding="6"/>
-                        <TextBlock x:Name="TxtOpenRouterKeyHint" Text="可在 openrouter.ai/keys 创建。" FontSize="10" Foreground="#6B7280" Margin="0,0,0,14"/>
+                        <TextBlock x:Name="TxtOpenRouterKeyHint" TextWrapping="Wrap" Text="可在 openrouter.ai/keys 创建。" FontSize="10" Foreground="#6B7280" Margin="0,0,0,14"/>
 
-                        <TextBlock x:Name="TxtOpenRouterEndpointLabel" Text="API 接入端点" FontWeight="Medium" FontSize="12" Margin="0,0,0,6"/>
+                        <TextBlock x:Name="TxtOpenRouterEndpointLabel" TextWrapping="Wrap" Text="API 接入端点" FontWeight="Medium" FontSize="12" Margin="0,0,0,6"/>
                         <TextBox x:Name="TxtOpenRouterEndpoint" Text="https://openrouter.ai/api/v1" Margin="0,0,0,14" Padding="6"/>
 
-                        <TextBlock x:Name="TxtOpenRouterThresholdLabel" Text="余额提醒阈值 (按账户币种)" FontWeight="Medium" FontSize="12" Margin="0,0,0,6"/>
+                        <TextBlock x:Name="TxtOpenRouterThresholdLabel" TextWrapping="Wrap" Text="余额提醒阈值 (按账户币种)" FontWeight="Medium" FontSize="12" Margin="0,0,0,6"/>
                         <TextBox x:Name="TxtOpenRouterThreshold" Text="5" Margin="0,0,0,4" Padding="6"/>
-                        <TextBlock x:Name="TxtOpenRouterThresholdHint" Text="余额低于该值时托盘气泡提醒，并在额度卡片中变为橙/红色。" FontSize="10" Foreground="#6B7280" Margin="0,0,0,14"/>
+                        <TextBlock x:Name="TxtOpenRouterThresholdHint" TextWrapping="Wrap" Text="余额低于该值时托盘气泡提醒，并在额度卡片中变为橙/红色。" FontSize="10" Foreground="#6B7280" Margin="0,0,0,14"/>
 
                         <Button x:Name="BtnTestOpenRouter" Content="保存并测试连接" Width="140" Height="32" HorizontalAlignment="Left" Background="#2563EB" Foreground="White" BorderThickness="0" Click="BtnTestOpenRouter_Click"/>
                     </StackPanel>
@@ -416,28 +402,26 @@
                     <!-- Tab 6: GLM -->
                     <StackPanel x:Name="PnlGLM" Visibility="Collapsed">
                         <DockPanel Margin="0,0,0,16">
-                            <StackPanel Orientation="Horizontal">
-                                <Path x:Name="IconGLM" Width="20" Height="20" Stretch="Uniform" Fill="#9CA3AF" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                                <StackPanel>
-                                    <TextBlock x:Name="TxtGLMTitle" Text="GLM (智谱清言)" FontSize="16" FontWeight="Bold" Foreground="#111827"/>
-                                    <TextBlock x:Name="TxtGLMSubtitle" Text="配置智谱 BigModel API Key，实时监测账户与接口状态" FontSize="11" Foreground="#6B7280" Margin="0,3,0,0"/>
-                                </StackPanel>
+                            <CheckBox x:Name="ChkGLMEnabled" Content="启用监控" DockPanel.Dock="Right" VerticalAlignment="Center" FontWeight="SemiBold" Margin="12,0,0,0"/>
+                            <Path x:Name="IconGLM" Width="20" Height="20" Stretch="Uniform" Fill="#9CA3AF" Margin="0,0,8,0" VerticalAlignment="Center" DockPanel.Dock="Left"/>
+                            <StackPanel>
+                                <TextBlock x:Name="TxtGLMTitle" TextWrapping="Wrap" Text="GLM (智谱清言)" FontSize="16" FontWeight="Bold" Foreground="#111827"/>
+                                <TextBlock x:Name="TxtGLMSubtitle" TextWrapping="Wrap" Text="配置智谱 BigModel API Key，实时监测账户与接口状态" FontSize="11" Foreground="#6B7280" Margin="0,3,0,0"/>
                             </StackPanel>
-                            <CheckBox x:Name="ChkGLMEnabled" Content="启用监控" HorizontalAlignment="Right" VerticalAlignment="Center" FontWeight="SemiBold"/>
                         </DockPanel>
 
                         <Border Background="#F9FAFB" BorderBrush="#E5E7EB" BorderThickness="1" CornerRadius="8" Padding="12,10" Margin="0,0,0,16">
                             <DockPanel>
-                                <TextBlock x:Name="TxtGLMStatusDot" Text="●" Foreground="#F59E0B" FontSize="14" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                                <TextBlock x:Name="TxtGLMStatus" Text="" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center"/>
-                                <TextBlock x:Name="TxtGLMAccount" Text="" FontSize="11" Foreground="#6B7280" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="TxtGLMStatusDot" TextWrapping="Wrap" Text="●" Foreground="#F59E0B" FontSize="14" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="TxtGLMStatus" TextWrapping="Wrap" Text="" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="TxtGLMAccount" TextWrapping="Wrap" Text="" FontSize="11" Foreground="#6B7280" Margin="8,0,0,0" VerticalAlignment="Center"/>
                             </DockPanel>
                         </Border>
 
-                        <TextBlock x:Name="TxtGLMKeyLabel" Text="智谱 BigModel API Key" FontWeight="Medium" FontSize="12" Margin="0,0,0,6"/>
+                        <TextBlock x:Name="TxtGLMKeyLabel" TextWrapping="Wrap" Text="智谱 BigModel API Key" FontWeight="Medium" FontSize="12" Margin="0,0,0,6"/>
                         <TextBox x:Name="TxtGLMKey" Margin="0,0,0,14" Padding="6"/>
 
-                        <TextBlock x:Name="TxtGLMEndpointLabel" Text="API 接入端点" FontWeight="Medium" FontSize="12" Margin="0,0,0,6"/>
+                        <TextBlock x:Name="TxtGLMEndpointLabel" TextWrapping="Wrap" Text="API 接入端点" FontWeight="Medium" FontSize="12" Margin="0,0,0,6"/>
                         <TextBox x:Name="TxtGLMEndpoint" Text="https://open.bigmodel.cn/api/v1" Margin="0,0,0,18" Padding="6"/>
 
                         <Button x:Name="BtnTestGLM" Content="保存并测试连接" Width="140" Height="32" HorizontalAlignment="Left" Background="#2563EB" Foreground="White" BorderThickness="0" Click="BtnTestGLM_Click"/>
@@ -446,28 +430,26 @@
                     <!-- Tab 7: Aliyun -->
                     <StackPanel x:Name="PnlAliyun" Visibility="Collapsed">
                         <DockPanel Margin="0,0,0,16">
-                            <StackPanel Orientation="Horizontal">
-                                <Path x:Name="IconAliyun" Width="20" Height="20" Stretch="Uniform" Fill="#9CA3AF" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                                <StackPanel>
-                                    <TextBlock x:Name="TxtAliyunTitle" Text="阿里云百炼 (Token Plan)" FontSize="16" FontWeight="Bold" Foreground="#111827"/>
-                                    <TextBlock x:Name="TxtAliyunSubtitle" Text="配置百炼 CLI 或控制台 Cookie，实时同步 7天与 5小时周期额度" FontSize="11" Foreground="#6B7280" Margin="0,3,0,0"/>
-                                </StackPanel>
+                            <CheckBox x:Name="ChkAliyunEnabled" Content="启用监控" DockPanel.Dock="Right" VerticalAlignment="Center" FontWeight="SemiBold" Margin="12,0,0,0"/>
+                            <Path x:Name="IconAliyun" Width="20" Height="20" Stretch="Uniform" Fill="#9CA3AF" Margin="0,0,8,0" VerticalAlignment="Center" DockPanel.Dock="Left"/>
+                            <StackPanel>
+                                <TextBlock x:Name="TxtAliyunTitle" TextWrapping="Wrap" Text="阿里云百炼 (Token Plan)" FontSize="16" FontWeight="Bold" Foreground="#111827"/>
+                                <TextBlock x:Name="TxtAliyunSubtitle" TextWrapping="Wrap" Text="配置百炼 CLI 或控制台 Cookie，实时同步 7天与 5小时周期额度" FontSize="11" Foreground="#6B7280" Margin="0,3,0,0"/>
                             </StackPanel>
-                            <CheckBox x:Name="ChkAliyunEnabled" Content="启用监控" HorizontalAlignment="Right" VerticalAlignment="Center" FontWeight="SemiBold"/>
                         </DockPanel>
 
                         <Border Background="#F9FAFB" BorderBrush="#E5E7EB" BorderThickness="1" CornerRadius="8" Padding="12,10" Margin="0,0,0,16">
                             <DockPanel>
-                                <TextBlock x:Name="TxtAliyunStatusDot" Text="●" Foreground="#F59E0B" FontSize="14" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                                <TextBlock x:Name="TxtAliyunStatus" Text="" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center"/>
-                                <TextBlock x:Name="TxtAliyunAccount" Text="" FontSize="11" Foreground="#6B7280" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="TxtAliyunStatusDot" TextWrapping="Wrap" Text="●" Foreground="#F59E0B" FontSize="14" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="TxtAliyunStatus" TextWrapping="Wrap" Text="" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="TxtAliyunAccount" TextWrapping="Wrap" Text="" FontSize="11" Foreground="#6B7280" Margin="8,0,0,0" VerticalAlignment="Center"/>
                             </DockPanel>
                         </Border>
 
                         <Border Background="#F9FAFB" BorderBrush="#E5E7EB" BorderThickness="1" CornerRadius="8" Padding="14" Margin="0,0,0,14">
                             <StackPanel>
-                                <TextBlock x:Name="TxtAliyunMethod1Title" Text="方式一：百炼官方 CLI (`bl`) (推荐)" FontWeight="Bold" FontSize="12" Margin="0,0,0,8"/>
-                                <TextBlock x:Name="TxtAliyunMethod1Desc" Text="百炼 Token Plan 仅支持 CLI 或控制台 Cookie 读取，OpenAI 兼容接口不支持配额查询。" FontSize="11" Foreground="#6B7280" Margin="0,0,0,10"/>
+                                <TextBlock x:Name="TxtAliyunMethod1Title" TextWrapping="Wrap" Text="方式一：百炼官方 CLI (`bl`) (推荐)" FontWeight="Bold" FontSize="12" Margin="0,0,0,8"/>
+                                <TextBlock x:Name="TxtAliyunMethod1Desc" TextWrapping="Wrap" Text="百炼 Token Plan 仅支持 CLI 或控制台 Cookie 读取，OpenAI 兼容接口不支持配额查询。" FontSize="11" Foreground="#6B7280" Margin="0,0,0,10"/>
                                 <WrapPanel>
                                     <Button x:Name="BtnOpenAliyunCLI" Content="打开终端登录 CLI (`bl auth login --console`)" Padding="10,6" Background="#EFF6FF" BorderBrush="#93C5FD" Foreground="#1D4ED8" Margin="0,0,8,0" Click="BtnOpenAliyunCLI_Click"/>
                                     <Button x:Name="BtnTestAliyunCLI" Content="测试 CLI 配额读取" Padding="10,6" Background="#F3F4F6" BorderBrush="#D1D5DB" Click="BtnTestAliyunCLI_Click"/>
@@ -477,8 +459,8 @@
 
                         <Border Background="#F9FAFB" BorderBrush="#E5E7EB" BorderThickness="1" CornerRadius="8" Padding="14">
                             <StackPanel>
-                                <TextBlock x:Name="TxtAliyunMethod2Title" Text="方式二：控制台网页 Cookie 授权 (备用)" FontWeight="Bold" FontSize="12" Margin="0,0,0,8"/>
-                                <TextBlock x:Name="TxtAliyunCookieLabel" Text="控制台 Cookie:" FontSize="11" Margin="0,0,0,4"/>
+                                <TextBlock x:Name="TxtAliyunMethod2Title" TextWrapping="Wrap" Text="方式二：控制台网页 Cookie 授权 (备用)" FontWeight="Bold" FontSize="12" Margin="0,0,0,8"/>
+                                <TextBlock x:Name="TxtAliyunCookieLabel" TextWrapping="Wrap" Text="控制台 Cookie:" FontSize="11" Margin="0,0,0,4"/>
                                 <TextBox x:Name="TxtAliyunCookie" Margin="0,0,0,10" Padding="6"/>
                                 <Button x:Name="BtnTestAliyunCookie" Content="保存 Cookie 并测试连接" Width="160" Height="28" HorizontalAlignment="Left" Background="#F3F4F6" BorderBrush="#D1D5DB" Click="BtnTestAliyunCookie_Click"/>
                             </StackPanel>
@@ -488,20 +470,18 @@
                     <!-- Tab 8: Custom Providers -->
                     <StackPanel x:Name="PnlCustom" Visibility="Collapsed">
                         <DockPanel Margin="0,0,0,14">
-                            <StackPanel Orientation="Horizontal">
-                                <Path x:Name="IconCustom" Width="20" Height="20" Stretch="Uniform" Fill="#9CA3AF" Margin="0,0,8,0" VerticalAlignment="Center"/>
-                                <StackPanel>
-                                    <TextBlock x:Name="TxtCustomTitle" Text="国内厂商 / 自定义接口" FontSize="16" FontWeight="Bold" Foreground="#111827"/>
-                                    <TextBlock x:Name="TxtCustomSubtitle" Text="支持 OpenAI Chat、OpenAI Response 或 Anthropic 兼容协议" FontSize="11" Foreground="#6B7280" Margin="0,3,0,0"/>
-                                </StackPanel>
+                            <Button x:Name="BtnAddCustom" Content="＋ 添加新厂商" Padding="10,5" Background="#2563EB" Foreground="White" BorderThickness="0" DockPanel.Dock="Right" VerticalAlignment="Center" Cursor="Hand" Click="BtnAddCustomProvider_Click" Margin="12,0,0,0"/>
+                            <Path x:Name="IconCustom" Width="20" Height="20" Stretch="Uniform" Fill="#9CA3AF" Margin="0,0,8,0" VerticalAlignment="Center" DockPanel.Dock="Left"/>
+                            <StackPanel>
+                                <TextBlock x:Name="TxtCustomTitle" TextWrapping="Wrap" Text="国内厂商 / 自定义接口" FontSize="16" FontWeight="Bold" Foreground="#111827"/>
+                                <TextBlock x:Name="TxtCustomSubtitle" TextWrapping="Wrap" Text="支持 OpenAI Chat、OpenAI Response 或 Anthropic 兼容协议" FontSize="11" Foreground="#6B7280" Margin="0,3,0,0"/>
                             </StackPanel>
-                            <Button x:Name="BtnAddCustom" Content="＋ 添加新厂商" Padding="10,5" Background="#2563EB" Foreground="White" BorderThickness="0" HorizontalAlignment="Right" VerticalAlignment="Center" Cursor="Hand" Click="BtnAddCustomProvider_Click"/>
                         </DockPanel>
 
                         <!-- Presets Dropdown -->
                         <Border Background="#F3F4F6" CornerRadius="8" Padding="12,10" Margin="0,0,0,16">
                             <DockPanel>
-                                <TextBlock x:Name="TxtQuickFillPresets" Text="快捷预填常用国内厂商:" FontWeight="Medium" FontSize="11" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                <TextBlock x:Name="TxtQuickFillPresets" TextWrapping="Wrap" Text="快捷预填常用国内厂商:" FontWeight="Medium" FontSize="11" VerticalAlignment="Center" Margin="0,0,10,0"/>
                                 <ComboBox x:Name="CmbPresets" Width="220" HorizontalAlignment="Left" SelectionChanged="CmbPresets_SelectionChanged">
                                     <ComboBoxItem Content="-- Select Preset Template --"/>
                                 </ComboBox>
@@ -514,33 +494,33 @@
                         <!-- Add / Edit Modal Card -->
                         <Border x:Name="BdCustomForm" Visibility="Collapsed" Background="#FFFFFF" BorderBrush="#3B82F6" BorderThickness="2" CornerRadius="10" Padding="16" Margin="0,10,0,0">
                             <StackPanel>
-                                <TextBlock x:Name="TxtCustomFormTitle" Text="Add Provider" FontSize="14" FontWeight="Bold" Margin="0,0,0,12"/>
+                                <TextBlock x:Name="TxtCustomFormTitle" TextWrapping="Wrap" Text="Add Provider" FontSize="14" FontWeight="Bold" Margin="0,0,0,12"/>
 
-                                <TextBlock x:Name="TxtCustomNameLabel" Text="厂商名称:" FontSize="11" Margin="0,0,0,4"/>
+                                <TextBlock x:Name="TxtCustomNameLabel" TextWrapping="Wrap" Text="厂商名称:" FontSize="11" Margin="0,0,0,4"/>
                                 <TextBox x:Name="TxtCustomName" Margin="0,0,0,10" Padding="6"/>
 
-                                <TextBlock x:Name="TxtCustomProtocolLabel" Text="接口协议类型:" FontSize="11" Margin="0,0,0,4"/>
+                                <TextBlock x:Name="TxtCustomProtocolLabel" TextWrapping="Wrap" Text="接口协议类型:" FontSize="11" Margin="0,0,0,4"/>
                                 <ComboBox x:Name="CmbCustomProtocol" Margin="0,0,0,10">
                                     <ComboBoxItem Content="OpenAI Chat Completions (/v1/chat/completions)"/>
                                     <ComboBoxItem Content="OpenAI Responses Protocol (/v1/responses)"/>
                                     <ComboBoxItem Content="Anthropic Messages Protocol (/v1/messages)"/>
                                 </ComboBox>
 
-                                <TextBlock x:Name="TxtCustomKeyLabel" Text="API KEY:" FontSize="11" Margin="0,0,0,4"/>
+                                <TextBlock x:Name="TxtCustomKeyLabel" TextWrapping="Wrap" Text="API KEY:" FontSize="11" Margin="0,0,0,4"/>
                                 <TextBox x:Name="TxtCustomKey" Margin="0,0,0,10" Padding="6"/>
 
-                                <TextBlock x:Name="TxtCustomEndpointLabel" Text="API 接入端点 (Base URL):" FontSize="11" Margin="0,0,0,4"/>
+                                <TextBlock x:Name="TxtCustomEndpointLabel" TextWrapping="Wrap" Text="API 接入端点 (Base URL):" FontSize="11" Margin="0,0,0,4"/>
                                 <TextBox x:Name="TxtCustomEndpoint" Margin="0,0,0,10" Padding="6"/>
 
-                                <TextBlock x:Name="TxtCustomModelLabel" Text="默认模型名称 (选填):" FontSize="11" Margin="0,0,0,4"/>
+                                <TextBlock x:Name="TxtCustomModelLabel" TextWrapping="Wrap" Text="默认模型名称 (选填):" FontSize="11" Margin="0,0,0,4"/>
                                 <TextBox x:Name="TxtCustomModel" Margin="0,0,0,10" Padding="6"/>
 
-                                <TextBlock x:Name="TxtCustomThresholdLabel" Text="余额提醒阈值 (选填，按账户币种):" FontSize="11" Margin="0,0,0,4"/>
+                                <TextBlock x:Name="TxtCustomThresholdLabel" TextWrapping="Wrap" Text="余额提醒阈值 (选填，按账户币种):" FontSize="11" Margin="0,0,0,4"/>
                                 <TextBox x:Name="TxtCustomThreshold" Margin="0,0,0,10" Padding="6"/>
 
-                                <TextBlock x:Name="TxtCustomCookieLabel" Text="控制台 Cookie (选填)" FontSize="11" Margin="0,0,0,4"/>
+                                <TextBlock x:Name="TxtCustomCookieLabel" TextWrapping="Wrap" Text="控制台 Cookie (选填)" FontSize="11" Margin="0,0,0,4"/>
                                 <TextBox x:Name="TxtCustomCookie" Margin="0,0,0,4" Padding="6"/>
-                                <TextBlock x:Name="TxtCustomCookieHint" Text="小米 MiMo 等厂商的余额与套餐用量查询需要官网登录态。" FontSize="10" Foreground="#6B7280" Margin="0,0,0,14"/>
+                                <TextBlock x:Name="TxtCustomCookieHint" TextWrapping="Wrap" Text="小米 MiMo 等厂商的余额与套餐用量查询需要官网登录态。" FontSize="10" Foreground="#6B7280" Margin="0,0,0,14"/>
 
                                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                                     <Button x:Name="BtnCancelCustomForm" Content="取消" Width="70" Height="28" Margin="0,0,8,0" Background="#F3F4F6" BorderBrush="#D1D5DB" Click="BtnCancelCustomForm_Click"/>
@@ -555,28 +535,28 @@
                         <StackPanel Orientation="Horizontal">
                             <Path x:Name="IconGeneral" Width="20" Height="20" Stretch="Uniform" Fill="#9CA3AF" Margin="0,0,8,0" VerticalAlignment="Center"/>
                             <StackPanel>
-                                <TextBlock x:Name="TxtGeneralTitle" Text="通用偏好设置" FontSize="16" FontWeight="Bold" Foreground="#111827" Margin="0,0,0,4"/>
-                                <TextBlock x:Name="TxtGeneralSubtitle" Text="应用基础偏好与自启动配置" FontSize="11" Foreground="#6B7280" Margin="0,0,0,16"/>
+                                <TextBlock x:Name="TxtGeneralTitle" TextWrapping="Wrap" Text="通用偏好设置" FontSize="16" FontWeight="Bold" Foreground="#111827" Margin="0,0,0,4"/>
+                                <TextBlock x:Name="TxtGeneralSubtitle" TextWrapping="Wrap" Text="应用基础偏好与自启动配置" FontSize="11" Foreground="#6B7280" Margin="0,0,0,16"/>
                             </StackPanel>
                         </StackPanel>
 
                         <Border Background="#F9FAFB" BorderBrush="#E5E7EB" BorderThickness="1" CornerRadius="8" Padding="16" Margin="0,0,0,16">
                             <StackPanel>
-                                <TextBlock x:Name="TxtLanguageLabel" Text="界面语言" FontWeight="SemiBold" FontSize="12" Margin="0,0,0,6"/>
+                                <TextBlock x:Name="TxtLanguageLabel" TextWrapping="Wrap" Text="界面语言" FontWeight="SemiBold" FontSize="12" Margin="0,0,0,6"/>
                                 <ComboBox x:Name="CmbLanguage" Width="220" HorizontalAlignment="Left" Margin="0,0,0,16" SelectionChanged="CmbLanguage_SelectionChanged">
                                     <ComboBoxItem x:Name="CmbItemSystem" Content="跟随系统"/>
                                     <ComboBoxItem Content="简体中文"/>
                                     <ComboBoxItem Content="English"/>
                                 </ComboBox>
 
-                                <TextBlock x:Name="TxtIntervalLabel" Text="定期主动刷新周期" FontWeight="SemiBold" FontSize="12" Margin="0,0,0,6"/>
+                                <TextBlock x:Name="TxtIntervalLabel" TextWrapping="Wrap" Text="定期主动刷新周期" FontWeight="SemiBold" FontSize="12" Margin="0,0,0,6"/>
                                 <ComboBox x:Name="CmbInterval" Width="220" HorizontalAlignment="Left" Margin="0,0,0,16"/>
 
                                 <CheckBox x:Name="ChkHoverPreview" Content="鼠标悬停自动显示小提示浮窗" FontSize="12" Margin="0,0,0,8" IsChecked="True"/>
-                                <TextBlock x:Name="TxtHoverDesc" Text="鼠标移动到托盘图标上方时自动展示额度卡片" FontSize="10" Foreground="#6B7280" Margin="22,0,0,14"/>
+                                <TextBlock x:Name="TxtHoverDesc" TextWrapping="Wrap" Text="鼠标移动到托盘图标上方时自动展示额度卡片" FontSize="10" Foreground="#6B7280" Margin="22,0,0,14"/>
 
                                 <CheckBox x:Name="ChkLaunchAtLogin" Content="开机自动启动" FontSize="12" Margin="0,0,0,8"/>
-                                <TextBlock x:Name="TxtLaunchDesc" Text="登录 Windows 时自动在系统托盘运行 TokenBar" FontSize="10" Foreground="#6B7280" Margin="22,0,0,0"/>
+                                <TextBlock x:Name="TxtLaunchDesc" TextWrapping="Wrap" Text="登录 Windows 时自动在系统托盘运行 TokenBar" FontSize="10" Foreground="#6B7280" Margin="22,0,0,0"/>
                             </StackPanel>
                         </Border>
                     </StackPanel>
