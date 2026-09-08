@@ -8,6 +8,7 @@ public enum ProviderType: String, CaseIterable, Identifiable, Codable {
     case deepseek = "deepseek"
     case volcengine = "volcengine"
     case kimi = "kimi"
+    case openRouter = "openRouter"
     case glm = "glm"
     case aliyunBailian = "aliyunBailian"
 
@@ -21,6 +22,7 @@ public enum ProviderType: String, CaseIterable, Identifiable, Codable {
         case .deepseek: return LocalizationManager.shared.effectiveLanguage == "zh" ? "DeepSeek (深度求索)" : "DeepSeek"
         case .volcengine: return I18n(.volcengineTitle)
         case .kimi: return I18n(.kimiTitle)
+        case .openRouter: return "OpenRouter"
         case .glm: return I18n(.glmTitle)
         case .aliyunBailian: return I18n(.aliyunTitle)
         }
@@ -35,6 +37,7 @@ public enum ProviderType: String, CaseIterable, Identifiable, Codable {
         case .deepseek: return "DeepSeek"
         case .volcengine: return isZh ? "火山方舟" : "Ark"
         case .kimi: return "KIMI"
+        case .openRouter: return "OpenRouter"
         case .glm: return "GLM"
         case .aliyunBailian: return isZh ? "百炼" : "Bailian"
         }
@@ -48,6 +51,7 @@ public enum ProviderType: String, CaseIterable, Identifiable, Codable {
         case .deepseek: return "bolt.horizontal.fill"
         case .volcengine: return "flame.fill"
         case .kimi: return "moon.stars.fill"
+        case .openRouter: return "creditcard.fill"
         case .glm: return "bolt.fill"
         case .aliyunBailian: return "cloud.fill"
         }
@@ -61,10 +65,17 @@ public enum ProviderType: String, CaseIterable, Identifiable, Codable {
         case .deepseek: return Color(red: 0.22, green: 0.48, blue: 0.96) // DeepSeek Royal Blue
         case .volcengine: return Color(red: 0.94, green: 0.30, blue: 0.22) // Volcengine Red
         case .kimi: return Color(red: 0.55, green: 0.35, blue: 0.92)     // Moonshot Purple
+        case .openRouter: return Color(red: 0.39, green: 0.40, blue: 0.95) // OpenRouter Indigo
         case .glm: return Color(red: 0.23, green: 0.72, blue: 0.53)      // GLM emerald green
         case .aliyunBailian: return Color(red: 1.0, green: 0.42, blue: 0.0) // Aliyun Orange
         }
     }
+}
+
+/// 额度窗口展示类型：percentage 为时间窗口百分比，balance 为纯扣费厂商的货币余额
+public enum TokenWindowKind: String, Codable {
+    case percentage
+    case balance
 }
 
 public struct TokenWindow: Identifiable, Codable {
@@ -77,6 +88,16 @@ public struct TokenWindow: Identifiable, Codable {
     public var totalLimit: Double?
     public var unit: String
     public var isIdle: Bool
+
+    // 余额窗口 (kind == .balance) 专用字段；可选以便旧数据兼容解码
+    public var kind: TokenWindowKind?
+    public var balanceAmount: Double?
+    public var currency: String?
+    public var warningThreshold: Double?
+    public var criticalThreshold: Double?
+    // 由 RefreshManager 填充的展示辅助字段（不持久化）
+    public var lastDelta: Double?
+    public var forecastDays: Double?
 
     public init(
         title: String,
@@ -98,6 +119,37 @@ public struct TokenWindow: Identifiable, Codable {
         self.isIdle = isIdle
     }
 
+    /// 便捷构造余额窗口
+    public static func balance(
+        title: String,
+        amount: Double,
+        currency: String,
+        warningThreshold: Double?,
+        criticalThreshold: Double?
+    ) -> TokenWindow {
+        var w = TokenWindow(title: title, usedPercentage: 0.0, startTime: Date(), endTime: Date().addingTimeInterval(30 * 86400))
+        w.kind = .balance
+        w.balanceAmount = amount
+        w.currency = currency
+        w.warningThreshold = warningThreshold
+        w.criticalThreshold = criticalThreshold
+        return w
+    }
+
+    public var isBalance: Bool { kind == .balance }
+
+    public var currencySymbol: String { currency == "USD" ? "$" : "¥" }
+
+    public var balanceFormatted: String {
+        guard let amount = balanceAmount else { return "--" }
+        return String(format: "%@%.2f", currencySymbol, amount)
+    }
+
+    public var balanceDeltaFormatted: String {
+        guard let delta = lastDelta, delta != 0 else { return "" }
+        return String(format: "%@%@%.2f", delta > 0 ? "+" : "-", currencySymbol, abs(delta))
+    }
+
     public var remainingPercentage: Double {
         return max(0.0, 100.0 - usedPercentage)
     }
@@ -116,6 +168,8 @@ public struct TokenWindow: Identifiable, Codable {
         case "每周额度": return I18n(.weeklyQuotaTitle)
         case "7天额度", "7天周期额度": return I18n(.sevenDaysQuotaTitle)
         case "账户可用余额", "账户余额": return I18n(.accountBalanceTitle)
+        case "Key 额度", "Key 可用额度": return I18n(.keyQuotaTitle)
+        case "Token Plan 额度": return I18n(.tokenPlanQuotaTitle)
         case "RPM 速率配额", "RPM 请求速率": return I18n(.rpmRateLimitTitle)
         case "TPM 速率配额", "TPM 速率剩余": return I18n(.tpmRateLimitTitle)
         case "Token 速率配额": return I18n(.tokenRateLimitTitle)
@@ -179,6 +233,15 @@ public struct TokenWindow: Identifiable, Codable {
     }
 
     public var statusColor: Color {
+        if isBalance {
+            if let amount = balanceAmount, let critical = criticalThreshold, amount < critical {
+                return Color.red
+            }
+            if let amount = balanceAmount, let warning = warningThreshold, amount < warning {
+                return Color.orange
+            }
+            return Color.green
+        }
         if usedPercentage >= 90 {
             return Color.red
         } else if usedPercentage >= 70 {
@@ -277,6 +340,10 @@ public struct CustomProviderConfig: Identifiable, Codable, Equatable {
     public var endpoint: String
     public var apiProtocol: ApiProtocol
     public var model: String
+    // 余额提醒阈值（账户币种）；nil 时使用默认值 10
+    public var balanceAlertThreshold: Double?
+    // 厂商控制台 Web 登录态（如小米 MiMo 的余额/Token Plan 用量查询只接受 Cookie，不接受 API Key）
+    public var consoleCookie: String
 
     public init(
         id: UUID = UUID(),
@@ -285,7 +352,9 @@ public struct CustomProviderConfig: Identifiable, Codable, Equatable {
         apiKey: String = "",
         endpoint: String = "http://localhost:3000/v1",
         apiProtocol: ApiProtocol = .openAIChat,
-        model: String = ""
+        model: String = "",
+        balanceAlertThreshold: Double? = nil,
+        consoleCookie: String = ""
     ) {
         self.id = id
         self.name = name
@@ -294,6 +363,8 @@ public struct CustomProviderConfig: Identifiable, Codable, Equatable {
         self.endpoint = endpoint
         self.apiProtocol = apiProtocol
         self.model = model
+        self.balanceAlertThreshold = balanceAlertThreshold
+        self.consoleCookie = consoleCookie
     }
 }
 
@@ -455,6 +526,7 @@ public struct AppSettings: Codable {
     public var deepseekEnabled: Bool
     public var volcengineEnabled: Bool
     public var kimiEnabled: Bool
+    public var openRouterEnabled: Bool
 
     public var glmApiKey: String
     public var glmEndpoint: String
@@ -476,6 +548,7 @@ public struct AppSettings: Codable {
     public var deepseekApiKey: String
     public var deepseekEndpoint: String
     public var deepseekModel: String
+    public var deepseekBalanceAlertThreshold: Double
 
     public var volcengineApiKey: String
     public var volcengineEndpoint: String
@@ -484,6 +557,11 @@ public struct AppSettings: Codable {
     public var kimiApiKey: String
     public var kimiEndpoint: String
     public var kimiModel: String
+    public var kimiBalanceAlertThreshold: Double
+
+    public var openRouterApiKey: String
+    public var openRouterEndpoint: String
+    public var openRouterBalanceAlertThreshold: Double
 
     public var customProviders: [CustomProviderConfig]
     public var appLanguage: AppLanguage
@@ -500,6 +578,7 @@ public struct AppSettings: Codable {
         case deepseekEnabled
         case volcengineEnabled
         case kimiEnabled
+        case openRouterEnabled
 
         case glmApiKey
         case glmEndpoint
@@ -521,6 +600,7 @@ public struct AppSettings: Codable {
         case deepseekApiKey
         case deepseekEndpoint
         case deepseekModel
+        case deepseekBalanceAlertThreshold
 
         case volcengineApiKey
         case volcengineEndpoint
@@ -529,6 +609,11 @@ public struct AppSettings: Codable {
         case kimiApiKey
         case kimiEndpoint
         case kimiModel
+        case kimiBalanceAlertThreshold
+
+        case openRouterApiKey
+        case openRouterEndpoint
+        case openRouterBalanceAlertThreshold
 
         case customProviders
         case appLanguage
@@ -546,6 +631,7 @@ public struct AppSettings: Codable {
         deepseekEnabled: Bool = false,
         volcengineEnabled: Bool = false,
         kimiEnabled: Bool = false,
+        openRouterEnabled: Bool = false,
         glmApiKey: String = "",
         glmEndpoint: String = "https://open.bigmodel.cn/api/v1",
         aliyunApiKey: String = "",
@@ -563,12 +649,17 @@ public struct AppSettings: Codable {
         deepseekApiKey: String = "",
         deepseekEndpoint: String = "https://api.deepseek.com/v1",
         deepseekModel: String = "deepseek-chat",
+        deepseekBalanceAlertThreshold: Double = 10,
         volcengineApiKey: String = "",
         volcengineEndpoint: String = "https://ark.cn-beijing.volces.com/api/v3",
         volcengineModel: String = "",
         kimiApiKey: String = "",
         kimiEndpoint: String = "https://api.moonshot.cn/v1",
         kimiModel: String = "moonshot-v1-8k",
+        kimiBalanceAlertThreshold: Double = 10,
+        openRouterApiKey: String = "",
+        openRouterEndpoint: String = "https://openrouter.ai/api/v1",
+        openRouterBalanceAlertThreshold: Double = 5,
         customProviders: [CustomProviderConfig] = [],
         appLanguage: AppLanguage = .system
     ) {
@@ -583,6 +674,7 @@ public struct AppSettings: Codable {
         self.deepseekEnabled = deepseekEnabled
         self.volcengineEnabled = volcengineEnabled
         self.kimiEnabled = kimiEnabled
+        self.openRouterEnabled = openRouterEnabled
         self.glmApiKey = glmApiKey
         self.glmEndpoint = glmEndpoint
         self.aliyunApiKey = aliyunApiKey
@@ -600,12 +692,17 @@ public struct AppSettings: Codable {
         self.deepseekApiKey = deepseekApiKey
         self.deepseekEndpoint = deepseekEndpoint
         self.deepseekModel = deepseekModel
+        self.deepseekBalanceAlertThreshold = deepseekBalanceAlertThreshold
         self.volcengineApiKey = volcengineApiKey
         self.volcengineEndpoint = volcengineEndpoint
         self.volcengineModel = volcengineModel
         self.kimiApiKey = kimiApiKey
         self.kimiEndpoint = kimiEndpoint
         self.kimiModel = kimiModel
+        self.kimiBalanceAlertThreshold = kimiBalanceAlertThreshold
+        self.openRouterApiKey = openRouterApiKey
+        self.openRouterEndpoint = openRouterEndpoint
+        self.openRouterBalanceAlertThreshold = openRouterBalanceAlertThreshold
         self.customProviders = customProviders
         self.appLanguage = appLanguage
     }
@@ -623,6 +720,7 @@ public struct AppSettings: Codable {
         self.deepseekEnabled = try container.decodeIfPresent(Bool.self, forKey: .deepseekEnabled) ?? false
         self.volcengineEnabled = try container.decodeIfPresent(Bool.self, forKey: .volcengineEnabled) ?? false
         self.kimiEnabled = try container.decodeIfPresent(Bool.self, forKey: .kimiEnabled) ?? false
+        self.openRouterEnabled = try container.decodeIfPresent(Bool.self, forKey: .openRouterEnabled) ?? false
 
         self.glmApiKey = try container.decodeIfPresent(String.self, forKey: .glmApiKey) ?? ""
         self.glmEndpoint = try container.decodeIfPresent(String.self, forKey: .glmEndpoint) ?? "https://open.bigmodel.cn/api/v1"
@@ -644,6 +742,7 @@ public struct AppSettings: Codable {
         self.deepseekApiKey = try container.decodeIfPresent(String.self, forKey: .deepseekApiKey) ?? ""
         self.deepseekEndpoint = try container.decodeIfPresent(String.self, forKey: .deepseekEndpoint) ?? "https://api.deepseek.com/v1"
         self.deepseekModel = try container.decodeIfPresent(String.self, forKey: .deepseekModel) ?? "deepseek-chat"
+        self.deepseekBalanceAlertThreshold = try container.decodeIfPresent(Double.self, forKey: .deepseekBalanceAlertThreshold) ?? 10
 
         self.volcengineApiKey = try container.decodeIfPresent(String.self, forKey: .volcengineApiKey) ?? ""
         self.volcengineEndpoint = try container.decodeIfPresent(String.self, forKey: .volcengineEndpoint) ?? "https://ark.cn-beijing.volces.com/api/v3"
@@ -652,6 +751,11 @@ public struct AppSettings: Codable {
         self.kimiApiKey = try container.decodeIfPresent(String.self, forKey: .kimiApiKey) ?? ""
         self.kimiEndpoint = try container.decodeIfPresent(String.self, forKey: .kimiEndpoint) ?? "https://api.moonshot.cn/v1"
         self.kimiModel = try container.decodeIfPresent(String.self, forKey: .kimiModel) ?? "moonshot-v1-8k"
+        self.kimiBalanceAlertThreshold = try container.decodeIfPresent(Double.self, forKey: .kimiBalanceAlertThreshold) ?? 10
+
+        self.openRouterApiKey = try container.decodeIfPresent(String.self, forKey: .openRouterApiKey) ?? ""
+        self.openRouterEndpoint = try container.decodeIfPresent(String.self, forKey: .openRouterEndpoint) ?? "https://openrouter.ai/api/v1"
+        self.openRouterBalanceAlertThreshold = try container.decodeIfPresent(Double.self, forKey: .openRouterBalanceAlertThreshold) ?? 5
 
         self.customProviders = try container.decodeIfPresent([CustomProviderConfig].self, forKey: .customProviders) ?? []
         self.appLanguage = try container.decodeIfPresent(AppLanguage.self, forKey: .appLanguage) ?? .system
@@ -667,6 +771,7 @@ public enum SettingsTab: String, CaseIterable, Identifiable {
     case deepseek = "deepseek"
     case volcengine = "volcengine"
     case kimi = "kimi"
+    case openRouter = "openRouter"
     case glm = "glm"
     case aliyun = "aliyun"
     case custom = "custom"
@@ -682,6 +787,7 @@ public enum SettingsTab: String, CaseIterable, Identifiable {
         case .deepseek: return "DeepSeek"
         case .volcengine: return I18n(.volcengineTitle)
         case .kimi: return I18n(.kimiTitle)
+        case .openRouter: return "OpenRouter"
         case .glm: return I18n(.glmTitle)
         case .aliyun: return I18n(.aliyunTitle)
         case .custom: return I18n(.customProviders)
@@ -697,6 +803,7 @@ public enum SettingsTab: String, CaseIterable, Identifiable {
         case .deepseek: return "bolt.horizontal.fill"
         case .volcengine: return "flame.fill"
         case .kimi: return "moon.stars.fill"
+        case .openRouter: return "creditcard.fill"
         case .glm: return "bolt.fill"
         case .aliyun: return "cloud.fill"
         case .custom: return "network"
@@ -714,6 +821,7 @@ extension ProviderType {
         case .deepseek: return .deepseek
         case .volcengine: return .volcengine
         case .kimi: return .kimi
+        case .openRouter: return .openRouter
         case .glm: return .glm
         case .aliyunBailian: return .aliyun
         }

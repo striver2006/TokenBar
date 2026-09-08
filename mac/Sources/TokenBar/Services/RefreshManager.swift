@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import SwiftUI
+import UserNotifications
 
 @MainActor
 public final class RefreshManager: ObservableObject {
@@ -14,6 +15,10 @@ public final class RefreshManager: ObservableObject {
 
     private var refreshTimer: Timer?
     private let userDefaultsKey = "TokenBar_AppSettings"
+
+    // 余额窗口的展示辅助状态（较上次差值 + 低余额提醒状态机），进程内有效
+    private var lastBalanceValues: [String: Double] = [:]
+    private var balanceAlertedKeys: Set<String> = []
 
     public init() {
         if let savedData = UserDefaults.standard.data(forKey: userDefaultsKey),
@@ -126,6 +131,11 @@ public final class RefreshManager: ObservableObject {
             if settings.kimiEnabled {
                 group.addTask { @MainActor in
                     await self.refreshKimi()
+                }
+            }
+            if settings.openRouterEnabled {
+                group.addTask { @MainActor in
+                    await self.refreshOpenRouter()
                 }
             }
             if settings.glmEnabled {
@@ -416,13 +426,21 @@ public final class RefreshManager: ObservableObject {
             let res = try await DeepSeekService.shared.fetchQuota(
                 apiKey: settings.deepseekApiKey,
                 endpoint: settings.deepseekEndpoint,
-                model: settings.deepseekModel
+                model: settings.deepseekModel,
+                balanceAlertThreshold: settings.deepseekBalanceAlertThreshold
             )
             quota.fiveHourWindow = res.fiveHour
             quota.weeklyWindow = res.weekly
             quota.accountInfo = res.account
             quota.isAuthorized = true
             quota.lastUpdated = Date()
+
+            quota.weeklyWindow = processBalance(
+                providerKey: "deepseek",
+                displayName: ProviderType.deepseek.displayName,
+                window: quota.weeklyWindow,
+                threshold: settings.deepseekBalanceAlertThreshold
+            )
         } catch {
             quota.isAuthorized = false
             quota.errorMessage = error.localizedDescription
@@ -430,6 +448,47 @@ public final class RefreshManager: ObservableObject {
 
         quota.isLoading = false
         quotas[.deepseek] = quota
+    }
+
+    public func refreshOpenRouter() async {
+        var quota = quotas[.openRouter] ?? ProviderQuota(provider: .openRouter)
+        quota.isLoading = true
+        quota.errorMessage = nil
+        quotas[.openRouter] = quota
+
+        guard !settings.openRouterApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            quota.isAuthorized = false
+            quota.errorMessage = I18n(.errMissingOpenRouterKey)
+            quota.isLoading = false
+            quotas[.openRouter] = quota
+            return
+        }
+
+        do {
+            let res = try await OpenRouterService.shared.fetchQuota(
+                apiKey: settings.openRouterApiKey,
+                endpoint: settings.openRouterEndpoint,
+                balanceAlertThreshold: settings.openRouterBalanceAlertThreshold
+            )
+            quota.fiveHourWindow = res.primary
+            quota.weeklyWindow = res.secondary
+            quota.accountInfo = res.account
+            quota.isAuthorized = true
+            quota.lastUpdated = Date()
+
+            quota.fiveHourWindow = processBalance(
+                providerKey: "openrouter",
+                displayName: ProviderType.openRouter.displayName,
+                window: quota.fiveHourWindow,
+                threshold: settings.openRouterBalanceAlertThreshold
+            )
+        } catch {
+            quota.isAuthorized = false
+            quota.errorMessage = error.localizedDescription
+        }
+
+        quota.isLoading = false
+        quotas[.openRouter] = quota
     }
 
     public func refreshVolcengine() async {
@@ -484,13 +543,21 @@ public final class RefreshManager: ObservableObject {
             let res = try await KimiService.shared.fetchQuota(
                 apiKey: settings.kimiApiKey,
                 endpoint: settings.kimiEndpoint,
-                model: settings.kimiModel
+                model: settings.kimiModel,
+                balanceAlertThreshold: settings.kimiBalanceAlertThreshold
             )
             quota.fiveHourWindow = res.fiveHour
             quota.weeklyWindow = res.weekly
             quota.accountInfo = res.account
             quota.isAuthorized = true
             quota.lastUpdated = Date()
+
+            quota.weeklyWindow = processBalance(
+                providerKey: "kimi",
+                displayName: ProviderType.kimi.displayName,
+                window: quota.weeklyWindow,
+                threshold: settings.kimiBalanceAlertThreshold
+            )
         } catch {
             quota.isAuthorized = false
             quota.errorMessage = error.localizedDescription
@@ -526,6 +593,25 @@ public final class RefreshManager: ObservableObject {
             q.accountInfo = res.account
             q.isAuthorized = true
             q.lastUpdated = Date()
+
+            // 余额窗口可能在主槽位（纯余额厂商）或副槽位（MiMo 等订阅+余额双通道厂商）
+            let balanceIsPrimary = q.primaryWindow?.isBalance == true
+            let balanceWin: TokenWindow? = balanceIsPrimary
+                ? q.primaryWindow
+                : (q.secondaryWindow?.isBalance == true ? q.secondaryWindow : nil)
+
+            if let updated = processBalance(
+                providerKey: "custom:\(config.id.uuidString)",
+                displayName: config.name,
+                window: balanceWin,
+                threshold: config.balanceAlertThreshold ?? 10
+            ) {
+                if balanceIsPrimary {
+                    q.primaryWindow = updated
+                } else {
+                    q.secondaryWindow = updated
+                }
+            }
         } catch {
             q.isAuthorized = false
             q.errorMessage = error.localizedDescription
@@ -533,6 +619,61 @@ public final class RefreshManager: ObservableObject {
 
         q.isLoading = false
         customQuotas[config.id] = q
+    }
+
+    /// 余额窗口刷新成功后的统一处理：
+    /// 1) 记录与上次刷新的差值；2) 写入本地历史并计算"预计可用天数"；
+    /// 3) 低余额时发送一次系统通知，恢复到阈值 1.2 倍以上后重新武装。
+    /// TokenWindow 是值类型，返回修改后的窗口由调用方回写到 quota。
+    @discardableResult
+    private func processBalance(providerKey: String, displayName: String, window: TokenWindow?, threshold: Double) -> TokenWindow? {
+        guard var window = window, window.isBalance, let amount = window.balanceAmount else {
+            return window
+        }
+
+        if let prev = lastBalanceValues[providerKey] {
+            window.lastDelta = amount - prev
+        }
+        lastBalanceValues[providerKey] = amount
+
+        BalanceHistoryStore.shared.record(providerKey: providerKey, value: amount)
+        window.forecastDays = BalanceHistoryStore.shared.forecastDays(providerKey: providerKey, currentAmount: amount)
+
+        guard threshold > 0 else { return window }
+
+        var shouldNotify = false
+        if amount < threshold {
+            if !balanceAlertedKeys.contains(providerKey) {
+                balanceAlertedKeys.insert(providerKey)
+                shouldNotify = true
+            }
+        } else if amount >= threshold * 1.2 {
+            balanceAlertedKeys.remove(providerKey)
+        }
+
+        if shouldNotify {
+            postLowBalanceNotification(displayName: displayName, balance: window.balanceFormatted)
+        }
+
+        return window
+    }
+
+    private func postLowBalanceNotification(displayName: String, balance: String) {
+        let center = UNUserNotificationCenter.current()
+        let content = UNMutableNotificationContent()
+        content.title = I18n(.lowBalanceTitle)
+        content.body = String(format: I18n(.lowBalanceBody), displayName, balance)
+        content.sound = .default
+        let request = UNNotificationRequest(
+            identifier: "low-balance-\(displayName)-\(Int(Date().timeIntervalSince1970))",
+            content: content,
+            trigger: nil
+        )
+
+        center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+            guard granted else { return }
+            center.add(request)
+        }
     }
 
     public func addCustomProvider(_ config: CustomProviderConfig) {
@@ -562,6 +703,9 @@ public final class RefreshManager: ObservableObject {
     public func removeCustomProvider(id: UUID) {
         settings.customProviders.removeAll(where: { $0.id == id })
         customQuotas.removeValue(forKey: id)
+        lastBalanceValues.removeValue(forKey: "custom:\(id.uuidString)")
+        balanceAlertedKeys.remove("custom:\(id.uuidString)")
+        BalanceHistoryStore.shared.clear(providerKey: "custom:\(id.uuidString)")
         saveSettings()
     }
 }

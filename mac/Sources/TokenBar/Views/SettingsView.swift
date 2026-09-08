@@ -29,6 +29,7 @@ public struct SettingsView: View {
     @State private var deepseekKeyInput: String = ""
     @State private var deepseekEndpointInput: String = "https://api.deepseek.com/v1"
     @State private var deepseekModelInput: String = "deepseek-chat"
+    @State private var deepseekThresholdInput: String = "10"
     @State private var isDeepseekKeyVisible: Bool = false
 
     // Volcengine State
@@ -41,7 +42,14 @@ public struct SettingsView: View {
     @State private var kimiKeyInput: String = ""
     @State private var kimiEndpointInput: String = "https://api.moonshot.cn/v1"
     @State private var kimiModelInput: String = "moonshot-v1-8k"
+    @State private var kimiThresholdInput: String = "10"
     @State private var isKimiKeyVisible: Bool = false
+
+    // OpenRouter State
+    @State private var openRouterKeyInput: String = ""
+    @State private var openRouterEndpointInput: String = "https://openrouter.ai/api/v1"
+    @State private var openRouterThresholdInput: String = "5"
+    @State private var isOpenRouterKeyVisible: Bool = false
 
     // GLM State
     @State private var glmKeyInput: String = ""
@@ -62,6 +70,8 @@ public struct SettingsView: View {
     @State private var customKeyInput: String = ""
     @State private var customEndpointInput: String = "http://localhost:3000/v1"
     @State private var customModelInput: String = ""
+    @State private var customThresholdInput: String = ""
+    @State private var customCookieInput: String = ""
     @State private var isCustomKeyVisible: Bool = false
 
     @State private var statusAlertMessage: String? = nil
@@ -88,12 +98,17 @@ public struct SettingsView: View {
         _deepseekKeyInput = State(initialValue: refreshManager.settings.deepseekApiKey)
         _deepseekEndpointInput = State(initialValue: refreshManager.settings.deepseekEndpoint)
         _deepseekModelInput = State(initialValue: refreshManager.settings.deepseekModel)
+        _deepseekThresholdInput = State(initialValue: thresholdString(refreshManager.settings.deepseekBalanceAlertThreshold))
         _volcengineKeyInput = State(initialValue: refreshManager.settings.volcengineApiKey)
         _volcengineEndpointInput = State(initialValue: refreshManager.settings.volcengineEndpoint)
         _volcengineModelInput = State(initialValue: refreshManager.settings.volcengineModel)
         _kimiKeyInput = State(initialValue: refreshManager.settings.kimiApiKey)
         _kimiEndpointInput = State(initialValue: refreshManager.settings.kimiEndpoint)
         _kimiModelInput = State(initialValue: refreshManager.settings.kimiModel)
+        _kimiThresholdInput = State(initialValue: thresholdString(refreshManager.settings.kimiBalanceAlertThreshold))
+        _openRouterKeyInput = State(initialValue: refreshManager.settings.openRouterApiKey)
+        _openRouterEndpointInput = State(initialValue: refreshManager.settings.openRouterEndpoint)
+        _openRouterThresholdInput = State(initialValue: thresholdString(refreshManager.settings.openRouterBalanceAlertThreshold))
         _glmKeyInput = State(initialValue: refreshManager.settings.glmApiKey)
         _glmEndpointInput = State(initialValue: refreshManager.settings.glmEndpoint)
         _aliyunKeyInput = State(initialValue: refreshManager.settings.aliyunApiKey)
@@ -147,6 +162,8 @@ public struct SettingsView: View {
                         volcengineSettingsView
                     case .kimi:
                         kimiSettingsView
+                    case .openRouter:
+                        openRouterSettingsView
                     case .glm:
                         glmSettingsView
                     case .aliyun:
@@ -189,6 +206,8 @@ public struct SettingsView: View {
         .onChange(of: refreshManager.settings.kimiApiKey) { kimiKeyInput = $0 }
         .onChange(of: refreshManager.settings.kimiEndpoint) { kimiEndpointInput = $0 }
         .onChange(of: refreshManager.settings.kimiModel) { kimiModelInput = $0 }
+        .onChange(of: refreshManager.settings.openRouterApiKey) { openRouterKeyInput = $0 }
+        .onChange(of: refreshManager.settings.openRouterEndpoint) { openRouterEndpointInput = $0 }
         .onChange(of: refreshManager.settings.glmApiKey) { glmKeyInput = $0 }
         .onChange(of: refreshManager.settings.glmEndpoint) { glmEndpointInput = $0 }
         .onChange(of: refreshManager.settings.aliyunApiKey) { aliyunKeyInput = $0 }
@@ -216,17 +235,35 @@ public struct SettingsView: View {
         deepseekKeyInput = refreshManager.settings.deepseekApiKey
         deepseekEndpointInput = refreshManager.settings.deepseekEndpoint
         deepseekModelInput = refreshManager.settings.deepseekModel
+        deepseekThresholdInput = thresholdString(refreshManager.settings.deepseekBalanceAlertThreshold)
         volcengineKeyInput = refreshManager.settings.volcengineApiKey
         volcengineEndpointInput = refreshManager.settings.volcengineEndpoint
         volcengineModelInput = refreshManager.settings.volcengineModel
         kimiKeyInput = refreshManager.settings.kimiApiKey
         kimiEndpointInput = refreshManager.settings.kimiEndpoint
         kimiModelInput = refreshManager.settings.kimiModel
+        kimiThresholdInput = thresholdString(refreshManager.settings.kimiBalanceAlertThreshold)
+        openRouterKeyInput = refreshManager.settings.openRouterApiKey
+        openRouterEndpointInput = refreshManager.settings.openRouterEndpoint
+        openRouterThresholdInput = thresholdString(refreshManager.settings.openRouterBalanceAlertThreshold)
         glmKeyInput = refreshManager.settings.glmApiKey
         glmEndpointInput = refreshManager.settings.glmEndpoint
         aliyunKeyInput = refreshManager.settings.aliyunApiKey
         aliyunEndpointInput = refreshManager.settings.aliyunEndpoint
         aliyunCookieInput = refreshManager.settings.aliyunCookie
+    }
+
+    /// 阈值显示：整数值省略小数位
+    private func thresholdString(_ value: Double) -> String {
+        value.truncatingRemainder(dividingBy: 1) == 0 ? String(Int(value)) : String(value)
+    }
+
+    /// 阈值解析：非法输入回退到默认值
+    private func parseThreshold(_ text: String, fallback: Double) -> Double {
+        if let v = Double(text.trimmingCharacters(in: .whitespacesAndNewlines)), v >= 0 {
+            return v
+        }
+        return fallback
     }
 
     // MARK: - 1. OpenAI Tab
@@ -827,12 +864,26 @@ public struct SettingsView: View {
                 }
             }
 
+            // Balance Alert Threshold
+            VStack(alignment: .leading, spacing: 6) {
+                Text(I18n(.balanceThresholdLabel))
+                    .font(.system(size: 12, weight: .medium))
+                TextField("10", text: $deepseekThresholdInput)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 11))
+                    .frame(width: 120)
+                Text(I18n(.balanceThresholdHint))
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+            }
+
             // Save & Test Button
             HStack {
                 Button {
                     refreshManager.settings.deepseekApiKey = deepseekKeyInput
                     refreshManager.settings.deepseekEndpoint = deepseekEndpointInput
                     refreshManager.settings.deepseekModel = deepseekModelInput
+                    refreshManager.settings.deepseekBalanceAlertThreshold = parseThreshold(deepseekThresholdInput, fallback: 10)
                     refreshManager.saveSettings()
 
                     Task {
@@ -1071,12 +1122,26 @@ public struct SettingsView: View {
                 }
             }
 
+            // Balance Alert Threshold
+            VStack(alignment: .leading, spacing: 6) {
+                Text(I18n(.balanceThresholdLabel))
+                    .font(.system(size: 12, weight: .medium))
+                TextField("10", text: $kimiThresholdInput)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 11))
+                    .frame(width: 120)
+                Text(I18n(.balanceThresholdHint))
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+            }
+
             // Save & Test Button
             HStack {
                 Button {
                     refreshManager.settings.kimiApiKey = kimiKeyInput
                     refreshManager.settings.kimiEndpoint = kimiEndpointInput
                     refreshManager.settings.kimiModel = kimiModelInput
+                    refreshManager.settings.kimiBalanceAlertThreshold = parseThreshold(kimiThresholdInput, fallback: 10)
                     refreshManager.saveSettings()
 
                     Task {
@@ -1085,6 +1150,131 @@ public struct SettingsView: View {
                             statusAlertMessage = I18n(.alertKimiSuccess)
                         } else {
                             statusAlertMessage = "\(I18n(.alertKimiFailed))\(refreshManager.quotas[.kimi]?.errorMessage ?? I18n(.alertUnknownError))"
+                        }
+                        showStatusAlert = true
+                    }
+                } label: {
+                    HStack {
+                        Image(systemName: "checkmark.shield")
+                        Text(I18n(.saveAndTest))
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+
+                Spacer()
+            }
+
+            Spacer()
+        }
+    }
+
+    // MARK: - 6.5 OpenRouter Tab
+    private var openRouterSettingsView: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Image(systemName: "creditcard.fill")
+                    .font(.system(size: 24))
+                    .foregroundColor(ProviderType.openRouter.themeColor)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(I18n(.openRouterTitle))
+                        .font(.system(size: 15, weight: .bold))
+                    Text(I18n(.openRouterSubtitle))
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                }
+                Spacer()
+                Toggle("", isOn: $refreshManager.settings.openRouterEnabled)
+                    .toggleStyle(.switch)
+                    .onChange(of: refreshManager.settings.openRouterEnabled) { _ in
+                        refreshManager.saveSettings()
+                    }
+            }
+
+            Divider()
+
+            // Status Card
+            HStack {
+                let isAuth = refreshManager.quotas[.openRouter]?.isAuthorized == true
+                Image(systemName: isAuth ? "checkmark.circle.fill" : "xmark.circle.fill")
+                    .foregroundColor(isAuth ? .green : .secondary)
+                Text(isAuth ? I18n(.statusConnected) : I18n(.statusNotConnected))
+                    .font(.system(size: 12, weight: .semibold))
+
+                if let acc = refreshManager.quotas[.openRouter]?.accountInfo {
+                    Text("(\(acc))")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                }
+
+                Spacer()
+            }
+            .padding(10)
+            .background(Color.primary.opacity(0.04))
+            .cornerRadius(8)
+
+            // OpenRouter API Key
+            VStack(alignment: .leading, spacing: 6) {
+                Text(I18n(.apiKeyLabel))
+                    .font(.system(size: 12, weight: .medium))
+
+                HStack {
+                    if isOpenRouterKeyVisible {
+                        TextField("sk-or-...", text: $openRouterKeyInput)
+                            .textFieldStyle(.roundedBorder)
+                    } else {
+                        SecureField("sk-or-...", text: $openRouterKeyInput)
+                            .textFieldStyle(.roundedBorder)
+                    }
+
+                    Button {
+                        isOpenRouterKeyVisible.toggle()
+                    } label: {
+                        Image(systemName: isOpenRouterKeyVisible ? "eye.slash" : "eye")
+                    }
+                    .buttonStyle(.borderless)
+                }
+
+                Text(I18n(.hintOpenRouterKey))
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+            }
+
+            // Endpoint
+            VStack(alignment: .leading, spacing: 6) {
+                Text(I18n(.apiEndpointLabel))
+                    .font(.system(size: 12, weight: .medium))
+                TextField("https://openrouter.ai/api/v1", text: $openRouterEndpointInput)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 11))
+            }
+
+            // Balance Alert Threshold
+            VStack(alignment: .leading, spacing: 6) {
+                Text(I18n(.balanceThresholdLabel))
+                    .font(.system(size: 12, weight: .medium))
+                TextField("5", text: $openRouterThresholdInput)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 11))
+                    .frame(width: 120)
+                Text(I18n(.balanceThresholdHint))
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+            }
+
+            // Save & Test Button
+            HStack {
+                Button {
+                    refreshManager.settings.openRouterApiKey = openRouterKeyInput
+                    refreshManager.settings.openRouterEndpoint = openRouterEndpointInput
+                    refreshManager.settings.openRouterBalanceAlertThreshold = parseThreshold(openRouterThresholdInput, fallback: 5)
+                    refreshManager.saveSettings()
+
+                    Task {
+                        await refreshManager.refreshOpenRouter()
+                        if refreshManager.quotas[.openRouter]?.isAuthorized == true {
+                            statusAlertMessage = "\(I18n(.openRouterTitle)) ✓ \(refreshManager.quotas[.openRouter]?.accountInfo ?? "")"
+                        } else {
+                            statusAlertMessage = "OpenRouter: \(refreshManager.quotas[.openRouter]?.errorMessage ?? I18n(.alertUnknownError))"
                         }
                         showStatusAlert = true
                     }
@@ -1441,6 +1631,8 @@ public struct SettingsView: View {
                             customKeyInput = ""
                             customModelInput = "gpt-4o"
                         }
+                        customThresholdInput = ""
+                        customCookieInput = ""
                         editingProviderId = nil
                         isAddingProvider = true
                     } label: {
@@ -1556,6 +1748,25 @@ public struct SettingsView: View {
                                 .textFieldStyle(.roundedBorder)
                                 .font(.system(size: 11))
                         }
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(I18n(.balanceThresholdLabel))
+                                .font(.system(size: 11, weight: .medium))
+                            TextField("10", text: $customThresholdInput)
+                                .textFieldStyle(.roundedBorder)
+                                .font(.system(size: 11))
+                        }
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(I18n(.consoleCookieLabel))
+                                .font(.system(size: 11, weight: .medium))
+                            TextField("Cookie", text: $customCookieInput)
+                                .textFieldStyle(.roundedBorder)
+                                .font(.system(size: 11))
+                            Text(I18n(.consoleCookieHint))
+                                .font(.system(size: 10))
+                                .foregroundColor(.secondary)
+                        }
                     }
 
                     // Save / Cancel buttons
@@ -1572,7 +1783,9 @@ public struct SettingsView: View {
                                     apiKey: customKeyInput,
                                     endpoint: customEndpointInput,
                                     apiProtocol: customProtocolInput,
-                                    model: customModelInput
+                                    model: customModelInput,
+                                    balanceAlertThreshold: Double(customThresholdInput.trimmingCharacters(in: .whitespacesAndNewlines)),
+                                    consoleCookie: customCookieInput.trimmingCharacters(in: .whitespacesAndNewlines)
                                 )
                                 refreshManager.updateCustomProvider(updated)
                             } else {
@@ -1582,7 +1795,9 @@ public struct SettingsView: View {
                                     apiKey: customKeyInput,
                                     endpoint: customEndpointInput,
                                     apiProtocol: customProtocolInput,
-                                    model: customModelInput
+                                    model: customModelInput,
+                                    balanceAlertThreshold: Double(customThresholdInput.trimmingCharacters(in: .whitespacesAndNewlines)),
+                                    consoleCookie: customCookieInput.trimmingCharacters(in: .whitespacesAndNewlines)
                                 )
                                 refreshManager.addCustomProvider(newConfig)
                             }
@@ -1681,6 +1896,8 @@ public struct SettingsView: View {
                                 customEndpointInput = config.endpoint
                                 customKeyInput = config.apiKey
                                 customModelInput = config.model
+                                customThresholdInput = config.balanceAlertThreshold.map { thresholdString($0) } ?? ""
+                                customCookieInput = config.consoleCookie
                                 isAddingProvider = true
                             } label: {
                                 Image(systemName: "pencil")

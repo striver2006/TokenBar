@@ -96,19 +96,25 @@ namespace TokenBar.Views
                 PnlCards.Children.Add(CreateProviderCard(kimiQuota, () => OpenSettings(SettingsTab.Kimi)));
             }
 
-            // 7. GLM
+            // 7. OpenRouter
+            if (settings.OpenRouterEnabled && mgr.Quotas.TryGetValue(ProviderType.OpenRouter, out var openRouterQuota))
+            {
+                PnlCards.Children.Add(CreateProviderCard(openRouterQuota, () => OpenSettings(SettingsTab.OpenRouter)));
+            }
+
+            // 8. GLM
             if (settings.GLMEnabled && mgr.Quotas.TryGetValue(ProviderType.GLM, out var glmQuota))
             {
                 PnlCards.Children.Add(CreateProviderCard(glmQuota, () => OpenSettings(SettingsTab.GLM)));
             }
 
-            // 8. Aliyun
+            // 9. Aliyun
             if (settings.AliyunEnabled && mgr.Quotas.TryGetValue(ProviderType.AliyunBailian, out var aliyunQuota))
             {
                 PnlCards.Children.Add(CreateProviderCard(aliyunQuota, () => OpenSettings(SettingsTab.Aliyun)));
             }
 
-            // 9. Custom Providers
+            // 10. Custom Providers
             foreach (var customConfig in settings.CustomProviders.Where(c => c.IsEnabled))
             {
                 if (mgr.CustomQuotas.TryGetValue(customConfig.Id, out var customQuota))
@@ -458,6 +464,12 @@ namespace TokenBar.Views
 
         private UIElement CreateWindowQuotaRow(TokenWindow window, string badgeText)
         {
+            var isBalance = window.Kind == TokenWindowKind.Balance;
+            if (isBalance)
+            {
+                badgeText = LocalizationManager.Instance.BalanceBadge;
+            }
+
             var rowStack = new StackPanel { Margin = new Thickness(0, 6, 0, 2) };
 
             // Row 1: Badge, Title & Remaining %
@@ -495,26 +507,77 @@ namespace TokenBar.Views
             Grid.SetColumn(titleBlock, 1);
             topGrid.Children.Add(titleBlock);
 
-            var pctStack = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-            pctStack.Children.Add(new TextBlock
+            if (isBalance)
             {
-                Text = $"{LocalizationManager.Instance.Remaining} ",
-                FontSize = 10,
-                Foreground = new SolidColorBrush(Color.FromRgb(107, 114, 128)),
-                VerticalAlignment = VerticalAlignment.Bottom
-            });
-            pctStack.Children.Add(new TextBlock
+                // 余额窗口：直接显示金额，而不是"剩余 X%"
+                var balanceBlock = new TextBlock
+                {
+                    Text = window.BalanceFormatted,
+                    FontSize = 13,
+                    FontWeight = FontWeights.Bold,
+                    Foreground = window.StatusBrush,
+                    VerticalAlignment = VerticalAlignment.Bottom
+                };
+                Grid.SetColumn(balanceBlock, 2);
+                topGrid.Children.Add(balanceBlock);
+            }
+            else
             {
-                Text = $"{window.RemainingPercentage:0}%",
-                FontSize = 13,
-                FontWeight = FontWeights.Bold,
-                Foreground = window.StatusBrush,
-                VerticalAlignment = VerticalAlignment.Bottom
-            });
-            Grid.SetColumn(pctStack, 2);
-            topGrid.Children.Add(pctStack);
+                var pctStack = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+                pctStack.Children.Add(new TextBlock
+                {
+                    Text = $"{LocalizationManager.Instance.Remaining} ",
+                    FontSize = 10,
+                    Foreground = new SolidColorBrush(Color.FromRgb(107, 114, 128)),
+                    VerticalAlignment = VerticalAlignment.Bottom
+                });
+                pctStack.Children.Add(new TextBlock
+                {
+                    Text = $"{window.RemainingPercentage:0}%",
+                    FontSize = 13,
+                    FontWeight = FontWeights.Bold,
+                    Foreground = window.StatusBrush,
+                    VerticalAlignment = VerticalAlignment.Bottom
+                });
+                Grid.SetColumn(pctStack, 2);
+                topGrid.Children.Add(pctStack);
+            }
 
             rowStack.Children.Add(topGrid);
+
+            if (isBalance)
+            {
+                // 余额窗口没有进度条与时间窗口概念：展示较上次变化与预计可用天数
+                var balanceDock = new DockPanel();
+
+                var deltaText = window.BalanceDeltaFormatted;
+                var deltaBlock = new TextBlock
+                {
+                    Text = string.IsNullOrEmpty(deltaText)
+                        ? ""
+                        : string.Format(LocalizationManager.Instance.BalanceVsLast, deltaText),
+                    FontSize = 9,
+                    Foreground = new SolidColorBrush(Color.FromRgb(107, 114, 128))
+                };
+                balanceDock.Children.Add(deltaBlock);
+
+                var forecastBlock = new TextBlock
+                {
+                    Text = window.ForecastDays.HasValue
+                        ? string.Format(LocalizationManager.Instance.ForecastDays, window.ForecastDays.Value)
+                        : LocalizationManager.Instance.ForecastCollecting,
+                    FontSize = 9,
+                    FontWeight = FontWeights.Medium,
+                    Foreground = new SolidColorBrush(Color.FromRgb(107, 114, 128)),
+                    HorizontalAlignment = HorizontalAlignment.Right
+                };
+                DockPanel.SetDock(forecastBlock, Dock.Right);
+                balanceDock.Children.Add(forecastBlock);
+
+                rowStack.Children.Add(balanceDock);
+
+                return rowStack;
+            }
 
             // Row 2: Progress Bar
             var barGrid = new Grid { Height = 6, Margin = new Thickness(0, 4, 0, 4) };

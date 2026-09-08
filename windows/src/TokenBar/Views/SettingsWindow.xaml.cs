@@ -54,6 +54,7 @@ namespace TokenBar.Views
             SetIcon(NavIconDeepSeek, SettingsTab.DeepSeek);
             SetIcon(NavIconVolcengine, SettingsTab.Volcengine);
             SetIcon(NavIconKimi, SettingsTab.Kimi);
+            SetIcon(NavIconOpenRouter, SettingsTab.OpenRouter);
             SetIcon(NavIconGLM, SettingsTab.GLM);
             SetIcon(NavIconAliyun, SettingsTab.Aliyun);
             SetIcon(NavIconCustom, SettingsTab.Custom);
@@ -65,6 +66,7 @@ namespace TokenBar.Views
             SetIcon(IconDeepSeek, SettingsTab.DeepSeek);
             SetIcon(IconVolcengine, SettingsTab.Volcengine);
             SetIcon(IconKimi, SettingsTab.Kimi);
+            SetIcon(IconOpenRouter, SettingsTab.OpenRouter);
             SetIcon(IconGLM, SettingsTab.GLM);
             SetIcon(IconAliyun, SettingsTab.Aliyun);
             SetIcon(IconCustom, SettingsTab.Custom);
@@ -105,6 +107,7 @@ namespace TokenBar.Views
             PnlDeepSeek.Visibility = tab == SettingsTab.DeepSeek ? Visibility.Visible : Visibility.Collapsed;
             PnlVolcengine.Visibility = tab == SettingsTab.Volcengine ? Visibility.Visible : Visibility.Collapsed;
             PnlKimi.Visibility = tab == SettingsTab.Kimi ? Visibility.Visible : Visibility.Collapsed;
+            PnlOpenRouter.Visibility = tab == SettingsTab.OpenRouter ? Visibility.Visible : Visibility.Collapsed;
             PnlGLM.Visibility = tab == SettingsTab.GLM ? Visibility.Visible : Visibility.Collapsed;
             PnlAliyun.Visibility = tab == SettingsTab.Aliyun ? Visibility.Visible : Visibility.Collapsed;
             PnlCustom.Visibility = tab == SettingsTab.Custom ? Visibility.Visible : Visibility.Collapsed;
@@ -127,6 +130,7 @@ namespace TokenBar.Views
                 SettingsTab.DeepSeek => ProviderType.DeepSeek.GetDisplayName(),
                 SettingsTab.Volcengine => ProviderType.Volcengine.GetDisplayName(),
                 SettingsTab.Kimi => ProviderType.Kimi.GetDisplayName(),
+                SettingsTab.OpenRouter => ProviderType.OpenRouter.GetDisplayName(),
                 SettingsTab.GLM => ProviderType.GLM.GetDisplayName(),
                 SettingsTab.Aliyun => ProviderType.AliyunBailian.GetDisplayName(),
                 SettingsTab.Custom => i18n.CustomProviders,
@@ -149,6 +153,7 @@ namespace TokenBar.Views
             TxtNavDeepSeek.Text = ProviderType.DeepSeek.GetDisplayName();
             TxtNavVolcengine.Text = ProviderType.Volcengine.GetDisplayName();
             TxtNavKimi.Text = ProviderType.Kimi.GetDisplayName();
+            TxtNavOpenRouter.Text = ProviderType.OpenRouter.GetDisplayName();
             TxtNavGLM.Text = ProviderType.GLM.GetDisplayName();
             TxtNavAliyun.Text = ProviderType.AliyunBailian.GetDisplayName();
             TxtNavCustom.Text = i18n.CustomProviders;
@@ -201,6 +206,8 @@ namespace TokenBar.Views
             TxtDeepSeekKeyHint.Text = i18n.HintDeepSeekKey;
             TxtDeepSeekEndpointLabel.Text = i18n.ApiEndpointLabel;
             TxtDeepSeekModelLabel.Text = i18n.LabelDefaultModel;
+            TxtDeepSeekThresholdLabel.Text = i18n.BalanceThresholdLabel;
+            TxtDeepSeekThresholdHint.Text = i18n.BalanceThresholdHint;
             BtnTestDeepSeek.Content = i18n.SaveAndTest;
 
             // Tab 4: Volcengine
@@ -219,7 +226,20 @@ namespace TokenBar.Views
             TxtKimiKeyLabel.Text = $"{i18n.KimiTitle} {i18n.ApiKeyLabel}";
             TxtKimiEndpointLabel.Text = i18n.ApiEndpointLabel;
             TxtKimiModelLabel.Text = i18n.LabelModelName;
+            TxtKimiThresholdLabel.Text = i18n.BalanceThresholdLabel;
+            TxtKimiThresholdHint.Text = i18n.BalanceThresholdHint;
             BtnTestKimi.Content = i18n.SaveAndTest;
+
+            // Tab 6: OpenRouter
+            TxtOpenRouterTitle.Text = i18n.OpenRouterTitle;
+            TxtOpenRouterSubtitle.Text = i18n.OpenRouterSubtitle;
+            ChkOpenRouterEnabled.Content = i18n.EnableMonitoring;
+            TxtOpenRouterKeyLabel.Text = i18n.ApiKeyLabel;
+            TxtOpenRouterKeyHint.Text = i18n.HintOpenRouterKey;
+            TxtOpenRouterEndpointLabel.Text = i18n.ApiEndpointLabel;
+            TxtOpenRouterThresholdLabel.Text = i18n.BalanceThresholdLabel;
+            TxtOpenRouterThresholdHint.Text = i18n.BalanceThresholdHint;
+            BtnTestOpenRouter.Content = i18n.SaveAndTest;
 
             // Tab 6: GLM
             TxtGLMTitle.Text = i18n.GLMTitle;
@@ -247,6 +267,9 @@ namespace TokenBar.Views
             TxtCustomKeyLabel.Text = i18n.ApiKeyLabel + ":";
             TxtCustomEndpointLabel.Text = i18n.LabelCustomBaseUrl;
             TxtCustomModelLabel.Text = i18n.LabelCustomModelOptional;
+            TxtCustomThresholdLabel.Text = i18n.IsChinese ? "余额提醒阈值 (选填，按账户币种):" : "Balance Alert Threshold (optional, account currency):";
+            TxtCustomCookieLabel.Text = i18n.ConsoleCookieLabel;
+            TxtCustomCookieHint.Text = i18n.ConsoleCookieHint;
             BtnCancelCustomForm.Content = i18n.Cancel;
             BtnSaveCustomForm.Content = i18n.BtnSaveProvider;
             if (_editingCustomId == null)
@@ -346,6 +369,7 @@ namespace TokenBar.Views
             TxtDeepSeekKey.Text = s.DeepSeekApiKey;
             TxtDeepSeekEndpoint.Text = s.DeepSeekEndpoint;
             TxtDeepSeekModel.Text = s.DeepSeekModel;
+            TxtDeepSeekThreshold.Text = s.DeepSeekBalanceAlertThreshold.ToString("0.##");
 
             // Volcengine
             ChkVolcengineEnabled.IsChecked = s.VolcengineEnabled;
@@ -358,6 +382,13 @@ namespace TokenBar.Views
             TxtKimiKey.Text = s.KimiApiKey;
             TxtKimiEndpoint.Text = s.KimiEndpoint;
             TxtKimiModel.Text = s.KimiModel;
+            TxtKimiThreshold.Text = s.KimiBalanceAlertThreshold.ToString("0.##");
+
+            // OpenRouter
+            ChkOpenRouterEnabled.IsChecked = s.OpenRouterEnabled;
+            TxtOpenRouterKey.Text = s.OpenRouterApiKey;
+            TxtOpenRouterEndpoint.Text = s.OpenRouterEndpoint;
+            TxtOpenRouterThreshold.Text = s.OpenRouterBalanceAlertThreshold.ToString("0.##");
 
             // GLM
             ChkGLMEnabled.IsChecked = s.GLMEnabled;
@@ -413,6 +444,7 @@ namespace TokenBar.Views
             s.DeepSeekApiKey = TxtDeepSeekKey.Text.Trim();
             s.DeepSeekEndpoint = TxtDeepSeekEndpoint.Text.Trim();
             s.DeepSeekModel = TxtDeepSeekModel.Text.Trim();
+            s.DeepSeekBalanceAlertThreshold = ParseThreshold(TxtDeepSeekThreshold.Text, 10);
 
             s.VolcengineEnabled = ChkVolcengineEnabled.IsChecked == true;
             s.VolcengineApiKey = TxtVolcengineKey.Text.Trim();
@@ -423,6 +455,12 @@ namespace TokenBar.Views
             s.KimiApiKey = TxtKimiKey.Text.Trim();
             s.KimiEndpoint = TxtKimiEndpoint.Text.Trim();
             s.KimiModel = TxtKimiModel.Text.Trim();
+            s.KimiBalanceAlertThreshold = ParseThreshold(TxtKimiThreshold.Text, 10);
+
+            s.OpenRouterEnabled = ChkOpenRouterEnabled.IsChecked == true;
+            s.OpenRouterApiKey = TxtOpenRouterKey.Text.Trim();
+            s.OpenRouterEndpoint = TxtOpenRouterEndpoint.Text.Trim();
+            s.OpenRouterBalanceAlertThreshold = ParseThreshold(TxtOpenRouterThreshold.Text, 5);
 
             s.GLMEnabled = ChkGLMEnabled.IsChecked == true;
             s.GLMApiKey = TxtGLMKey.Text.Trim();
@@ -488,10 +526,16 @@ namespace TokenBar.Views
             UpdateOne(ProviderType.DeepSeek, TxtDeepSeekStatusDot, TxtDeepSeekStatus, TxtDeepSeekAccount);
             UpdateOne(ProviderType.Volcengine, TxtVolcengineStatusDot, TxtVolcengineStatus, TxtVolcengineAccount);
             UpdateOne(ProviderType.Kimi, TxtKimiStatusDot, TxtKimiStatus, TxtKimiAccount);
+            UpdateOne(ProviderType.OpenRouter, TxtOpenRouterStatusDot, TxtOpenRouterStatus, TxtOpenRouterAccount);
             UpdateOne(ProviderType.GLM, TxtGLMStatusDot, TxtGLMStatus, TxtGLMAccount);
             UpdateOne(ProviderType.AliyunBailian, TxtAliyunStatusDot, TxtAliyunStatus, TxtAliyunAccount);
 
             RenderCustomProvidersList();
+        }
+
+        private static decimal ParseThreshold(string? text, decimal fallback)
+        {
+            return decimal.TryParse(text?.Trim(), out var value) && value >= 0 ? value : fallback;
         }
 
         // ==================== Actions ====================
@@ -645,6 +689,18 @@ namespace TokenBar.Views
                 MessageBox.Show(i18n.IsChinese ? $"KIMI 连接成功！{q.AccountInfo}" : $"KIMI connected successfully! {q.AccountInfo}", i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Information);
             else
                 MessageBox.Show(i18n.IsChinese ? $"KIMI 连接失败: {q.ErrorMessage}" : $"KIMI connection failed: {q.ErrorMessage}", i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+
+        private async void BtnTestOpenRouter_Click(object sender, RoutedEventArgs e)
+        {
+            SyncToSettings();
+            await RefreshManager.Instance.RefreshOpenRouterAsync();
+            var q = RefreshManager.Instance.Quotas[ProviderType.OpenRouter];
+            var i18n = LocalizationManager.Instance;
+            if (q.IsAuthorized)
+                MessageBox.Show(i18n.IsChinese ? $"OpenRouter 连接成功！{q.AccountInfo}" : $"OpenRouter connected successfully! {q.AccountInfo}", i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Information);
+            else
+                MessageBox.Show(i18n.IsChinese ? $"OpenRouter 连接失败: {q.ErrorMessage}" : $"OpenRouter connection failed: {q.ErrorMessage}", i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Warning);
         }
 
         private async void BtnTestGLM_Click(object sender, RoutedEventArgs e)
@@ -850,6 +906,8 @@ namespace TokenBar.Views
             TxtCustomKey.Text = "";
             TxtCustomEndpoint.Text = "http://localhost:3000/v1";
             TxtCustomModel.Text = "";
+            TxtCustomThreshold.Text = "";
+            TxtCustomCookie.Text = "";
             CmbCustomProtocol.SelectedIndex = 0;
             BdCustomForm.Visibility = Visibility.Visible;
         }
@@ -862,6 +920,8 @@ namespace TokenBar.Views
             TxtCustomKey.Text = cfg.ApiKey;
             TxtCustomEndpoint.Text = cfg.Endpoint;
             TxtCustomModel.Text = cfg.Model;
+            TxtCustomThreshold.Text = cfg.BalanceAlertThreshold?.ToString("0.##") ?? "";
+            TxtCustomCookie.Text = cfg.ConsoleCookie;
             CmbCustomProtocol.SelectedIndex = cfg.Protocol switch
             {
                 ApiProtocol.OpenAIResponses => 1,
@@ -874,6 +934,13 @@ namespace TokenBar.Views
         private void BtnCancelCustomForm_Click(object sender, RoutedEventArgs e)
         {
             BdCustomForm.Visibility = Visibility.Collapsed;
+        }
+
+        /// <summary>自定义厂商余额阈值：留空表示使用默认值 (null)。</summary>
+        private static decimal? ParseCustomThreshold(string? text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return null;
+            return decimal.TryParse(text.Trim(), out var value) && value >= 0 ? value : null;
         }
 
         private void BtnSaveCustomForm_Click(object sender, RoutedEventArgs e)
@@ -903,6 +970,8 @@ namespace TokenBar.Views
                     existing.Endpoint = TxtCustomEndpoint.Text.Trim();
                     existing.Model = TxtCustomModel.Text.Trim();
                     existing.Protocol = protocol;
+                    existing.BalanceAlertThreshold = ParseCustomThreshold(TxtCustomThreshold.Text);
+                    existing.ConsoleCookie = TxtCustomCookie.Text.Trim();
                     RefreshManager.Instance.UpdateCustomProvider(existing);
                 }
             }
@@ -915,7 +984,9 @@ namespace TokenBar.Views
                     Endpoint = TxtCustomEndpoint.Text.Trim(),
                     Model = TxtCustomModel.Text.Trim(),
                     Protocol = protocol,
-                    IsEnabled = true
+                    IsEnabled = true,
+                    BalanceAlertThreshold = ParseCustomThreshold(TxtCustomThreshold.Text),
+                    ConsoleCookie = TxtCustomCookie.Text.Trim()
                 };
                 RefreshManager.Instance.AddCustomProvider(newConfig);
             }

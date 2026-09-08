@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using Timer = System.Threading.Timer;
 using TokenBar.I18n;
 using TokenBar.Models;
+using TokenBar.Tray;
 
 namespace TokenBar.Services
 {
@@ -23,6 +24,11 @@ namespace TokenBar.Services
 
         private Timer? _timer;
         private readonly string _configFilePath;
+
+        // 余额窗口的展示辅助状态（较上次差值 + 低余额提醒状态机），进程内有效
+        private readonly object _balanceLock = new();
+        private readonly Dictionary<string, decimal> _lastBalance = new();
+        private readonly HashSet<string> _balanceAlerted = new();
 
         public event Action? OnQuotasUpdated;
 
@@ -150,6 +156,7 @@ namespace TokenBar.Services
                 if (Settings.DeepSeekEnabled) tasks.Add(RefreshDeepSeekAsync());
                 if (Settings.VolcengineEnabled) tasks.Add(RefreshVolcengineAsync());
                 if (Settings.KimiEnabled) tasks.Add(RefreshKimiAsync());
+                if (Settings.OpenRouterEnabled) tasks.Add(RefreshOpenRouterAsync());
                 if (Settings.GLMEnabled) tasks.Add(RefreshGLMAsync());
                 if (Settings.AliyunEnabled) tasks.Add(RefreshAliyunAsync());
 
@@ -381,13 +388,17 @@ namespace TokenBar.Services
                 var (primary, secondary, account) = await DeepSeekService.Instance.FetchQuotaAsync(
                     Settings.DeepSeekApiKey,
                     Settings.DeepSeekEndpoint,
-                    Settings.DeepSeekModel);
+                    Settings.DeepSeekModel,
+                    Settings.DeepSeekBalanceAlertThreshold);
 
                 quota.FiveHourWindow = primary;
                 quota.WeeklyWindow = secondary;
                 quota.AccountInfo = account;
                 quota.IsAuthorized = true;
                 quota.LastUpdated = DateTime.Now;
+
+                ProcessBalance("deepseek", ProviderType.DeepSeek.GetDisplayName(),
+                    quota.WeeklyWindow, Settings.DeepSeekBalanceAlertThreshold);
             }
             catch (Exception ex)
             {
@@ -463,13 +474,61 @@ namespace TokenBar.Services
                 var (primary, secondary, account) = await KimiService.Instance.FetchQuotaAsync(
                     Settings.KimiApiKey,
                     Settings.KimiEndpoint,
-                    Settings.KimiModel);
+                    Settings.KimiModel,
+                    Settings.KimiBalanceAlertThreshold);
 
                 quota.FiveHourWindow = primary;
                 quota.WeeklyWindow = secondary;
                 quota.AccountInfo = account;
                 quota.IsAuthorized = true;
                 quota.LastUpdated = DateTime.Now;
+
+                ProcessBalance("kimi", ProviderType.Kimi.GetDisplayName(),
+                    quota.WeeklyWindow, Settings.KimiBalanceAlertThreshold);
+            }
+            catch (Exception ex)
+            {
+                quota.IsAuthorized = false;
+                quota.ErrorMessage = ex.Message;
+            }
+            finally
+            {
+                quota.IsLoading = false;
+                NotifyQuotasUpdated();
+            }
+        }
+
+        public async Task RefreshOpenRouterAsync()
+        {
+            var quota = Quotas[ProviderType.OpenRouter];
+            quota.IsLoading = true;
+            quota.ErrorMessage = null;
+            NotifyQuotasUpdated();
+
+            if (string.IsNullOrWhiteSpace(Settings.OpenRouterApiKey))
+            {
+                quota.IsAuthorized = false;
+                quota.ErrorMessage = LocalizationManager.Instance.IsChinese ? "请在配置中输入 OpenRouter API Key" : "Please configure OpenRouter API Key";
+                quota.IsLoading = false;
+                NotifyQuotasUpdated();
+                return;
+            }
+
+            try
+            {
+                var (primary, secondary, account) = await OpenRouterService.Instance.FetchQuotaAsync(
+                    Settings.OpenRouterApiKey,
+                    Settings.OpenRouterEndpoint,
+                    Settings.OpenRouterBalanceAlertThreshold);
+
+                quota.FiveHourWindow = primary;
+                quota.WeeklyWindow = secondary;
+                quota.AccountInfo = account;
+                quota.IsAuthorized = true;
+                quota.LastUpdated = DateTime.Now;
+
+                ProcessBalance("openrouter", ProviderType.OpenRouter.GetDisplayName(),
+                    quota.FiveHourWindow, Settings.OpenRouterBalanceAlertThreshold);
             }
             catch (Exception ex)
             {
@@ -588,6 +647,13 @@ namespace TokenBar.Services
                 q.SecondaryWindow = secondary;
                 q.AccountInfo = account;
                 q.IsAuthorized = true;
+
+                // 余额窗口可能在主槽位（纯余额厂商）或副槽位（MiMo 等订阅+余额双通道厂商）
+                var balanceWin = primary?.Kind == TokenWindowKind.Balance ? primary
+                    : secondary?.Kind == TokenWindowKind.Balance ? secondary
+                    : null;
+                ProcessBalance($"custom:{config.Id}", config.Name,
+                    balanceWin, config.BalanceAlertThreshold ?? 10);
             }
             catch (Exception ex)
             {
@@ -598,6 +664,60 @@ namespace TokenBar.Services
             {
                 q.IsLoading = false;
                 NotifyQuotasUpdated();
+            }
+        }
+
+        /// <summary>
+        /// 余额窗口刷新成功后的统一处理：
+        /// 1) 记录与上次刷新的差值（内存）；2) 写入本地历史并计算"预计可用天数"；
+        /// 3) 低余额时触发一次托盘气泡提醒，恢复到阈值 1.2 倍以上后重新武装。
+        /// </summary>
+        private void ProcessBalance(string providerKey, string displayName, TokenWindow? window, decimal threshold)
+        {
+            if (window == null || window.Kind != TokenWindowKind.Balance || !window.BalanceAmount.HasValue) return;
+            var amount = window.BalanceAmount.Value;
+
+            lock (_balanceLock)
+            {
+                if (_lastBalance.TryGetValue(providerKey, out var prev))
+                {
+                    window.LastDelta = amount - prev;
+                }
+                _lastBalance[providerKey] = amount;
+            }
+
+            BalanceHistoryStore.Record(providerKey, amount);
+            window.ForecastDays = BalanceHistoryStore.GetForecastDays(providerKey, amount);
+
+            if (threshold <= 0) return;
+
+            bool fire = false;
+            lock (_balanceLock)
+            {
+                if (amount < threshold)
+                {
+                    fire = _balanceAlerted.Add(providerKey);
+                }
+                else if (amount >= threshold * 1.2m)
+                {
+                    _balanceAlerted.Remove(providerKey);
+                }
+            }
+
+            if (fire)
+            {
+                var i18n = LocalizationManager.Instance;
+                var title = i18n.LowBalanceTitle;
+                var body = string.Format(i18n.LowBalanceBody, displayName, window.BalanceFormatted);
+                var app = System.Windows.Application.Current;
+                if (app != null && app.Dispatcher != null)
+                {
+                    app.Dispatcher.InvokeAsync(() => TrayIconManager.Instance?.ShowBalloon(title, body));
+                }
+                else
+                {
+                    TrayIconManager.Instance?.ShowBalloon(title, body);
+                }
             }
         }
 
@@ -659,6 +779,12 @@ namespace TokenBar.Services
         {
             Settings.CustomProviders.RemoveAll(c => c.Id == id);
             CustomQuotas.Remove(id);
+            lock (_balanceLock)
+            {
+                _lastBalance.Remove($"custom:{id}");
+                _balanceAlerted.Remove($"custom:{id}");
+            }
+            BalanceHistoryStore.Clear($"custom:{id}");
             SaveSettings();
             NotifyQuotasUpdated();
         }

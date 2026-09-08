@@ -1,5 +1,6 @@
 using TokenBar.I18n;
 using System;
+using System.Globalization;
 using System.Linq;
 using System.Net.Http;
 using System.Text.Json;
@@ -46,23 +47,34 @@ namespace TokenBar.Services
             bool isResponseProtocol)
         {
             string? balanceAccountInfo = null;
+            string? planAccountInfo = null;
             TokenWindow? balanceWindow = null;
+            TokenWindow? planWindow = null;
+            var balanceThreshold = config.BalanceAlertThreshold ?? 10;
+
+            void UseBalance(string title, decimal amount, string currency, string formatted)
+            {
+                balanceAccountInfo = LocalizationManager.Instance.IsChinese ? $"余额: {formatted}" : $"Balance: {formatted}";
+                balanceWindow = new TokenWindow
+                {
+                    Title = title,
+                    Kind = TokenWindowKind.Balance,
+                    BalanceAmount = amount,
+                    Currency = currency,
+                    WarningThreshold = balanceThreshold,
+                    CriticalThreshold = balanceThreshold / 2,
+                    StartTime = DateTime.Now,
+                    EndTime = DateTime.Now.AddDays(30)
+                };
+            }
 
             if (endpoint.Contains("deepseek.com", StringComparison.OrdinalIgnoreCase))
             {
                 var balance = await DeepSeekService.Instance.FetchBalanceAsync(apiKey);
                 if (balance != null)
                 {
-                    balanceAccountInfo = LocalizationManager.Instance.IsChinese ? $"余额: {balance}" : $"Balance: {balance}";
-                    balanceWindow = new TokenWindow
-                    {
-                        Title = "账户余额",
-                        UsedPercentage = 0.0,
-                        StartTime = DateTime.Now,
-                        EndTime = DateTime.Now.AddDays(30),
-                        Unit = "¥",
-                        IsIdle = true
-                    };
+                    var symbol = balance.Value.Currency == "USD" ? "$" : "¥";
+                    UseBalance("账户余额", balance.Value.Amount, balance.Value.Currency, $"{symbol}{balance.Value.Amount:0.00}");
                 }
             }
             else if (endpoint.Contains("moonshot.cn", StringComparison.OrdinalIgnoreCase))
@@ -70,16 +82,7 @@ namespace TokenBar.Services
                 var balance = await FetchMoonshotBalanceAsync(apiKey);
                 if (balance != null)
                 {
-                    balanceAccountInfo = LocalizationManager.Instance.IsChinese ? $"余额: {balance}" : $"Balance: {balance}";
-                    balanceWindow = new TokenWindow
-                    {
-                        Title = "账户余额",
-                        UsedPercentage = 0.0,
-                        StartTime = DateTime.Now,
-                        EndTime = DateTime.Now.AddDays(30),
-                        Unit = "¥",
-                        IsIdle = true
-                    };
+                    UseBalance("账户余额", balance.Value, "CNY", $"¥{balance.Value:0.00}");
                 }
             }
             else if (endpoint.Contains("siliconflow.cn", StringComparison.OrdinalIgnoreCase))
@@ -87,16 +90,40 @@ namespace TokenBar.Services
                 var balance = await FetchSiliconFlowBalanceAsync(apiKey);
                 if (balance != null)
                 {
-                    balanceAccountInfo = LocalizationManager.Instance.IsChinese ? $"余额: {balance}" : $"Balance: {balance}";
-                    balanceWindow = new TokenWindow
+                    UseBalance("账户余额", balance.Value, "CNY", $"¥{balance.Value:0.00}");
+                }
+            }
+            else if (endpoint.Contains("xiaomimimo.com", StringComparison.OrdinalIgnoreCase))
+            {
+                // 小米 MiMo：按量余额与 Token Plan 套餐用量都只接受控制台 Cookie；
+                // 填了 Cookie 即自动开通两条通道，未填时保持纯 API Key 行为不变。
+                var cookie = config.ConsoleCookie.Trim();
+                if (cookie.Length > 0)
+                {
+                    var plan = await FetchMiMoTokenPlanAsync(cookie);
+                    if (plan != null)
                     {
-                        Title = "账户余额",
-                        UsedPercentage = 0.0,
-                        StartTime = DateTime.Now,
-                        EndTime = DateTime.Now.AddDays(30),
-                        Unit = "¥",
-                        IsIdle = true
-                    };
+                        planWindow = new TokenWindow
+                        {
+                            Title = "Token Plan 额度",
+                            UsedPercentage = plan.Value.UsedPercent,
+                            StartTime = DateTime.Now,
+                            EndTime = DateTime.Now.AddDays(30),
+                            UsedAmount = plan.Value.Used,
+                            TotalLimit = plan.Value.Limit,
+                            Unit = "credits"
+                        };
+                        planAccountInfo = LocalizationManager.Instance.IsChinese
+                            ? $"套餐已用 {plan.Value.UsedPercent:0.#}%"
+                            : $"Plan used {plan.Value.UsedPercent:0.#}%";
+                    }
+
+                    var balance = await FetchMiMoBalanceAsync(cookie);
+                    if (balance != null)
+                    {
+                        var symbol = balance.Value.Currency == "USD" ? "$" : "¥";
+                        UseBalance("账户余额", balance.Value.Amount, balance.Value.Currency, $"{symbol}{balance.Value.Amount:0.00}");
+                    }
                 }
             }
 
@@ -151,8 +178,9 @@ namespace TokenBar.Services
             var remainingTokensStr = GetHeader("x-ratelimit-remaining-tokens");
             var resetTokensStr = GetHeader("x-ratelimit-reset-tokens");
 
-            TokenWindow? primaryWindow = balanceWindow;
-            TokenWindow? secondaryWindow = null;
+            // 槽位优先级：订阅窗口（Token Plan 百分比）> 余额（金额）> 速率头
+            TokenWindow? primaryWindow = planWindow ?? balanceWindow;
+            TokenWindow? secondaryWindow = planWindow != null ? balanceWindow : null;
 
             if (double.TryParse(limitTokensStr, out var limitTokens) &&
                 double.TryParse(remainingTokensStr, out var remainingTokens) &&
@@ -177,7 +205,7 @@ namespace TokenBar.Services
 
                 if (primaryWindow == null)
                     primaryWindow = rateWindow;
-                else
+                else if (secondaryWindow == null)
                     secondaryWindow = rateWindow;
             }
 
@@ -206,7 +234,10 @@ namespace TokenBar.Services
             }
 
             var isZhAcct = LocalizationManager.Instance.IsChinese;
-            var account = balanceAccountInfo ?? (modelCount > 0
+            var combinedInfo = planAccountInfo != null && balanceAccountInfo != null
+                ? $"{planAccountInfo} · {balanceAccountInfo}"
+                : planAccountInfo ?? balanceAccountInfo;
+            var account = combinedInfo ?? (modelCount > 0
                 ? (isZhAcct ? $"可用模型: {modelCount}个" : $"{modelCount} models available")
                 : (isZhAcct ? "已连接" : "Connected"));
             return (primaryWindow, secondaryWindow, account);
@@ -337,7 +368,8 @@ namespace TokenBar.Services
             return (primaryWindow, secondaryWindow, account);
         }
 
-        private async Task<string?> FetchMoonshotBalanceAsync(string apiKey)
+        /// <summary>查询 Moonshot 账户余额（人民币），失败返回 null。</summary>
+        private async Task<decimal?> FetchMoonshotBalanceAsync(string apiKey)
         {
             try
             {
@@ -352,14 +384,131 @@ namespace TokenBar.Services
                 if (doc.RootElement.TryGetProperty("data", out var dataObj) &&
                     dataObj.TryGetProperty("available_balance", out var av))
                 {
-                    return $"¥{av.GetDouble():F2}";
+                    if (av.ValueKind == JsonValueKind.Number)
+                        return (decimal)av.GetDouble();
+                    if (av.ValueKind == JsonValueKind.String &&
+                        decimal.TryParse(av.GetString(), NumberStyles.Any, CultureInfo.InvariantCulture, out var parsed))
+                        return parsed;
                 }
             }
             catch { }
             return null;
         }
 
-        private async Task<string?> FetchSiliconFlowBalanceAsync(string apiKey)
+        /// <summary>查询小米 MiMo 按量余额（仅接受控制台 Cookie），失败返回 null。</summary>
+        private async Task<(decimal Amount, string Currency)?> FetchMiMoBalanceAsync(string cookie)
+        {
+            try
+            {
+                using var req = new HttpRequestMessage(HttpMethod.Get, "https://platform.xiaomimimo.com/api/v1/balance");
+                req.Headers.Add("Cookie", cookie);
+                req.Headers.Add("User-Agent", "TokenBar/1.0");
+                req.Headers.Add("Accept", "application/json");
+
+                var resp = await HttpClient.SendAsync(req);
+                if (!resp.IsSuccessStatusCode) return null;
+
+                var body = await resp.Content.ReadAsStringAsync();
+                using var doc = JsonDocument.Parse(body);
+                var root = doc.RootElement;
+                if (root.TryGetProperty("code", out var codeProp) &&
+                    codeProp.ValueKind == JsonValueKind.Number && codeProp.GetInt32() != 0)
+                {
+                    return null;
+                }
+                if (root.TryGetProperty("data", out var data) && data.TryGetProperty("balance", out var bal))
+                {
+                    var raw = bal.ValueKind == JsonValueKind.Number ? bal.GetRawText() : bal.GetString();
+                    if (decimal.TryParse(raw, NumberStyles.Any, CultureInfo.InvariantCulture, out var amount))
+                    {
+                        var currency = data.TryGetProperty("currency", out var cur) ? cur.GetString() : "CNY";
+                        return (amount, string.IsNullOrEmpty(currency) ? "CNY" : currency!);
+                    }
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        /// <summary>
+        /// 查询小米 MiMo Token Plan 套餐用量（仅接受控制台 Cookie）。
+        /// data.usage.items[] 中优先取 plan_total_token（套餐总额度），缺失时取第一条；失败返回 null。
+        /// </summary>
+        private async Task<(double UsedPercent, double Used, double Limit)?> FetchMiMoTokenPlanAsync(string cookie)
+        {
+            try
+            {
+                using var req = new HttpRequestMessage(HttpMethod.Get, "https://platform.xiaomimimo.com/api/v1/tokenPlan/usage");
+                req.Headers.Add("Cookie", cookie);
+                req.Headers.Add("User-Agent", "TokenBar/1.0");
+                req.Headers.Add("Accept", "application/json");
+
+                var resp = await HttpClient.SendAsync(req);
+                if (!resp.IsSuccessStatusCode) return null;
+
+                var body = await resp.Content.ReadAsStringAsync();
+                using var doc = JsonDocument.Parse(body);
+                var root = doc.RootElement;
+                if (root.TryGetProperty("code", out var codeProp) &&
+                    codeProp.ValueKind == JsonValueKind.Number && codeProp.GetInt32() != 0)
+                {
+                    return null;
+                }
+                if (!root.TryGetProperty("data", out var data) ||
+                    !data.TryGetProperty("usage", out var usage) ||
+                    !usage.TryGetProperty("items", out var items) ||
+                    items.ValueKind != JsonValueKind.Array ||
+                    items.GetArrayLength() == 0)
+                {
+                    return null;
+                }
+
+                int chosenIndex = -1;
+                int idx = 0;
+                foreach (var item in items.EnumerateArray())
+                {
+                    if (item.TryGetProperty("name", out var nameProp) &&
+                        nameProp.ValueKind == JsonValueKind.String &&
+                        string.Equals(nameProp.GetString(), "plan_total_token", StringComparison.OrdinalIgnoreCase))
+                    {
+                        chosenIndex = idx;
+                        break;
+                    }
+                    idx++;
+                }
+                if (chosenIndex < 0 && items.GetArrayLength() > 0)
+                {
+                    chosenIndex = 0;
+                }
+                if (chosenIndex < 0) return null;
+                var chosen = items[chosenIndex];
+
+                double limit = 0, used = 0, percent = 0;
+                if (chosen.TryGetProperty("limit", out var limitProp))
+                    limit = limitProp.ValueKind == JsonValueKind.Number ? limitProp.GetDouble() : double.TryParse(limitProp.GetString(), NumberStyles.Any, CultureInfo.InvariantCulture, out var l) ? l : 0;
+                if (chosen.TryGetProperty("used", out var usedProp))
+                    used = usedProp.ValueKind == JsonValueKind.Number ? usedProp.GetDouble() : double.TryParse(usedProp.GetString(), NumberStyles.Any, CultureInfo.InvariantCulture, out var u) ? u : 0;
+                if (chosen.TryGetProperty("percent", out var pctProp) && pctProp.ValueKind == JsonValueKind.Number)
+                {
+                    percent = pctProp.GetDouble();
+                }
+                else if (limit > 0)
+                {
+                    percent = used / limit * 100.0;
+                }
+                else
+                {
+                    return null;
+                }
+
+                return (Math.Clamp(percent, 0.0, 100.0), used, limit);
+            }
+            catch { }
+            return null;
+        }
+
+        /// <summary>查询 SiliconFlow 用户余额（人民币），失败返回 null。</summary>
+        private async Task<decimal?> FetchSiliconFlowBalanceAsync(string apiKey)
         {
             try
             {
@@ -374,7 +523,9 @@ namespace TokenBar.Services
                 if (doc.RootElement.TryGetProperty("data", out var dataObj) &&
                     dataObj.TryGetProperty("balance", out var bal))
                 {
-                    return $"¥{bal.GetString()}";
+                    var raw = bal.ValueKind == JsonValueKind.Number ? bal.GetRawText() : bal.GetString();
+                    if (decimal.TryParse(raw, NumberStyles.Any, CultureInfo.InvariantCulture, out var parsed))
+                        return parsed;
                 }
             }
             catch { }

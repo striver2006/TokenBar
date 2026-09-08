@@ -111,11 +111,15 @@ struct WindowQuotaRow: View {
     let window: TokenWindow
     let badgeText: String
 
+    private var effectiveBadge: String {
+        window.isBalance ? I18n(.balanceBadge) : badgeText
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
-            // Row 1: Title & Percentages
+            // Row 1: Title & Percentage / Balance
             HStack {
-                Text(badgeText)
+                Text(effectiveBadge)
                     .font(.system(size: 10, weight: .bold))
                     .padding(.horizontal, 5)
                     .padding(.vertical, 2)
@@ -128,51 +132,80 @@ struct WindowQuotaRow: View {
 
                 Spacer()
 
-                HStack(alignment: .firstTextBaseline, spacing: 3) {
-                    Text(I18n(.remaining))
-                        .font(.system(size: 10))
-                        .foregroundColor(.secondary)
-                    Text(String(format: "%.0f%%", window.remainingPercentage))
+                if window.isBalance {
+                    // 余额窗口：直接显示金额，而不是"剩余 X%"
+                    Text(window.balanceFormatted)
                         .font(.system(size: 13, weight: .bold, design: .rounded))
                         .foregroundColor(window.statusColor)
+                } else {
+                    HStack(alignment: .firstTextBaseline, spacing: 3) {
+                        Text(I18n(.remaining))
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                        Text(String(format: "%.0f%%", window.remainingPercentage))
+                            .font(.system(size: 13, weight: .bold, design: .rounded))
+                            .foregroundColor(window.statusColor)
+                    }
                 }
             }
 
-            // Row 2: Progress Bar
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    Capsule()
-                        .fill(Color.primary.opacity(0.1))
-                        .frame(height: 6)
+            if window.isBalance {
+                // 余额窗口没有进度条与时间窗口概念：展示较上次变化与预计可用天数
+                HStack {
+                    let deltaText = window.balanceDeltaFormatted
+                    if !deltaText.isEmpty {
+                        Text(String(format: I18n(.balanceVsLast), deltaText))
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                    if let days = window.forecastDays {
+                        Text(String(format: I18n(.forecastDays), days))
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(.secondary)
+                    } else {
+                        Text(I18n(.forecastCollecting))
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(.secondary)
+                    }
+                }
+            } else {
+                // Row 2: Progress Bar
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule()
+                            .fill(Color.primary.opacity(0.1))
+                            .frame(height: 6)
 
-                    Capsule()
-                        .fill(
-                            LinearGradient(
-                                colors: [window.statusColor.opacity(0.8), window.statusColor],
-                                startPoint: .leading,
-                                endPoint: .trailing
+                        Capsule()
+                            .fill(
+                                LinearGradient(
+                                    colors: [window.statusColor.opacity(0.8), window.statusColor],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
                             )
-                        )
-                        .frame(width: max(4, geo.size.width * CGFloat(window.remainingPercentage / 100.0)), height: 6)
+                            .frame(width: max(4, geo.size.width * CGFloat(window.remainingPercentage / 100.0)), height: 6)
+                    }
                 }
-            }
-            .frame(height: 6)
+                .frame(height: 6)
 
-            // Row 3: Time Range & Reset Countdown
-            HStack {
-                HStack(spacing: 3) {
-                    Image(systemName: "clock")
-                        .font(.system(size: 9))
-                    Text(window.timeRangeFormatted)
-                        .font(.system(size: 10))
+                // Row 3: Time Range & Reset Countdown
+                HStack {
+                    HStack(spacing: 3) {
+                        Image(systemName: "clock")
+                            .font(.system(size: 9))
+                        Text(window.timeRangeFormatted)
+                            .font(.system(size: 10))
+                    }
+                    .foregroundColor(.secondary)
+
+                    Spacer()
+
+                    Text(window.timeRemainingFormatted)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(window.isExpired ? .red : .secondary)
                 }
-                .foregroundColor(.secondary)
-
-                Spacer()
-
-                Text(window.timeRemainingFormatted)
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(window.isExpired ? .red : .secondary)
             }
         }
     }

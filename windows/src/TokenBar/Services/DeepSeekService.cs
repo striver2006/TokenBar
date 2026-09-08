@@ -1,5 +1,6 @@
 using TokenBar.I18n;
 using System;
+using System.Globalization;
 using System.Linq;
 using System.Net.Http;
 using System.Text.Json;
@@ -19,7 +20,8 @@ namespace TokenBar.Services
         public async Task<(TokenWindow? FiveHour, TokenWindow? Weekly, string? Account)> FetchQuotaAsync(
             string apiKey,
             string endpoint = "https://api.deepseek.com/v1",
-            string model = "deepseek-chat")
+            string model = "deepseek-chat",
+            decimal balanceAlertThreshold = 10)
         {
             var cleanKey = apiKey.Trim();
             if (string.IsNullOrEmpty(cleanKey))
@@ -34,7 +36,13 @@ namespace TokenBar.Services
             }
 
             // 1. Fetch user balance
-            var balanceString = await FetchBalanceAsync(cleanKey);
+            var balance = await FetchBalanceAsync(cleanKey);
+            string? balanceString = null;
+            if (balance != null)
+            {
+                var symbol = balance.Value.Currency == "USD" ? "$" : "¥";
+                balanceString = $"{symbol}{balance.Value.Amount:0.00}";
+            }
 
             // 2. Fetch models and rate limits
             var modelsUrl = baseEndpoint.EndsWith("/models", StringComparison.OrdinalIgnoreCase)
@@ -80,16 +88,18 @@ namespace TokenBar.Services
             TokenWindow? primaryWindow = null;
             TokenWindow? secondaryWindow = null;
 
-            if (balanceString != null)
+            if (balance != null)
             {
                 secondaryWindow = new TokenWindow
                 {
                     Title = "账户可用余额",
-                    UsedPercentage = 0.0,
+                    Kind = TokenWindowKind.Balance,
+                    BalanceAmount = balance.Value.Amount,
+                    Currency = balance.Value.Currency,
+                    WarningThreshold = balanceAlertThreshold,
+                    CriticalThreshold = balanceAlertThreshold / 2,
                     StartTime = DateTime.Now,
-                    EndTime = DateTime.Now.AddDays(30),
-                    Unit = "¥",
-                    IsIdle = true
+                    EndTime = DateTime.Now.AddDays(30)
                 };
             }
 
@@ -137,7 +147,8 @@ namespace TokenBar.Services
             return (primaryWindow, secondaryWindow, account);
         }
 
-        public async Task<string?> FetchBalanceAsync(string apiKey)
+        /// <summary>查询 DeepSeek 账户余额，返回 (金额, 币种)；失败返回 null。</summary>
+        public async Task<(decimal Amount, string Currency)?> FetchBalanceAsync(string apiKey)
         {
             try
             {
@@ -156,10 +167,14 @@ namespace TokenBar.Services
                     var first = infos[0];
                     if (first.TryGetProperty("total_balance", out var totalProp))
                     {
-                        var total = totalProp.GetString() ?? totalProp.ToString();
-                        var currency = first.TryGetProperty("currency", out var cp) ? cp.GetString() : "CNY";
-                        var symbol = currency == "CNY" ? "¥" : "$";
-                        return $"{symbol}{total}";
+                        var totalRaw = totalProp.ValueKind == JsonValueKind.Number
+                            ? totalProp.GetRawText()
+                            : totalProp.GetString();
+                        if (decimal.TryParse(totalRaw, NumberStyles.Any, CultureInfo.InvariantCulture, out var total))
+                        {
+                            var currency = first.TryGetProperty("currency", out var cp) ? cp.GetString() : "CNY";
+                            return (total, currency ?? "CNY");
+                        }
                     }
                 }
             }

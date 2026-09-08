@@ -40,6 +40,16 @@ namespace TokenBar.Helpers
         private static readonly Lazy<Geometry> CloudLazy = new(() => Parse(
             "M18 10h-1.26A8 8 0 1 0 9 20h9a4 4 0 0 0 0-8z"));
 
+        // OpenRouter：信用卡造型（横条镂空），呼应纯扣费余额语义
+        private static readonly Lazy<Geometry> CreditCardLazy = new(() =>
+        {
+            var card = new CombinedGeometry(GeometryCombineMode.Exclude,
+                new RectangleGeometry(new Rect(2.5, 5, 19, 14), 2.5, 2.5),
+                new RectangleGeometry(new Rect(2.5, 8.2, 19, 2.6)));
+            card.Freeze();
+            return card;
+        });
+
         private static readonly Lazy<Geometry> GridLazy = new(() =>
         {
             var grid = new GeometryGroup();
@@ -75,6 +85,7 @@ namespace TokenBar.Helpers
             ProviderType.DeepSeek => HorizontalBoltLazy.Value,
             ProviderType.Volcengine => FlameLazy.Value,
             ProviderType.Kimi => MoonStarsLazy.Value,
+            ProviderType.OpenRouter => CreditCardLazy.Value,
             ProviderType.GLM => BoltLazy.Value,
             ProviderType.AliyunBailian => CloudLazy.Value,
             _ => GridLazy.Value
@@ -90,6 +101,7 @@ namespace TokenBar.Helpers
             SettingsTab.DeepSeek => GetIconGeometry(ProviderType.DeepSeek),
             SettingsTab.Volcengine => GetIconGeometry(ProviderType.Volcengine),
             SettingsTab.Kimi => GetIconGeometry(ProviderType.Kimi),
+            SettingsTab.OpenRouter => GetIconGeometry(ProviderType.OpenRouter),
             SettingsTab.GLM => GetIconGeometry(ProviderType.GLM),
             SettingsTab.Aliyun => GetIconGeometry(ProviderType.AliyunBailian),
             _ => GearLazy.Value
@@ -103,6 +115,7 @@ namespace TokenBar.Helpers
             SettingsTab.DeepSeek => ProviderType.DeepSeek.GetThemeColor(),
             SettingsTab.Volcengine => ProviderType.Volcengine.GetThemeColor(),
             SettingsTab.Kimi => ProviderType.Kimi.GetThemeColor(),
+            SettingsTab.OpenRouter => ProviderType.OpenRouter.GetThemeColor(),
             SettingsTab.GLM => ProviderType.GLM.GetThemeColor(),
             SettingsTab.Aliyun => ProviderType.AliyunBailian.GetThemeColor(),
             SettingsTab.Custom => Color.FromRgb(99, 102, 241),    // Indigo（与自定义厂商卡片头像一致）

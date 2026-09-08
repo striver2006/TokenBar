@@ -26,6 +26,10 @@ namespace TokenBar.Models
         public string Endpoint { get; set; } = "http://localhost:3000/v1";
         public ApiProtocol Protocol { get; set; } = ApiProtocol.OpenAIChat;
         public string Model { get; set; } = string.Empty;
+        // 余额提醒阈值（账户币种）；null 时使用默认值 10
+        public decimal? BalanceAlertThreshold { get; set; }
+        // 厂商控制台 Web 登录态（如小米 MiMo 的余额/Token Plan 用量查询只接受 Cookie，不接受 API Key）
+        public string ConsoleCookie { get; set; } = string.Empty;
     }
 
     public class AppSettings
@@ -54,6 +58,7 @@ namespace TokenBar.Models
         public string DeepSeekApiKey { get; set; } = string.Empty;
         public string DeepSeekEndpoint { get; set; } = "https://api.deepseek.com/v1";
         public string DeepSeekModel { get; set; } = "deepseek-chat";
+        public decimal DeepSeekBalanceAlertThreshold { get; set; } = 10;
 
         public bool VolcengineEnabled { get; set; } = false;
         public string VolcengineApiKey { get; set; } = string.Empty;
@@ -64,6 +69,12 @@ namespace TokenBar.Models
         public string KimiApiKey { get; set; } = string.Empty;
         public string KimiEndpoint { get; set; } = "https://api.moonshot.cn/v1";
         public string KimiModel { get; set; } = "moonshot-v1-8k";
+        public decimal KimiBalanceAlertThreshold { get; set; } = 10;
+
+        public bool OpenRouterEnabled { get; set; } = false;
+        public string OpenRouterApiKey { get; set; } = string.Empty;
+        public string OpenRouterEndpoint { get; set; } = "https://openrouter.ai/api/v1";
+        public decimal OpenRouterBalanceAlertThreshold { get; set; } = 5;
 
         public bool GLMEnabled { get; set; } = true;
         public string GLMApiKey { get; set; } = string.Empty;

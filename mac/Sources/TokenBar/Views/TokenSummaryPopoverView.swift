@@ -107,6 +107,11 @@ public struct TokenSummaryPopoverView: View {
                         ProviderCardView(quota: kimi, onConfigure: { onOpenSettings(.kimi) })
                     }
 
+                    if refreshManager.settings.openRouterEnabled,
+                       let openRouter = refreshManager.quotas[.openRouter] {
+                        ProviderCardView(quota: openRouter, onConfigure: { onOpenSettings(.openRouter) })
+                    }
+
                     if refreshManager.settings.glmEnabled,
                        let glm = refreshManager.quotas[.glm] {
                         ProviderCardView(quota: glm, onConfigure: { onOpenSettings(.glm) })

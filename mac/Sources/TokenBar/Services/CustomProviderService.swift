@@ -44,44 +44,70 @@ public final class CustomProviderService: @unchecked Sendable {
     ) async throws -> (primary: TokenWindow?, secondary: TokenWindow?, account: String?) {
         // 1. Check for vendor-specific balance API first if applicable
         var balanceAccountInfo: String? = nil
+        var planAccountInfo: String? = nil
         var balanceWindow: TokenWindow? = nil
+        var planWindow: TokenWindow? = nil
 
         let isZh = LocalizationManager.shared.effectiveLanguage == "zh"
+        let balanceThreshold = config.balanceAlertThreshold ?? 10
+
+        func useBalance(title: String, amount: Double, currency: String, formatted: String) {
+            balanceAccountInfo = isZh ? "余额: \(formatted)" : "Balance: \(formatted)"
+            balanceWindow = TokenWindow.balance(
+                title: title,
+                amount: amount,
+                currency: currency,
+                warningThreshold: balanceThreshold,
+                criticalThreshold: balanceThreshold / 2
+            )
+        }
+
         if endpoint.contains("deepseek.com") {
             if let balance = await fetchDeepSeekBalance(apiKey: apiKey) {
-                balanceAccountInfo = isZh ? "余额: \(balance)" : "Balance: \(balance)"
-                balanceWindow = TokenWindow(
+                useBalance(
                     title: "账户余额",
-                    usedPercentage: 0.0,
-                    startTime: Date(),
-                    endTime: Date().addingTimeInterval(30 * 86400),
-                    unit: "¥",
-                    isIdle: true
+                    amount: balance.amount,
+                    currency: balance.currency,
+                    formatted: String(format: "%@%.2f", balance.currency == "USD" ? "$" : "¥", balance.amount)
                 )
             }
         } else if endpoint.contains("moonshot.cn") {
             if let balance = await fetchMoonshotBalance(apiKey: apiKey) {
-                balanceAccountInfo = isZh ? "余额: \(balance)" : "Balance: \(balance)"
-                balanceWindow = TokenWindow(
-                    title: "账户余额",
-                    usedPercentage: 0.0,
-                    startTime: Date(),
-                    endTime: Date().addingTimeInterval(30 * 86400),
-                    unit: "¥",
-                    isIdle: true
-                )
+                useBalance(title: "账户余额", amount: balance, currency: "CNY", formatted: String(format: "¥%.2f", balance))
             }
         } else if endpoint.contains("siliconflow.cn") {
             if let balance = await fetchSiliconFlowBalance(apiKey: apiKey) {
-                balanceAccountInfo = isZh ? "余额: \(balance)" : "Balance: \(balance)"
-                balanceWindow = TokenWindow(
-                    title: "账户余额",
-                    usedPercentage: 0.0,
-                    startTime: Date(),
-                    endTime: Date().addingTimeInterval(30 * 86400),
-                    unit: "¥",
-                    isIdle: true
-                )
+                useBalance(title: "账户余额", amount: balance, currency: "CNY", formatted: String(format: "¥%.2f", balance))
+            }
+        } else if endpoint.contains("xiaomimimo.com") {
+            // 小米 MiMo：按量余额与 Token Plan 套餐用量都只接受控制台 Cookie；
+            // 填了 Cookie 即自动开通两条通道，未填时保持纯 API Key 行为不变。
+            let cookie = config.consoleCookie.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !cookie.isEmpty {
+                if let plan = await fetchMiMoTokenPlan(cookie: cookie) {
+                    planWindow = TokenWindow(
+                        title: "Token Plan 额度",
+                        usedPercentage: plan.usedPercent,
+                        startTime: Date(),
+                        endTime: Date().addingTimeInterval(30 * 86400),
+                        usedAmount: plan.used,
+                        totalLimit: plan.limit,
+                        unit: "credits",
+                        isIdle: plan.usedPercent <= 0
+                    )
+                    planAccountInfo = isZh
+                        ? String(format: "套餐已用 %.1f%%", plan.usedPercent)
+                        : String(format: "Plan used %.1f%%", plan.usedPercent)
+                }
+
+                if let balance = await fetchMiMoBalance(cookie: cookie) {
+                    useBalance(
+                        title: "账户余额",
+                        amount: balance.amount,
+                        currency: balance.currency,
+                        formatted: String(format: "%@%.2f", balance.currency == "USD" ? "$" : "¥", balance.amount)
+                    )
+                }
             }
         }
 
@@ -145,8 +171,9 @@ public final class CustomProviderService: @unchecked Sendable {
         let remainingTokensStr = getHeader("x-ratelimit-remaining-tokens")
         let resetTokensStr = getHeader("x-ratelimit-reset-tokens")
 
-        var primaryWindow: TokenWindow? = balanceWindow
-        var secondaryWindow: TokenWindow? = nil
+        // 槽位优先级：订阅窗口（Token Plan 百分比）> 余额（金额）> 速率头
+        var primaryWindow: TokenWindow? = planWindow ?? balanceWindow
+        var secondaryWindow: TokenWindow? = planWindow != nil ? balanceWindow : nil
 
         if let limitTokens = Double(limitTokensStr ?? ""),
            let remainingTokens = Double(remainingTokensStr ?? ""),
@@ -169,7 +196,7 @@ public final class CustomProviderService: @unchecked Sendable {
 
             if primaryWindow == nil {
                 primaryWindow = rateWindow
-            } else {
+            } else if secondaryWindow == nil {
                 secondaryWindow = rateWindow
             }
         }
@@ -191,7 +218,13 @@ public final class CustomProviderService: @unchecked Sendable {
             )
         }
 
-        let account = balanceAccountInfo ?? (modelCount > 0 ? (isZh ? "可用模型: \(modelCount)个" : "\(modelCount) models available") : (isZh ? "已连接" : "Connected"))
+        let combinedInfo: String?
+        if let plan = planAccountInfo, let bal = balanceAccountInfo {
+            combinedInfo = "\(plan) · \(bal)"
+        } else {
+            combinedInfo = planAccountInfo ?? balanceAccountInfo
+        }
+        let account = combinedInfo ?? (modelCount > 0 ? (isZh ? "可用模型: \(modelCount)个" : "\(modelCount) models available") : (isZh ? "已连接" : "Connected"))
         return (primaryWindow, secondaryWindow, account)
     }
 
@@ -326,8 +359,82 @@ public final class CustomProviderService: @unchecked Sendable {
         return (primaryWindow, secondaryWindow, account)
     }
 
+    // MARK: - Xiaomi MiMo Console (Cookie-only APIs)
+
+    /// 查询小米 MiMo 按量余额（仅接受控制台 Cookie），失败返回 nil
+    private func fetchMiMoBalance(cookie: String) async -> (amount: Double, currency: String)? {
+        guard let url = URL(string: "https://platform.xiaomimimo.com/api/v1/balance") else { return nil }
+        var req = URLRequest(url: url)
+        req.setValue(cookie, forHTTPHeaderField: "Cookie")
+        req.setValue("TokenBar/1.0", forHTTPHeaderField: "User-Agent")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        req.timeoutInterval = 10
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              let http = resp as? HTTPURLResponse, http.statusCode == 200,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        if let code = json["code"] as? Int, code != 0 { return nil }
+        guard let dataDict = json["data"] as? [String: Any] else { return nil }
+
+        var amount: Double? = nil
+        if let balNum = (dataDict["balance"] as? NSNumber)?.doubleValue {
+            amount = balNum
+        } else if let balStr = dataDict["balance"] as? String {
+            amount = Double(balStr)
+        }
+        guard let balance = amount else { return nil }
+        let currency = (dataDict["currency"] as? String) ?? "CNY"
+        return (balance, currency.isEmpty ? "CNY" : currency)
+    }
+
+    /// 查询小米 MiMo Token Plan 套餐用量（仅接受控制台 Cookie）。
+    /// data.usage.items[] 优先取 plan_total_token，缺失取第一条；失败返回 nil。
+    private func fetchMiMoTokenPlan(cookie: String) async -> (usedPercent: Double, used: Double, limit: Double)? {
+        guard let url = URL(string: "https://platform.xiaomimimo.com/api/v1/tokenPlan/usage") else { return nil }
+        var req = URLRequest(url: url)
+        req.setValue(cookie, forHTTPHeaderField: "Cookie")
+        req.setValue("TokenBar/1.0", forHTTPHeaderField: "User-Agent")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        req.timeoutInterval = 10
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              let http = resp as? HTTPURLResponse, http.statusCode == 200,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        if let code = json["code"] as? Int, code != 0 { return nil }
+        guard let dataDict = json["data"] as? [String: Any],
+              let usage = dataDict["usage"] as? [String: Any],
+              let items = usage["items"] as? [[String: Any]],
+              !items.isEmpty else {
+            return nil
+        }
+
+        let chosen = items.first { ($0["name"] as? String) == "plan_total_token" } ?? items.first
+        guard let item = chosen else { return nil }
+
+        func asDouble(_ v: Any?) -> Double? {
+            if let n = v as? NSNumber { return n.doubleValue }
+            if let s = v as? String { return Double(s) }
+            return nil
+        }
+
+        let limit = asDouble(item["limit"]) ?? 0
+        let used = asDouble(item["used"]) ?? 0
+        let percent: Double
+        if let p = asDouble(item["percent"]) {
+            percent = p
+        } else if limit > 0 {
+            percent = used / limit * 100.0
+        } else {
+            return nil
+        }
+
+        return (min(max(percent, 0.0), 100.0), used, limit)
+    }
+
     // MARK: - Vendor Specific Balance Probing
-    private func fetchDeepSeekBalance(apiKey: String) async -> String? {
+    private func fetchDeepSeekBalance(apiKey: String) async -> (amount: Double, currency: String)? {
         guard let url = URL(string: "https://api.deepseek.com/user/balance") else { return nil }
         var req = URLRequest(url: url)
         req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
@@ -336,15 +443,23 @@ public final class CustomProviderService: @unchecked Sendable {
               let http = resp as? HTTPURLResponse, http.statusCode == 200,
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let infos = json["balance_infos"] as? [[String: Any]],
-              let first = infos.first,
-              let balance = first["total_balance"] as? String else {
+              let first = infos.first else {
             return nil
         }
+
+        var totalValue: Double? = nil
+        if let totalStr = first["total_balance"] as? String {
+            totalValue = Double(totalStr)
+        } else if let totalNum = first["total_balance"] as? NSNumber {
+            totalValue = totalNum.doubleValue
+        }
+        guard let amount = totalValue else { return nil }
+
         let currency = (first["currency"] as? String) ?? "CNY"
-        return "\(currency == "CNY" ? "¥" : "$")\(balance)"
+        return (amount, currency)
     }
 
-    private func fetchMoonshotBalance(apiKey: String) async -> String? {
+    private func fetchMoonshotBalance(apiKey: String) async -> Double? {
         guard let url = URL(string: "https://api.moonshot.cn/v1/users/me/balance") else { return nil }
         var req = URLRequest(url: url)
         req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
@@ -352,14 +467,19 @@ public final class CustomProviderService: @unchecked Sendable {
         guard let (data, resp) = try? await URLSession.shared.data(for: req),
               let http = resp as? HTTPURLResponse, http.statusCode == 200,
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let dataObj = json["data"] as? [String: Any],
-              let available = (dataObj["available_balance"] as? NSNumber)?.doubleValue else {
+              let dataObj = json["data"] as? [String: Any] else {
             return nil
         }
-        return String(format: "¥%.2f", available)
+        if let available = (dataObj["available_balance"] as? NSNumber)?.doubleValue {
+            return available
+        }
+        if let availableStr = dataObj["available_balance"] as? String, let parsed = Double(availableStr) {
+            return parsed
+        }
+        return nil
     }
 
-    private func fetchSiliconFlowBalance(apiKey: String) async -> String? {
+    private func fetchSiliconFlowBalance(apiKey: String) async -> Double? {
         guard let url = URL(string: "https://api.siliconflow.cn/v1/user/info") else { return nil }
         var req = URLRequest(url: url)
         req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
@@ -367,10 +487,15 @@ public final class CustomProviderService: @unchecked Sendable {
         guard let (data, resp) = try? await URLSession.shared.data(for: req),
               let http = resp as? HTTPURLResponse, http.statusCode == 200,
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let dataObj = json["data"] as? [String: Any],
-              let balance = dataObj["balance"] as? String else {
+              let dataObj = json["data"] as? [String: Any] else {
             return nil
         }
-        return "¥\(balance)"
+        if let balanceStr = dataObj["balance"] as? String, let parsed = Double(balanceStr) {
+            return parsed
+        }
+        if let balanceNum = (dataObj["balance"] as? NSNumber)?.doubleValue {
+            return balanceNum
+        }
+        return nil
     }
 }

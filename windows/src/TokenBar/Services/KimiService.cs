@@ -1,5 +1,6 @@
 using TokenBar.I18n;
 using System;
+using System.Globalization;
 using System.Linq;
 using System.Net.Http;
 using System.Text.Json;
@@ -19,7 +20,8 @@ namespace TokenBar.Services
         public async Task<(TokenWindow? FiveHour, TokenWindow? Weekly, string? Account)> FetchQuotaAsync(
             string apiKey,
             string endpoint = "https://api.moonshot.cn/v1",
-            string model = "moonshot-v1-8k")
+            string model = "moonshot-v1-8k",
+            decimal balanceAlertThreshold = 10)
         {
             var cleanKey = apiKey.Trim();
             if (string.IsNullOrEmpty(cleanKey))
@@ -34,7 +36,12 @@ namespace TokenBar.Services
             }
 
             // 1. Fetch balance
-            var balanceString = await FetchBalanceAsync(cleanKey, baseEndpoint);
+            var balance = await FetchBalanceAsync(cleanKey, baseEndpoint);
+            string? balanceString = null;
+            if (balance != null)
+            {
+                balanceString = $"¥{balance.Value:0.00}";
+            }
 
             // 2. Fetch models & rate limits
             var modelsUrl = baseEndpoint.EndsWith("/models", StringComparison.OrdinalIgnoreCase)
@@ -80,16 +87,18 @@ namespace TokenBar.Services
             TokenWindow? primaryWindow = null;
             TokenWindow? secondaryWindow = null;
 
-            if (balanceString != null)
+            if (balance != null)
             {
                 secondaryWindow = new TokenWindow
                 {
                     Title = "账户可用余额",
-                    UsedPercentage = 0.0,
+                    Kind = TokenWindowKind.Balance,
+                    BalanceAmount = balance.Value,
+                    Currency = "CNY",
+                    WarningThreshold = balanceAlertThreshold,
+                    CriticalThreshold = balanceAlertThreshold / 2,
                     StartTime = DateTime.Now,
-                    EndTime = DateTime.Now.AddDays(30),
-                    Unit = "¥",
-                    IsIdle = true
+                    EndTime = DateTime.Now.AddDays(30)
                 };
             }
 
@@ -137,7 +146,8 @@ namespace TokenBar.Services
             return (primaryWindow, secondaryWindow, account);
         }
 
-        private async Task<string?> FetchBalanceAsync(string apiKey, string baseEndpoint)
+        /// <summary>查询 Moonshot 账户余额（人民币），失败返回 null。</summary>
+        private async Task<decimal?> FetchBalanceAsync(string apiKey, string baseEndpoint)
         {
             try
             {
@@ -156,16 +166,17 @@ namespace TokenBar.Services
                     {
                         if (avProp.ValueKind == JsonValueKind.Number)
                         {
-                            return $"¥{avProp.GetDouble():F2}";
+                            return (decimal)avProp.GetDouble();
                         }
-                        if (avProp.ValueKind == JsonValueKind.String)
+                        if (avProp.ValueKind == JsonValueKind.String &&
+                            decimal.TryParse(avProp.GetString(), NumberStyles.Any, CultureInfo.InvariantCulture, out var parsed))
                         {
-                            return $"¥{avProp.GetString()}";
+                            return parsed;
                         }
                     }
                     if (dataObj.TryGetProperty("cash_balance", out var cashProp) && cashProp.ValueKind == JsonValueKind.Number)
                     {
-                        return $"¥{cashProp.GetDouble():F2}";
+                        return (decimal)cashProp.GetDouble();
                     }
                 }
             }

@@ -8,7 +8,8 @@ public final class KimiService: @unchecked Sendable {
     public func fetchQuota(
         apiKey: String,
         endpoint: String = "https://api.moonshot.cn/v1",
-        model: String = "moonshot-v1-8k"
+        model: String = "moonshot-v1-8k",
+        balanceAlertThreshold: Double = 10
     ) async throws -> (fiveHour: TokenWindow?, weekly: TokenWindow?, account: String?) {
         let cleanKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanKey.isEmpty else {
@@ -25,7 +26,11 @@ public final class KimiService: @unchecked Sendable {
         }
 
         // 1. Fetch user balance via /users/me/balance
-        let balanceString = await fetchBalance(apiKey: cleanKey, baseEndpoint: baseEndpoint)
+        let balance = await fetchBalance(apiKey: cleanKey, baseEndpoint: baseEndpoint)
+        var balanceString: String? = nil
+        if let bal = balance {
+            balanceString = String(format: "¥%.2f", bal)
+        }
 
         // 2. Fetch models and rate limits via GET /models
         let modelsURLStr = baseEndpoint.hasSuffix("/models") ? baseEndpoint : "\(baseEndpoint)/models"
@@ -76,14 +81,13 @@ public final class KimiService: @unchecked Sendable {
         var primaryWindow: TokenWindow? = nil
         var secondaryWindow: TokenWindow? = nil
 
-        if balanceString != nil {
-            secondaryWindow = TokenWindow(
+        if let bal = balance {
+            secondaryWindow = TokenWindow.balance(
                 title: "账户可用余额",
-                usedPercentage: 0.0,
-                startTime: Date(),
-                endTime: Date().addingTimeInterval(30 * 86400),
-                unit: "¥",
-                isIdle: true
+                amount: bal,
+                currency: "CNY",
+                warningThreshold: balanceAlertThreshold,
+                criticalThreshold: balanceAlertThreshold / 2
             )
         }
 
@@ -124,7 +128,8 @@ public final class KimiService: @unchecked Sendable {
         return (primaryWindow, secondaryWindow, account)
     }
 
-    private func fetchBalance(apiKey: String, baseEndpoint: String) async -> String? {
+    /// 查询 Moonshot 账户余额（人民币），失败返回 nil
+    private func fetchBalance(apiKey: String, baseEndpoint: String) async -> Double? {
         let balanceURLStr = "\(baseEndpoint)/users/me/balance"
         guard let url = URL(string: balanceURLStr) else { return nil }
 
@@ -140,11 +145,12 @@ public final class KimiService: @unchecked Sendable {
         }
 
         if let available = dataDict["available_balance"] as? Double {
-            return String(format: "¥%.2f", available)
-        } else if let availableStr = dataDict["available_balance"] as? String {
-            return "¥\(availableStr)"
+            return available
+        } else if let availableStr = dataDict["available_balance"] as? String,
+                  let parsed = Double(availableStr) {
+            return parsed
         } else if let cash = dataDict["cash_balance"] as? Double {
-            return String(format: "¥%.2f", cash)
+            return cash
         }
         return nil
     }

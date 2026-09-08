@@ -286,6 +286,16 @@ namespace TokenBar.Tray
             _settingsWindow.Activate();
         }
 
+        /// <summary>托盘气泡提醒（余额不足等），点击气泡会打开额度浮窗。</summary>
+        public void ShowBalloon(string title, string message)
+        {
+            try
+            {
+                _notifyIcon?.ShowBalloonTip(5000, title, message, ToolTipIcon.Warning);
+            }
+            catch { }
+        }
+
         public void Dispose()
         {
             _hoverTimer?.Stop();

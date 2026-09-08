@@ -80,6 +80,8 @@ public enum I18nKey: String {
     case volcengineSubtitle
     case kimiTitle
     case kimiSubtitle
+    case openRouterTitle
+    case openRouterSubtitle
     case glmTitle
     case glmSubtitle
     case aliyunTitle
@@ -110,6 +112,21 @@ public enum I18nKey: String {
     case enableMonitoring
     case alertNotice
     case alertOk
+
+    // Balance (pay-as-you-go) providers
+    case balanceBadge
+    case balanceVsLast
+    case forecastDays
+    case forecastCollecting
+    case lowBalanceTitle
+    case lowBalanceBody
+    case balanceThresholdLabel
+    case balanceThresholdHint
+    case hintOpenRouterKey
+    case errMissingOpenRouterKey
+    case tokenPlanQuotaTitle
+    case consoleCookieLabel
+    case consoleCookieHint
 
     // Placeholders & Secondary Labels
     case placeholderApiKeyOpenAI
@@ -218,6 +235,7 @@ public enum I18nKey: String {
     case weeklyQuotaTitle
     case sevenDaysQuotaTitle
     case accountBalanceTitle
+    case keyQuotaTitle
     case rpmRateLimitTitle
     case tpmRateLimitTitle
     case tokenRateLimitTitle
@@ -382,6 +400,10 @@ public final class LocalizationManager: ObservableObject {
             return isZh ? "KIMI (月之暗面)" : "KIMI (Moonshot AI)"
         case .kimiSubtitle:
             return isZh ? "配置 Moonshot API Key，查询账户余额与 RPM/TPM 限额" : "Configure Moonshot API Key to monitor balance & limits"
+        case .openRouterTitle:
+            return "OpenRouter"
+        case .openRouterSubtitle:
+            return isZh ? "纯按量扣费聚合平台，监控美元账户余额与 Key 额度" : "Pay-as-you-go aggregator: monitor USD balance & key quota"
         case .glmTitle:
             return isZh ? "GLM (智谱清言)" : "GLM (Zhipu AI)"
         case .glmSubtitle:
@@ -439,6 +461,33 @@ public final class LocalizationManager: ObservableObject {
             return isZh ? "好的" : "OK"
         case .enableMonitoring:
             return isZh ? "启用监控" : "Enable Monitoring"
+
+        case .balanceBadge:
+            return isZh ? "余额" : "Balance"
+        case .balanceVsLast:
+            return isZh ? "较上次 %@" : "Since last %@"
+        case .forecastDays:
+            return isZh ? "预计可用 ~%.0f 天" : "~%.0f days left"
+        case .forecastCollecting:
+            return isZh ? "消耗统计中…" : "Collecting usage stats…"
+        case .lowBalanceTitle:
+            return isZh ? "余额不足提醒" : "Low Balance"
+        case .lowBalanceBody:
+            return isZh ? "%@ 余额仅剩 %@，请及时充值" : "%@ balance is low: %@. Please top up."
+        case .balanceThresholdLabel:
+            return isZh ? "余额提醒阈值 (按账户币种)" : "Low-balance Alert Threshold (account currency)"
+        case .balanceThresholdHint:
+            return isZh ? "余额低于该值时通知提醒，并在额度卡片中变为橙/红色。" : "A notification is shown and the balance turns orange/red when below this value."
+        case .hintOpenRouterKey:
+            return isZh ? "可在 openrouter.ai/keys 创建。普通 Key 仅能查询自身用量；查询账户余额请使用后台创建的 Management Key。" : "Create at openrouter.ai/keys. Regular keys expose per-key usage only; use a Management Key to query the account balance."
+        case .errMissingOpenRouterKey:
+            return isZh ? "请在配置中输入 OpenRouter API Key" : "Please enter OpenRouter API Key in settings"
+        case .tokenPlanQuotaTitle:
+            return isZh ? "Token Plan 额度" : "Token Plan Quota"
+        case .consoleCookieLabel:
+            return isZh ? "控制台 Cookie (选填)" : "Console Cookie (optional)"
+        case .consoleCookieHint:
+            return isZh ? "小米 MiMo 等厂商的余额与套餐用量查询需要官网登录态：浏览器登录后按 F12 -> 网络 复制请求 Cookie 粘贴于此。" : "Balance/plan queries for vendors like Xiaomi MiMo require the web session cookie: log in, press F12 -> Network, copy the request Cookie and paste it here."
 
         // Placeholders & Secondary Labels
         case .placeholderApiKeyOpenAI:
@@ -639,6 +688,8 @@ public final class LocalizationManager: ObservableObject {
             return isZh ? "7天额度" : "7-Day Quota"
         case .accountBalanceTitle:
             return isZh ? "账户可用余额" : "Account Balance"
+        case .keyQuotaTitle:
+            return isZh ? "Key 额度" : "Key Quota"
         case .rpmRateLimitTitle:
             return isZh ? "RPM 速率配额" : "RPM Rate Limit"
         case .tpmRateLimitTitle:

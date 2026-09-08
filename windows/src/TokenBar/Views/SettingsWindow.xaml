@@ -97,23 +97,29 @@
                         </ListBoxItem>
                         <ListBoxItem Tag="6">
                             <StackPanel Orientation="Horizontal">
+                                <Path x:Name="NavIconOpenRouter" Width="12" Height="12" Stretch="Uniform" Fill="#9CA3AF" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="TxtNavOpenRouter" Text="OpenRouter" FontWeight="Medium" FontSize="12"/>
+                            </StackPanel>
+                        </ListBoxItem>
+                        <ListBoxItem Tag="7">
+                            <StackPanel Orientation="Horizontal">
                                 <Path x:Name="NavIconGLM" Width="12" Height="12" Stretch="Uniform" Fill="#9CA3AF" Margin="0,0,8,0" VerticalAlignment="Center"/>
                                 <TextBlock x:Name="TxtNavGLM" Text="GLM (智谱清言)" FontWeight="Medium" FontSize="12"/>
                             </StackPanel>
                         </ListBoxItem>
-                        <ListBoxItem Tag="7">
+                        <ListBoxItem Tag="8">
                             <StackPanel Orientation="Horizontal">
                                 <Path x:Name="NavIconAliyun" Width="12" Height="12" Stretch="Uniform" Fill="#9CA3AF" Margin="0,0,8,0" VerticalAlignment="Center"/>
                                 <TextBlock x:Name="TxtNavAliyun" Text="阿里云百炼" FontWeight="Medium" FontSize="12"/>
                             </StackPanel>
                         </ListBoxItem>
-                        <ListBoxItem Tag="8">
+                        <ListBoxItem Tag="9">
                             <StackPanel Orientation="Horizontal">
                                 <Path x:Name="NavIconCustom" Width="12" Height="12" Stretch="Uniform" Fill="#9CA3AF" Margin="0,0,8,0" VerticalAlignment="Center"/>
                                 <TextBlock x:Name="TxtNavCustom" Text="国内厂商 / 自定义" FontWeight="Medium" FontSize="12"/>
                             </StackPanel>
                         </ListBoxItem>
-                        <ListBoxItem Tag="9">
+                        <ListBoxItem Tag="10">
                             <StackPanel Orientation="Horizontal">
                                 <Path x:Name="NavIconGeneral" Width="12" Height="12" Stretch="Uniform" Fill="#9CA3AF" Margin="0,0,8,0" VerticalAlignment="Center"/>
                                 <TextBlock x:Name="TxtNavGeneral" Text="通用设置" FontWeight="Medium" FontSize="12"/>
@@ -293,7 +299,11 @@
                         <TextBox x:Name="TxtDeepSeekEndpoint" Text="https://api.deepseek.com/v1" Margin="0,0,0,14" Padding="6"/>
 
                         <TextBlock x:Name="TxtDeepSeekModelLabel" Text="默认模型名称" FontWeight="Medium" FontSize="12" Margin="0,0,0,6"/>
-                        <TextBox x:Name="TxtDeepSeekModel" Text="deepseek-chat" Margin="0,0,0,18" Padding="6"/>
+                        <TextBox x:Name="TxtDeepSeekModel" Text="deepseek-chat" Margin="0,0,0,14" Padding="6"/>
+
+                        <TextBlock x:Name="TxtDeepSeekThresholdLabel" Text="余额提醒阈值 (按账户币种)" FontWeight="Medium" FontSize="12" Margin="0,0,0,6"/>
+                        <TextBox x:Name="TxtDeepSeekThreshold" Text="10" Margin="0,0,0,4" Padding="6"/>
+                        <TextBlock x:Name="TxtDeepSeekThresholdHint" Text="余额低于该值时托盘气泡提醒，并在额度卡片中变为橙/红色。" FontSize="10" Foreground="#6B7280" Margin="0,0,0,14"/>
 
                         <Button x:Name="BtnTestDeepSeek" Content="保存并测试连接" Width="140" Height="32" HorizontalAlignment="Left" Background="#2563EB" Foreground="White" BorderThickness="0" Click="BtnTestDeepSeek_Click"/>
                     </StackPanel>
@@ -359,9 +369,48 @@
                         <TextBox x:Name="TxtKimiEndpoint" Text="https://api.moonshot.cn/v1" Margin="0,0,0,14" Padding="6"/>
 
                         <TextBlock x:Name="TxtKimiModelLabel" Text="模型名称" FontWeight="Medium" FontSize="12" Margin="0,0,0,6"/>
-                        <TextBox x:Name="TxtKimiModel" Text="moonshot-v1-8k" Margin="0,0,0,18" Padding="6"/>
+                        <TextBox x:Name="TxtKimiModel" Text="moonshot-v1-8k" Margin="0,0,0,14" Padding="6"/>
+
+                        <TextBlock x:Name="TxtKimiThresholdLabel" Text="余额提醒阈值 (按账户币种)" FontWeight="Medium" FontSize="12" Margin="0,0,0,6"/>
+                        <TextBox x:Name="TxtKimiThreshold" Text="10" Margin="0,0,0,4" Padding="6"/>
+                        <TextBlock x:Name="TxtKimiThresholdHint" Text="余额低于该值时托盘气泡提醒，并在额度卡片中变为橙/红色。" FontSize="10" Foreground="#6B7280" Margin="0,0,0,14"/>
 
                         <Button x:Name="BtnTestKimi" Content="保存并测试连接" Width="140" Height="32" HorizontalAlignment="Left" Background="#2563EB" Foreground="White" BorderThickness="0" Click="BtnTestKimi_Click"/>
+                    </StackPanel>
+
+                    <!-- Tab 6: OpenRouter -->
+                    <StackPanel x:Name="PnlOpenRouter" Visibility="Collapsed">
+                        <DockPanel Margin="0,0,0,16">
+                            <StackPanel Orientation="Horizontal">
+                                <Path x:Name="IconOpenRouter" Width="20" Height="20" Stretch="Uniform" Fill="#9CA3AF" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                                <StackPanel>
+                                    <TextBlock x:Name="TxtOpenRouterTitle" Text="OpenRouter" FontSize="16" FontWeight="Bold" Foreground="#111827"/>
+                                    <TextBlock x:Name="TxtOpenRouterSubtitle" Text="纯按量扣费聚合平台，监控美元账户余额与 Key 额度" FontSize="11" Foreground="#6B7280" Margin="0,3,0,0"/>
+                                </StackPanel>
+                            </StackPanel>
+                            <CheckBox x:Name="ChkOpenRouterEnabled" Content="启用监控" HorizontalAlignment="Right" VerticalAlignment="Center" FontWeight="SemiBold"/>
+                        </DockPanel>
+
+                        <Border Background="#F9FAFB" BorderBrush="#E5E7EB" BorderThickness="1" CornerRadius="8" Padding="12,10" Margin="0,0,0,16">
+                            <DockPanel>
+                                <TextBlock x:Name="TxtOpenRouterStatusDot" Text="●" Foreground="#F59E0B" FontSize="14" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="TxtOpenRouterStatus" Text="" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="TxtOpenRouterAccount" Text="" FontSize="11" Foreground="#6B7280" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                            </DockPanel>
+                        </Border>
+
+                        <TextBlock x:Name="TxtOpenRouterKeyLabel" Text="API KEY" FontWeight="Medium" FontSize="12" Margin="0,0,0,6"/>
+                        <TextBox x:Name="TxtOpenRouterKey" Margin="0,0,0,4" Padding="6"/>
+                        <TextBlock x:Name="TxtOpenRouterKeyHint" Text="可在 openrouter.ai/keys 创建。" FontSize="10" Foreground="#6B7280" Margin="0,0,0,14"/>
+
+                        <TextBlock x:Name="TxtOpenRouterEndpointLabel" Text="API 接入端点" FontWeight="Medium" FontSize="12" Margin="0,0,0,6"/>
+                        <TextBox x:Name="TxtOpenRouterEndpoint" Text="https://openrouter.ai/api/v1" Margin="0,0,0,14" Padding="6"/>
+
+                        <TextBlock x:Name="TxtOpenRouterThresholdLabel" Text="余额提醒阈值 (按账户币种)" FontWeight="Medium" FontSize="12" Margin="0,0,0,6"/>
+                        <TextBox x:Name="TxtOpenRouterThreshold" Text="5" Margin="0,0,0,4" Padding="6"/>
+                        <TextBlock x:Name="TxtOpenRouterThresholdHint" Text="余额低于该值时托盘气泡提醒，并在额度卡片中变为橙/红色。" FontSize="10" Foreground="#6B7280" Margin="0,0,0,14"/>
+
+                        <Button x:Name="BtnTestOpenRouter" Content="保存并测试连接" Width="140" Height="32" HorizontalAlignment="Left" Background="#2563EB" Foreground="White" BorderThickness="0" Click="BtnTestOpenRouter_Click"/>
                     </StackPanel>
 
                     <!-- Tab 6: GLM -->
@@ -484,7 +533,14 @@
                                 <TextBox x:Name="TxtCustomEndpoint" Margin="0,0,0,10" Padding="6"/>
 
                                 <TextBlock x:Name="TxtCustomModelLabel" Text="默认模型名称 (选填):" FontSize="11" Margin="0,0,0,4"/>
-                                <TextBox x:Name="TxtCustomModel" Margin="0,0,0,14" Padding="6"/>
+                                <TextBox x:Name="TxtCustomModel" Margin="0,0,0,10" Padding="6"/>
+
+                                <TextBlock x:Name="TxtCustomThresholdLabel" Text="余额提醒阈值 (选填，按账户币种):" FontSize="11" Margin="0,0,0,4"/>
+                                <TextBox x:Name="TxtCustomThreshold" Margin="0,0,0,10" Padding="6"/>
+
+                                <TextBlock x:Name="TxtCustomCookieLabel" Text="控制台 Cookie (选填)" FontSize="11" Margin="0,0,0,4"/>
+                                <TextBox x:Name="TxtCustomCookie" Margin="0,0,0,4" Padding="6"/>
+                                <TextBlock x:Name="TxtCustomCookieHint" Text="小米 MiMo 等厂商的余额与套餐用量查询需要官网登录态。" FontSize="10" Foreground="#6B7280" Margin="0,0,0,14"/>
 
                                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                                     <Button x:Name="BtnCancelCustomForm" Content="取消" Width="70" Height="28" Margin="0,0,8,0" Background="#F3F4F6" BorderBrush="#D1D5DB" Click="BtnCancelCustomForm_Click"/>

@@ -59,30 +59,73 @@ final class TokenBarTests: XCTestCase {
     }
 
     func testProviderTypes() {
-        XCTAssertEqual(ProviderType.allCases.count, 8)
+        XCTAssertEqual(ProviderType.allCases.count, 9)
         XCTAssertEqual(ProviderType.openAI.displayName, "OpenAI")
         XCTAssertEqual(ProviderType.claudeCode.displayName, "Anthropic (Claude)")
         XCTAssertEqual(ProviderType.gemini.displayName, "Google Gemini")
         XCTAssertEqual(ProviderType.deepseek.displayName, "DeepSeek (深度求索)")
         XCTAssertEqual(ProviderType.volcengine.displayName, "火山方舟 (字节跳动)")
         XCTAssertEqual(ProviderType.kimi.displayName, "KIMI (月之暗面)")
+        XCTAssertEqual(ProviderType.openRouter.displayName, "OpenRouter")
         XCTAssertEqual(ProviderType.glm.displayName, "GLM (智谱清言)")
         XCTAssertEqual(ProviderType.aliyunBailian.displayName, "阿里云百炼 (Token Plan)")
     }
 
     func testSettingsTabOrder() {
         let tabs = SettingsTab.allCases
-        XCTAssertEqual(tabs.count, 10)
+        XCTAssertEqual(tabs.count, 11)
         XCTAssertEqual(tabs[0], .openAI)
         XCTAssertEqual(tabs[1], .anthropic)
         XCTAssertEqual(tabs[2], .gemini)
         XCTAssertEqual(tabs[3], .deepseek)
         XCTAssertEqual(tabs[4], .volcengine)
         XCTAssertEqual(tabs[5], .kimi)
-        XCTAssertEqual(tabs[6], .glm)
-        XCTAssertEqual(tabs[7], .aliyun)
-        XCTAssertEqual(tabs[8], .custom)
-        XCTAssertEqual(tabs[9], .general)
+        XCTAssertEqual(tabs[6], .openRouter)
+        XCTAssertEqual(tabs[7], .glm)
+        XCTAssertEqual(tabs[8], .aliyun)
+        XCTAssertEqual(tabs[9], .custom)
+        XCTAssertEqual(tabs[10], .general)
+    }
+
+    func testBalanceTokenWindow() {
+        let window = TokenWindow.balance(
+            title: "账户可用余额",
+            amount: 23.456,
+            currency: "CNY",
+            warningThreshold: 10,
+            criticalThreshold: 5
+        )
+
+        XCTAssertTrue(window.isBalance)
+        XCTAssertEqual(window.balanceFormatted, "¥23.46")
+        XCTAssertEqual(window.statusColor, Color.green)
+
+        var low = window
+        low.balanceAmount = 3
+        XCTAssertEqual(low.statusColor, Color.red)
+
+        low.balanceAmount = 8
+        XCTAssertEqual(low.statusColor, Color.orange)
+
+        var usd = window
+        usd.currency = "USD"
+        XCTAssertEqual(usd.balanceFormatted, "$23.46")
+
+        var delta = window
+        delta.lastDelta = -0.85
+        XCTAssertEqual(delta.balanceDeltaFormatted, "-¥0.85")
+
+        delta.lastDelta = 12.0
+        XCTAssertEqual(delta.balanceDeltaFormatted, "+¥12.00")
+    }
+
+    func testBalanceForecastStore() {
+        let key = "test-provider-\(UUID().uuidString)"
+        defer { BalanceHistoryStore.shared.clear(providerKey: key) }
+
+        // 样本不足：不给出预测
+        BalanceHistoryStore.shared.record(providerKey: key, value: 100)
+        XCTAssertNil(BalanceHistoryStore.shared.forecastDays(providerKey: key, currentAmount: 100))
     }
 
     func testGLMOpenAIEndpoint() {
@@ -136,6 +179,11 @@ final class TokenBarTests: XCTestCase {
         XCTAssertFalse(decoded.deepseekEnabled)
         XCTAssertFalse(decoded.volcengineEnabled)
         XCTAssertFalse(decoded.kimiEnabled)
+        XCTAssertFalse(decoded.openRouterEnabled)
+        XCTAssertEqual(decoded.openRouterEndpoint, "https://openrouter.ai/api/v1")
+        XCTAssertEqual(decoded.deepseekBalanceAlertThreshold, 10)
+        XCTAssertEqual(decoded.kimiBalanceAlertThreshold, 10)
+        XCTAssertEqual(decoded.openRouterBalanceAlertThreshold, 5)
         XCTAssertTrue(decoded.customProviders.isEmpty)
     }
 
@@ -205,6 +253,7 @@ final class TokenBarTests: XCTestCase {
         XCTAssertEqual(decoded.endpoint, "https://api.deepseek.com/v1")
         XCTAssertEqual(decoded.model, "deepseek-chat")
         XCTAssertTrue(decoded.isEnabled)
+        XCTAssertNil(decoded.balanceAlertThreshold)
     }
 
     func testApiProtocolBackwardCompatibility() throws {

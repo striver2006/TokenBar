@@ -98,7 +98,19 @@ namespace TokenBar.I18n
         public string SelectPresetPrompt => IsChinese ? "选择常用厂商配置..." : "Select preset...";
         public string QuotaBadge => IsChinese ? "配额" : "Quota";
         public string RateBadge => IsChinese ? "速率" : "Rate";
+        public string BalanceBadge => IsChinese ? "余额" : "Balance";
         public string EnableMonitoring => IsChinese ? "启用监控" : "Enable Monitoring";
+
+        // Balance (pay-as-you-go) providers
+        public string BalanceVsLast => IsChinese ? "较上次 {0}" : "Since last {0}";
+        public string ForecastDays => IsChinese ? "预计可用 ~{0:0} 天" : "~{0:0} days left";
+        public string ForecastCollecting => IsChinese ? "消耗统计中…" : "Collecting usage stats…";
+        public string LowBalanceTitle => IsChinese ? "余额不足提醒" : "Low Balance";
+        public string LowBalanceBody => IsChinese ? "{0} 余额仅剩 {1}，请及时充值" : "{0} balance is low: {1}. Please top up.";
+        public string BalanceThresholdLabel => IsChinese ? "余额提醒阈值 (按账户币种)" : "Low-balance Alert Threshold (account currency)";
+        public string BalanceThresholdHint => IsChinese ? "余额低于该值时托盘气泡提醒，并在额度卡片中变为橙/红色。" : "A tray balloon is shown and the balance turns orange/red when below this value.";
+        public string ConsoleCookieLabel => IsChinese ? "控制台 Cookie (选填)" : "Console Cookie (optional)";
+        public string ConsoleCookieHint => IsChinese ? "小米 MiMo 等厂商的余额与套餐用量查询需要官网登录态：浏览器登录后按 F12 -> 网络(Network) 复制请求 Cookie 粘贴于此。" : "Balance/plan usage queries for vendors like Xiaomi MiMo require the web session cookie: log in, press F12 -> Network, copy the request Cookie and paste it here.";
 
         // Provider Titles & Subtitles
         public string OpenAITitle => "OpenAI API";
@@ -113,6 +125,13 @@ namespace TokenBar.I18n
         public string VolcengineSubtitle => IsChinese ? "配置火山方舟 API Key，监控大模型接入点与调用配额" : "Configure Ark API Key to monitor model endpoint quotas";
         public string KimiTitle => IsChinese ? "KIMI (月之暗面)" : "KIMI (Moonshot AI)";
         public string KimiSubtitle => IsChinese ? "配置 Moonshot API Key，查询账户余额与 RPM/TPM 限额" : "Configure Moonshot API Key to monitor balance & limits";
+        public string OpenRouterTitle => "OpenRouter";
+        public string OpenRouterSubtitle => IsChinese
+            ? "配置 OpenRouter API Key（查询账户余额需 Management Key），纯按量扣费美元余额监控"
+            : "Configure an OpenRouter API key (Management key for account balance), pay-as-you-go balance in USD";
+        public string HintOpenRouterKey => IsChinese
+            ? "可在 openrouter.ai/keys 创建。普通 Key 仅能查询自身用量；查询账户余额请使用后台创建的 Management Key。"
+            : "Create at openrouter.ai/keys. Regular keys expose per-key usage only; use a Management Key to query the account balance.";
         public string GLMTitle => IsChinese ? "GLM (智谱清言)" : "GLM (Zhipu AI)";
         public string GLMSubtitle => IsChinese ? "配置智谱 BigModel API Key，实时监测账户与接口状态" : "Configure Zhipu BigModel API Key to monitor quota & status";
         public string AliyunTitle => IsChinese ? "阿里云百炼 (Token Plan)" : "Aliyun Bailian (Token Plan)";

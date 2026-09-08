@@ -15,6 +15,7 @@ namespace TokenBar.Models
         DeepSeek,
         Volcengine,
         Kimi,
+        OpenRouter,
         GLM,
         AliyunBailian
     }
@@ -32,6 +33,7 @@ namespace TokenBar.Models
                 ProviderType.DeepSeek => isZh ? "DeepSeek (深度求索)" : "DeepSeek",
                 ProviderType.Volcengine => isZh ? "火山方舟 (字节跳动)" : "Volcengine Ark",
                 ProviderType.Kimi => isZh ? "KIMI (月之暗面)" : "KIMI (Moonshot AI)",
+                ProviderType.OpenRouter => "OpenRouter",
                 ProviderType.GLM => isZh ? "GLM (智谱清言)" : "GLM (Zhipu AI)",
                 ProviderType.AliyunBailian => isZh ? "阿里云百炼 (Token Plan)" : "Aliyun Bailian (Token Plan)",
                 _ => type.ToString()
@@ -49,6 +51,7 @@ namespace TokenBar.Models
                 ProviderType.DeepSeek => "DeepSeek",
                 ProviderType.Volcengine => isZh ? "火山方舟" : "Ark",
                 ProviderType.Kimi => "KIMI",
+                ProviderType.OpenRouter => "OpenRouter",
                 ProviderType.GLM => "GLM",
                 ProviderType.AliyunBailian => isZh ? "百炼" : "Bailian",
                 _ => type.ToString()
@@ -63,6 +66,7 @@ namespace TokenBar.Models
             ProviderType.DeepSeek => Color.FromRgb(56, 122, 245),     // Royal Blue
             ProviderType.Volcengine => Color.FromRgb(240, 77, 56),    // Volcengine Red
             ProviderType.Kimi => Color.FromRgb(140, 89, 235),        // Moonshot Purple
+            ProviderType.OpenRouter => Color.FromRgb(100, 103, 242), // OpenRouter Indigo
             ProviderType.GLM => Color.FromRgb(59, 184, 135),         // Emerald green
             ProviderType.AliyunBailian => Color.FromRgb(255, 107, 0), // Aliyun Orange
             _ => Color.FromRgb(37, 99, 235)
@@ -79,6 +83,7 @@ namespace TokenBar.Models
             ProviderType.DeepSeek => SettingsTab.DeepSeek,
             ProviderType.Volcengine => SettingsTab.Volcengine,
             ProviderType.Kimi => SettingsTab.Kimi,
+            ProviderType.OpenRouter => SettingsTab.OpenRouter,
             ProviderType.GLM => SettingsTab.GLM,
             ProviderType.AliyunBailian => SettingsTab.Aliyun,
             _ => SettingsTab.General
@@ -93,10 +98,21 @@ namespace TokenBar.Models
         DeepSeek = 3,
         Volcengine = 4,
         Kimi = 5,
-        GLM = 6,
-        Aliyun = 7,
-        Custom = 8,
-        General = 9
+        OpenRouter = 6,
+        GLM = 7,
+        Aliyun = 8,
+        Custom = 9,
+        General = 10
+    }
+
+    /// <summary>
+    /// 额度窗口展示类型：Percentage 为时间窗口百分比（5小时/每周/速率等），
+    /// Balance 为纯扣费厂商的货币余额（DeepSeek/OpenRouter/Kimi 等）。
+    /// </summary>
+    public enum TokenWindowKind
+    {
+        Percentage,
+        Balance
     }
 
     public class TokenWindow
@@ -122,6 +138,8 @@ namespace TokenBar.Models
                     "每周额度" => "Weekly Quota",
                     "7天额度" or "7天周期额度" => "7-Day Quota",
                     "账户可用余额" or "账户余额" => "Account Balance",
+                    "Key 额度" => "Key Quota",
+                    "Token Plan 额度" => "Token Plan Quota",
                     "RPM 速率配额" or "RPM 请求速率" => "RPM Rate Limit",
                     "TPM 速率配额" or "TPM 速率剩余" => "TPM Rate Limit",
                     "Token 速率配额" => "Token Rate Limit",
@@ -140,6 +158,31 @@ namespace TokenBar.Models
         public string Unit { get; set; } = "%";
         public bool IsIdle { get; set; }
 
+        // 余额窗口 (Kind == Balance) 专用字段
+        public TokenWindowKind Kind { get; set; } = TokenWindowKind.Percentage;
+        public decimal? BalanceAmount { get; set; }
+        public string? Currency { get; set; }
+        public decimal? WarningThreshold { get; set; }
+        public decimal? CriticalThreshold { get; set; }
+        // 由 RefreshManager 填充的展示辅助字段（不入设置文件）
+        public decimal? LastDelta { get; set; }
+        public double? ForecastDays { get; set; }
+
+        public string CurrencySymbol => Currency == "USD" ? "$" : "¥";
+
+        public string BalanceFormatted => BalanceAmount.HasValue
+            ? $"{CurrencySymbol}{BalanceAmount.Value:0.00}"
+            : "--";
+
+        public string BalanceDeltaFormatted
+        {
+            get
+            {
+                if (!LastDelta.HasValue || LastDelta.Value == 0) return string.Empty;
+                return $"{(LastDelta.Value > 0 ? "+" : "-")}{CurrencySymbol}{Math.Abs(LastDelta.Value):0.00}";
+            }
+        }
+
         public double RemainingPercentage => Math.Max(0.0, 100.0 - UsedPercentage);
         public bool IsExpired => !IsIdle && DateTime.Now >= EndTime;
 
@@ -147,6 +190,15 @@ namespace TokenBar.Models
         {
             get
             {
+                if (Kind == TokenWindowKind.Balance)
+                {
+                    if (BalanceAmount.HasValue && CriticalThreshold.HasValue && BalanceAmount.Value < CriticalThreshold.Value)
+                        return new SolidColorBrush(Color.FromRgb(239, 68, 68)); // Red
+                    if (BalanceAmount.HasValue && WarningThreshold.HasValue && BalanceAmount.Value < WarningThreshold.Value)
+                        return new SolidColorBrush(Color.FromRgb(245, 158, 11)); // Orange
+                    return new SolidColorBrush(Color.FromRgb(34, 197, 94)); // Green
+                }
+
                 if (UsedPercentage >= 90)
                     return new SolidColorBrush(Color.FromRgb(239, 68, 68)); // Red
                 if (UsedPercentage >= 70)
