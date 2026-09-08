@@ -49,3 +49,20 @@ tmp/
 .claude/
 .agents/
 implementation_plan.md
+
+# 构建与发布产物 (Build & Release artifacts)
+# 发布版二进制（含从 GitHub/GitCode Release 下载到仓库内的文件）
+*.exe
+*.pdb
+*.app/
+*.dmg
+TokenBar-v*.zip
+SHA256SUMS.txt
+.tmp-release/
+dist/
+# 测试与构建日志
+TestResults/
+*.binlog
+*.trx
+# Swift PM 工作目录（Package.resolved 位于 mac/ 根，正常提交）
+.swiftpm/
