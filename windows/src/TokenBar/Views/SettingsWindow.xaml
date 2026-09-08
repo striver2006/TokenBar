@@ -121,6 +121,12 @@
                         </ListBoxItem>
                         <ListBoxItem Tag="10">
                             <StackPanel Orientation="Horizontal">
+                                <Path x:Name="NavIconDisplayOrder" Width="12" Height="12" Stretch="Uniform" Fill="#9CA3AF" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="TxtNavDisplayOrder" Text="显示顺序" FontWeight="Medium" FontSize="12"/>
+                            </StackPanel>
+                        </ListBoxItem>
+                        <ListBoxItem Tag="11">
+                            <StackPanel Orientation="Horizontal">
                                 <Path x:Name="NavIconGeneral" Width="12" Height="12" Stretch="Uniform" Fill="#9CA3AF" Margin="0,0,8,0" VerticalAlignment="Center"/>
                                 <TextBlock x:Name="TxtNavGeneral" Text="通用设置" FontWeight="Medium" FontSize="12"/>
                             </StackPanel>
@@ -530,7 +536,23 @@
                         </Border>
                     </StackPanel>
 
-                    <!-- Tab 9: General Settings -->
+                    <!-- Tab 10: Display Order -->
+                    <StackPanel x:Name="PnlDisplayOrder" Visibility="Collapsed">
+                        <DockPanel Margin="0,0,0,14">
+                            <Button x:Name="BtnResetOrder" Content="恢复默认顺序" Padding="10,5" Background="#F3F4F6" BorderBrush="#D1D5DB" DockPanel.Dock="Right" VerticalAlignment="Center" Cursor="Hand" Click="BtnResetOrder_Click" Margin="12,0,0,0"/>
+                            <Path x:Name="IconDisplayOrder" Width="20" Height="20" Stretch="Uniform" Fill="#9CA3AF" Margin="0,0,8,0" VerticalAlignment="Center" DockPanel.Dock="Left"/>
+                            <StackPanel>
+                                <TextBlock x:Name="TxtDisplayOrderTitle" TextWrapping="Wrap" Text="显示顺序" FontSize="16" FontWeight="Bold" Foreground="#111827"/>
+                                <TextBlock x:Name="TxtDisplayOrderSubtitle" TextWrapping="Wrap" Text="调整浮动框中各厂商余额卡片的先后顺序" FontSize="11" Foreground="#6B7280" Margin="0,3,0,0"/>
+                            </StackPanel>
+                        </DockPanel>
+
+                        <TextBlock x:Name="TxtDisplayOrderHint" TextWrapping="Wrap" Text="使用上移 / 下移调整顺序，修改立即生效并自动保存；未列出的新启用厂商将排在末尾。" FontSize="11" Foreground="#6B7280" Margin="0,0,0,12"/>
+
+                        <StackPanel x:Name="PnlOrderList"/>
+                    </StackPanel>
+
+                    <!-- Tab 11: General Settings -->
                     <StackPanel x:Name="PnlGeneral" Visibility="Collapsed">
                         <StackPanel Orientation="Horizontal">
                             <Path x:Name="IconGeneral" Width="20" Height="20" Stretch="Uniform" Fill="#9CA3AF" Margin="0,0,8,0" VerticalAlignment="Center"/>

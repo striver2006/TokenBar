@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
@@ -59,68 +60,43 @@ namespace TokenBar.Views
             PnlCards.Children.Clear();
             var mgr = RefreshManager.Instance;
             var settings = mgr.Settings;
+            var order = settings.ProviderOrder;
 
-            // 1. OpenAI
-            if (settings.OpenAIEnabled && mgr.Quotas.TryGetValue(ProviderType.OpenAI, out var openAIQuota))
+            // 按默认顺序收集可见卡片，再按用户配置的显示顺序（ProviderOrder）稳定排序；
+            // 键未列入 ProviderOrder 的厂商排在已列出项之后并保持默认相对顺序
+            var cards = new List<(string Key, UIElement Card)>();
+
+            void TryAddBuiltIn(ProviderType type)
             {
-                PnlCards.Children.Add(CreateProviderCard(openAIQuota, () => OpenSettings(SettingsTab.OpenAI)));
+                if (mgr.Quotas.TryGetValue(type, out var quota))
+                {
+                    cards.Add((ProviderOrdering.KeyOf(type),
+                        CreateProviderCard(quota, () => OpenSettings(type.GetSettingsTab()))));
+                }
             }
 
-            // 2. Claude (Anthropic)
-            if (settings.ClaudeEnabled && mgr.Quotas.TryGetValue(ProviderType.ClaudeCode, out var claudeQuota))
-            {
-                PnlCards.Children.Add(CreateProviderCard(claudeQuota, () => OpenSettings(SettingsTab.Anthropic)));
-            }
+            if (settings.OpenAIEnabled) TryAddBuiltIn(ProviderType.OpenAI);
+            if (settings.ClaudeEnabled) TryAddBuiltIn(ProviderType.ClaudeCode);
+            if (settings.GeminiEnabled) TryAddBuiltIn(ProviderType.Gemini);
+            if (settings.DeepSeekEnabled) TryAddBuiltIn(ProviderType.DeepSeek);
+            if (settings.VolcengineEnabled) TryAddBuiltIn(ProviderType.Volcengine);
+            if (settings.KimiEnabled) TryAddBuiltIn(ProviderType.Kimi);
+            if (settings.OpenRouterEnabled) TryAddBuiltIn(ProviderType.OpenRouter);
+            if (settings.GLMEnabled) TryAddBuiltIn(ProviderType.GLM);
+            if (settings.AliyunEnabled) TryAddBuiltIn(ProviderType.AliyunBailian);
 
-            // 3. Gemini
-            if (settings.GeminiEnabled && mgr.Quotas.TryGetValue(ProviderType.Gemini, out var geminiQuota))
-            {
-                PnlCards.Children.Add(CreateProviderCard(geminiQuota, () => OpenSettings(SettingsTab.Gemini)));
-            }
-
-            // 4. DeepSeek
-            if (settings.DeepSeekEnabled && mgr.Quotas.TryGetValue(ProviderType.DeepSeek, out var deepseekQuota))
-            {
-                PnlCards.Children.Add(CreateProviderCard(deepseekQuota, () => OpenSettings(SettingsTab.DeepSeek)));
-            }
-
-            // 5. Volcengine
-            if (settings.VolcengineEnabled && mgr.Quotas.TryGetValue(ProviderType.Volcengine, out var volcengineQuota))
-            {
-                PnlCards.Children.Add(CreateProviderCard(volcengineQuota, () => OpenSettings(SettingsTab.Volcengine)));
-            }
-
-            // 6. Kimi
-            if (settings.KimiEnabled && mgr.Quotas.TryGetValue(ProviderType.Kimi, out var kimiQuota))
-            {
-                PnlCards.Children.Add(CreateProviderCard(kimiQuota, () => OpenSettings(SettingsTab.Kimi)));
-            }
-
-            // 7. OpenRouter
-            if (settings.OpenRouterEnabled && mgr.Quotas.TryGetValue(ProviderType.OpenRouter, out var openRouterQuota))
-            {
-                PnlCards.Children.Add(CreateProviderCard(openRouterQuota, () => OpenSettings(SettingsTab.OpenRouter)));
-            }
-
-            // 8. GLM
-            if (settings.GLMEnabled && mgr.Quotas.TryGetValue(ProviderType.GLM, out var glmQuota))
-            {
-                PnlCards.Children.Add(CreateProviderCard(glmQuota, () => OpenSettings(SettingsTab.GLM)));
-            }
-
-            // 9. Aliyun
-            if (settings.AliyunEnabled && mgr.Quotas.TryGetValue(ProviderType.AliyunBailian, out var aliyunQuota))
-            {
-                PnlCards.Children.Add(CreateProviderCard(aliyunQuota, () => OpenSettings(SettingsTab.Aliyun)));
-            }
-
-            // 10. Custom Providers
             foreach (var customConfig in settings.CustomProviders.Where(c => c.IsEnabled))
             {
                 if (mgr.CustomQuotas.TryGetValue(customConfig.Id, out var customQuota))
                 {
-                    PnlCards.Children.Add(CreateCustomProviderCard(customConfig, customQuota, () => OpenSettings(SettingsTab.Custom)));
+                    cards.Add((ProviderOrdering.CustomKey(customConfig.Id),
+                        CreateCustomProviderCard(customConfig, customQuota, () => OpenSettings(SettingsTab.Custom))));
                 }
+            }
+
+            foreach (var (_, card) in cards.OrderBy(c => ProviderOrdering.GetSortIndex(c.Key, order)))
+            {
+                PnlCards.Children.Add(card);
             }
 
             if (PnlCards.Children.Count == 0)

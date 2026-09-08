@@ -102,7 +102,8 @@ namespace TokenBar.Models
         GLM = 7,
         Aliyun = 8,
         Custom = 9,
-        General = 10
+        DisplayOrder = 10,
+        General = 11
     }
 
     /// <summary>

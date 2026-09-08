@@ -32,6 +32,56 @@ public struct TokenSummaryPopoverView: View {
         return formatter
     }
 
+    // MARK: - 卡片显示顺序
+
+    private enum PopoverCardEntryContent {
+        case builtin(ProviderQuota)
+        case custom(CustomProviderQuota)
+    }
+
+    private struct PopoverCardEntry: Identifiable {
+        let key: String
+        let content: PopoverCardEntryContent
+        var id: String { key }
+    }
+
+    /// 已启用且有数据的厂商卡片，按 settings.providerOrder 排序；未列入的键按默认顺序追加在末尾。
+    private var orderedCardEntries: [PopoverCardEntry] {
+        let settings = refreshManager.settings
+        var entries: [PopoverCardEntry] = []
+
+        func appendBuiltin(_ type: ProviderType, isEnabled: Bool) {
+            guard isEnabled, let quota = refreshManager.quotas[type] else { return }
+            entries.append(PopoverCardEntry(key: ProviderOrdering.key(of: type), content: .builtin(quota)))
+        }
+
+        appendBuiltin(.openAI, isEnabled: settings.openAIEnabled)
+        appendBuiltin(.claudeCode, isEnabled: settings.claudeEnabled)
+        appendBuiltin(.gemini, isEnabled: settings.geminiEnabled)
+        appendBuiltin(.deepseek, isEnabled: settings.deepseekEnabled)
+        appendBuiltin(.volcengine, isEnabled: settings.volcengineEnabled)
+        appendBuiltin(.kimi, isEnabled: settings.kimiEnabled)
+        appendBuiltin(.openRouter, isEnabled: settings.openRouterEnabled)
+        appendBuiltin(.glm, isEnabled: settings.glmEnabled)
+        appendBuiltin(.aliyunBailian, isEnabled: settings.aliyunEnabled)
+
+        for config in settings.customProviders where config.isEnabled {
+            if let quota = refreshManager.customQuotas[config.id] {
+                entries.append(PopoverCardEntry(key: ProviderOrdering.customKey(config.id), content: .custom(quota)))
+            }
+        }
+
+        // Swift 的 sorted 非稳定排序，附加构造下标保证同序时保持默认顺序
+        return entries
+            .enumerated()
+            .sorted {
+                let l = ProviderOrdering.sortIndex($0.element.key, order: settings.providerOrder)
+                let r = ProviderOrdering.sortIndex($1.element.key, order: settings.providerOrder)
+                return (l, $0.offset) < (r, $1.offset)
+            }
+            .map { $0.element }
+    }
+
     public var body: some View {
         VStack(spacing: 0) {
             // App Header
@@ -77,54 +127,12 @@ public struct TokenSummaryPopoverView: View {
             // Main Content: Provider Cards
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(spacing: 10) {
-                    if refreshManager.settings.openAIEnabled,
-                       let openai = refreshManager.quotas[.openAI] {
-                        ProviderCardView(quota: openai, onConfigure: { onOpenSettings(.openAI) })
-                    }
-
-                    if refreshManager.settings.claudeEnabled,
-                       let claude = refreshManager.quotas[.claudeCode] {
-                        ProviderCardView(quota: claude, onConfigure: { onOpenSettings(.anthropic) })
-                    }
-
-                    if refreshManager.settings.geminiEnabled,
-                       let gemini = refreshManager.quotas[.gemini] {
-                        ProviderCardView(quota: gemini, onConfigure: { onOpenSettings(.gemini) })
-                    }
-
-                    if refreshManager.settings.deepseekEnabled,
-                       let deepseek = refreshManager.quotas[.deepseek] {
-                        ProviderCardView(quota: deepseek, onConfigure: { onOpenSettings(.deepseek) })
-                    }
-
-                    if refreshManager.settings.volcengineEnabled,
-                       let volcengine = refreshManager.quotas[.volcengine] {
-                        ProviderCardView(quota: volcengine, onConfigure: { onOpenSettings(.volcengine) })
-                    }
-
-                    if refreshManager.settings.kimiEnabled,
-                       let kimi = refreshManager.quotas[.kimi] {
-                        ProviderCardView(quota: kimi, onConfigure: { onOpenSettings(.kimi) })
-                    }
-
-                    if refreshManager.settings.openRouterEnabled,
-                       let openRouter = refreshManager.quotas[.openRouter] {
-                        ProviderCardView(quota: openRouter, onConfigure: { onOpenSettings(.openRouter) })
-                    }
-
-                    if refreshManager.settings.glmEnabled,
-                       let glm = refreshManager.quotas[.glm] {
-                        ProviderCardView(quota: glm, onConfigure: { onOpenSettings(.glm) })
-                    }
-
-                    if refreshManager.settings.aliyunEnabled,
-                       let aliyun = refreshManager.quotas[.aliyunBailian] {
-                        ProviderCardView(quota: aliyun, onConfigure: { onOpenSettings(.aliyun) })
-                    }
-
-                    ForEach(refreshManager.settings.customProviders.filter { $0.isEnabled }) { config in
-                        if let q = refreshManager.customQuotas[config.id] {
-                            CustomProviderCardView(quota: q, onConfigure: { onOpenSettings(.custom) })
+                    ForEach(orderedCardEntries) { entry in
+                        switch entry.content {
+                        case .builtin(let quota):
+                            ProviderCardView(quota: quota, onConfigure: { onOpenSettings(quota.provider.settingsTab) })
+                        case .custom(let quota):
+                            CustomProviderCardView(quota: quota, onConfigure: { onOpenSettings(.custom) })
                         }
                     }
                 }

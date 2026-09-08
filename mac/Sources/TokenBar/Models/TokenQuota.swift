@@ -566,6 +566,10 @@ public struct AppSettings: Codable {
     public var customProviders: [CustomProviderConfig]
     public var appLanguage: AppLanguage
 
+    // 浮动框卡片显示顺序（键约定见 ProviderOrdering）；空数组表示默认顺序，
+    // 未列入的已启用厂商按默认顺序追加在末尾
+    public var providerOrder: [String]
+
     enum CodingKeys: String, CodingKey {
         case refreshIntervalMinutes
         case enableHover
@@ -617,6 +621,7 @@ public struct AppSettings: Codable {
 
         case customProviders
         case appLanguage
+        case providerOrder
     }
 
     public init(
@@ -661,7 +666,8 @@ public struct AppSettings: Codable {
         openRouterEndpoint: String = "https://openrouter.ai/api/v1",
         openRouterBalanceAlertThreshold: Double = 5,
         customProviders: [CustomProviderConfig] = [],
-        appLanguage: AppLanguage = .system
+        appLanguage: AppLanguage = .system,
+        providerOrder: [String] = []
     ) {
         self.refreshIntervalMinutes = refreshIntervalMinutes
         self.enableHover = enableHover
@@ -705,6 +711,7 @@ public struct AppSettings: Codable {
         self.openRouterBalanceAlertThreshold = openRouterBalanceAlertThreshold
         self.customProviders = customProviders
         self.appLanguage = appLanguage
+        self.providerOrder = providerOrder
     }
 
     public init(from decoder: Decoder) throws {
@@ -759,6 +766,7 @@ public struct AppSettings: Codable {
 
         self.customProviders = try container.decodeIfPresent([CustomProviderConfig].self, forKey: .customProviders) ?? []
         self.appLanguage = try container.decodeIfPresent(AppLanguage.self, forKey: .appLanguage) ?? .system
+        self.providerOrder = try container.decodeIfPresent([String].self, forKey: .providerOrder) ?? []
     }
 
     public static let defaultSettings = AppSettings()
@@ -775,6 +783,7 @@ public enum SettingsTab: String, CaseIterable, Identifiable {
     case glm = "glm"
     case aliyun = "aliyun"
     case custom = "custom"
+    case displayOrder = "displayOrder"
     case general = "general"
 
     public var id: String { rawValue }
@@ -791,6 +800,7 @@ public enum SettingsTab: String, CaseIterable, Identifiable {
         case .glm: return I18n(.glmTitle)
         case .aliyun: return I18n(.aliyunTitle)
         case .custom: return I18n(.customProviders)
+        case .displayOrder: return I18n(.displayOrder)
         case .general: return I18n(.generalSettings)
         }
     }
@@ -807,6 +817,7 @@ public enum SettingsTab: String, CaseIterable, Identifiable {
         case .glm: return "bolt.fill"
         case .aliyun: return "cloud.fill"
         case .custom: return "network"
+        case .displayOrder: return "arrow.up.arrow.down"
         case .general: return "gearshape"
         }
     }

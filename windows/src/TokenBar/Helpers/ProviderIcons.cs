@@ -77,6 +77,11 @@ namespace TokenBar.Helpers
             return gear;
         });
 
+        // 显示顺序：上/下双箭头（对齐 macOS 端 arrow.up.arrow.down 语义）
+        private static readonly Lazy<Geometry> SortArrowsLazy = new(() => Group(
+            "M7.5 3.5 L11.5 9.5 L8.7 9.5 L8.7 20 L6.3 20 L6.3 9.5 L3.5 9.5 Z",
+            "M16.5 20.5 L12.5 14.5 L15.3 14.5 L15.3 4 L17.7 4 L17.7 14.5 L20.5 14.5 Z"));
+
         public static Geometry GetIconGeometry(ProviderType type) => type switch
         {
             ProviderType.OpenAI => HexagonLazy.Value,
@@ -94,6 +99,7 @@ namespace TokenBar.Helpers
         public static Geometry GetTabIconGeometry(SettingsTab tab) => tab switch
         {
             SettingsTab.Custom => GridLazy.Value,
+            SettingsTab.DisplayOrder => SortArrowsLazy.Value,
             SettingsTab.General => GearLazy.Value,
             SettingsTab.OpenAI => GetIconGeometry(ProviderType.OpenAI),
             SettingsTab.Anthropic => GetIconGeometry(ProviderType.ClaudeCode),
@@ -119,6 +125,7 @@ namespace TokenBar.Helpers
             SettingsTab.GLM => ProviderType.GLM.GetThemeColor(),
             SettingsTab.Aliyun => ProviderType.AliyunBailian.GetThemeColor(),
             SettingsTab.Custom => Color.FromRgb(99, 102, 241),    // Indigo（与自定义厂商卡片头像一致）
+            SettingsTab.DisplayOrder => Color.FromRgb(37, 99, 235), // Blue-600
             _ => Color.FromRgb(75, 85, 99)                        // Gray-600
         };
 

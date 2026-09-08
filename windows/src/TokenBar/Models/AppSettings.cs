@@ -86,5 +86,9 @@ namespace TokenBar.Models
         public string AliyunCookie { get; set; } = string.Empty;
 
         public List<CustomProviderConfig> CustomProviders { get; set; } = new();
+
+        // 浮动框卡片显示顺序（键见 ProviderOrdering.DefaultOrder 与 CustomKeyPrefix）；
+        // 空列表表示使用默认顺序，未列入的已启用厂商按默认顺序追加在末尾
+        public List<string> ProviderOrder { get; set; } = new();
     }
 }

@@ -51,6 +51,13 @@ public enum I18nKey: String {
     case currentConfigItem
     case generalSettings
     case customProviders
+    case displayOrder
+    case displayOrderSubtitle
+    case displayOrderHint
+    case moveUp
+    case moveDown
+    case resetOrder
+    case noEnabledProviders
 
     // General Preferences Tab
     case generalPreferencesTitle
@@ -348,6 +355,20 @@ public final class LocalizationManager: ObservableObject {
             return isZh ? "通用设置" : "General"
         case .customProviders:
             return isZh ? "国内厂商 / 自定义" : "Custom Providers"
+        case .displayOrder:
+            return isZh ? "显示顺序" : "Display Order"
+        case .displayOrderSubtitle:
+            return isZh ? "调整浮动框中各厂商余额卡片的先后顺序" : "Reorder provider balance cards in the popover"
+        case .displayOrderHint:
+            return isZh ? "使用上移 / 下移调整顺序，修改立即生效并自动保存；未列出的新启用厂商将排在末尾。" : "Use Move Up / Move Down to reorder. Changes apply to the popover immediately; newly enabled providers are appended at the end."
+        case .moveUp:
+            return isZh ? "上移" : "Up"
+        case .moveDown:
+            return isZh ? "下移" : "Down"
+        case .resetOrder:
+            return isZh ? "恢复默认顺序" : "Reset to Default"
+        case .noEnabledProviders:
+            return isZh ? "尚未启用任何厂商，请先在各厂商页开启监控" : "No providers enabled yet. Turn on monitoring in each provider tab first."
 
         case .generalPreferencesTitle:
             return isZh ? "通用偏好设置" : "General Preferences"

@@ -789,6 +789,16 @@ namespace TokenBar.Services
             NotifyQuotasUpdated();
         }
 
+        /// <summary>
+        /// 应用浮动框卡片显示顺序（ProviderOrdering 键），保存设置并通知浮动框立即重渲染。
+        /// </summary>
+        public void ApplyProviderOrder(List<string> order)
+        {
+            Settings.ProviderOrder = order;
+            SaveSettings();
+            NotifyQuotasUpdated();
+        }
+
         public void Dispose()
         {
             _timer?.Dispose();

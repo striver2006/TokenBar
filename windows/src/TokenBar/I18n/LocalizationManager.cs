@@ -79,6 +79,13 @@ namespace TokenBar.I18n
         public string CurrentConfigItem => IsChinese ? "当前配置项:" : "Current:";
         public string GeneralSettings => IsChinese ? "通用设置" : "General";
         public string CustomProviders => IsChinese ? "国内厂商 / 自定义" : "Custom Providers";
+        public string DisplayOrder => IsChinese ? "显示顺序" : "Display Order";
+        public string DisplayOrderSubtitle => IsChinese ? "调整浮动框中各厂商余额卡片的先后顺序" : "Reorder provider balance cards in the popover";
+        public string DisplayOrderHint => IsChinese ? "使用上移 / 下移调整顺序，修改立即生效并自动保存；未列出的新启用厂商将排在末尾。" : "Use Move Up / Move Down to reorder. Changes apply to the popover immediately; newly enabled providers are appended at the end.";
+        public string MoveUp => IsChinese ? "上移" : "Up";
+        public string MoveDown => IsChinese ? "下移" : "Down";
+        public string ResetOrder => IsChinese ? "恢复默认顺序" : "Reset to Default";
+        public string NoEnabledProviders => IsChinese ? "尚未启用任何厂商，请先在各厂商页开启监控" : "No providers enabled yet. Turn on monitoring in each provider tab first.";
         public string GeneralPreferencesTitle => IsChinese ? "通用偏好设置" : "General Preferences";
         public string GeneralSubtitle => IsChinese ? "应用基础偏好与自启动配置" : "General runtime preferences & interface";
         public string InterfaceLanguage => IsChinese ? "界面语言" : "Language";

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
@@ -58,6 +59,7 @@ namespace TokenBar.Views
             SetIcon(NavIconGLM, SettingsTab.GLM);
             SetIcon(NavIconAliyun, SettingsTab.Aliyun);
             SetIcon(NavIconCustom, SettingsTab.Custom);
+            SetIcon(NavIconDisplayOrder, SettingsTab.DisplayOrder);
             SetIcon(NavIconGeneral, SettingsTab.General);
 
             SetIcon(IconOpenAI, SettingsTab.OpenAI);
@@ -70,6 +72,7 @@ namespace TokenBar.Views
             SetIcon(IconGLM, SettingsTab.GLM);
             SetIcon(IconAliyun, SettingsTab.Aliyun);
             SetIcon(IconCustom, SettingsTab.Custom);
+            SetIcon(IconDisplayOrder, SettingsTab.DisplayOrder);
             SetIcon(IconGeneral, SettingsTab.General);
         }
 
@@ -111,11 +114,17 @@ namespace TokenBar.Views
             PnlGLM.Visibility = tab == SettingsTab.GLM ? Visibility.Visible : Visibility.Collapsed;
             PnlAliyun.Visibility = tab == SettingsTab.Aliyun ? Visibility.Visible : Visibility.Collapsed;
             PnlCustom.Visibility = tab == SettingsTab.Custom ? Visibility.Visible : Visibility.Collapsed;
+            PnlDisplayOrder.Visibility = tab == SettingsTab.DisplayOrder ? Visibility.Visible : Visibility.Collapsed;
             PnlGeneral.Visibility = tab == SettingsTab.General ? Visibility.Visible : Visibility.Collapsed;
 
             if (tab == SettingsTab.Custom)
             {
                 RenderCustomProvidersList();
+            }
+
+            if (tab == SettingsTab.DisplayOrder)
+            {
+                RenderOrderList();
             }
         }
 
@@ -134,6 +143,7 @@ namespace TokenBar.Views
                 SettingsTab.GLM => ProviderType.GLM.GetDisplayName(),
                 SettingsTab.Aliyun => ProviderType.AliyunBailian.GetDisplayName(),
                 SettingsTab.Custom => i18n.CustomProviders,
+                SettingsTab.DisplayOrder => i18n.DisplayOrder,
                 SettingsTab.General => i18n.GeneralSettings,
                 _ => i18n.GeneralSettings
             };
@@ -157,6 +167,7 @@ namespace TokenBar.Views
             TxtNavGLM.Text = ProviderType.GLM.GetDisplayName();
             TxtNavAliyun.Text = ProviderType.AliyunBailian.GetDisplayName();
             TxtNavCustom.Text = i18n.CustomProviders;
+            TxtNavDisplayOrder.Text = i18n.DisplayOrder;
             TxtNavGeneral.Text = i18n.GeneralSettings;
 
             // Tab 0: OpenAI
@@ -284,7 +295,17 @@ namespace TokenBar.Views
             TxtQuickFillPresets.Text = i18n.QuickFillPresets;
             PopulatePresets();
 
-            // Tab 9 General
+            // Tab 9 Display Order
+            TxtDisplayOrderTitle.Text = i18n.DisplayOrder;
+            TxtDisplayOrderSubtitle.Text = i18n.DisplayOrderSubtitle;
+            TxtDisplayOrderHint.Text = i18n.DisplayOrderHint;
+            BtnResetOrder.Content = i18n.ResetOrder;
+            if (_currentTab == SettingsTab.DisplayOrder)
+            {
+                RenderOrderList();
+            }
+
+            // Tab 10 General
             TxtGeneralTitle.Text = i18n.GeneralPreferencesTitle;
             TxtGeneralSubtitle.Text = i18n.GeneralSubtitle;
             TxtLanguageLabel.Text = i18n.InterfaceLanguage;
@@ -876,6 +897,163 @@ namespace TokenBar.Views
                 card.Child = dock;
                 PnlCustomList.Children.Add(card);
             }
+        }
+
+        // ==================== Display Order ====================
+
+        /// <summary>当前已启用厂商的显示顺序键（已按 ProviderOrder 排序，未列入的按默认顺序追加）。</summary>
+        private List<string> BuildEnabledOrderKeys()
+        {
+            var settings = RefreshManager.Instance.Settings;
+            var enabled = new List<string>();
+            if (settings.OpenAIEnabled) enabled.Add(ProviderOrdering.KeyOf(ProviderType.OpenAI));
+            if (settings.ClaudeEnabled) enabled.Add(ProviderOrdering.KeyOf(ProviderType.ClaudeCode));
+            if (settings.GeminiEnabled) enabled.Add(ProviderOrdering.KeyOf(ProviderType.Gemini));
+            if (settings.DeepSeekEnabled) enabled.Add(ProviderOrdering.KeyOf(ProviderType.DeepSeek));
+            if (settings.VolcengineEnabled) enabled.Add(ProviderOrdering.KeyOf(ProviderType.Volcengine));
+            if (settings.KimiEnabled) enabled.Add(ProviderOrdering.KeyOf(ProviderType.Kimi));
+            if (settings.OpenRouterEnabled) enabled.Add(ProviderOrdering.KeyOf(ProviderType.OpenRouter));
+            if (settings.GLMEnabled) enabled.Add(ProviderOrdering.KeyOf(ProviderType.GLM));
+            if (settings.AliyunEnabled) enabled.Add(ProviderOrdering.KeyOf(ProviderType.AliyunBailian));
+            enabled.AddRange(settings.CustomProviders.Where(c => c.IsEnabled).Select(c => ProviderOrdering.CustomKey(c.Id)));
+
+            var order = settings.ProviderOrder;
+            return enabled.OrderBy(k => ProviderOrdering.GetSortIndex(k, order)).ToList();
+        }
+
+        private void RenderOrderList()
+        {
+            PnlOrderList.Children.Clear();
+            var i18n = LocalizationManager.Instance;
+            var settings = RefreshManager.Instance.Settings;
+            var keys = BuildEnabledOrderKeys();
+
+            if (keys.Count == 0)
+            {
+                PnlOrderList.Children.Add(new TextBlock
+                {
+                    Text = i18n.NoEnabledProviders,
+                    FontSize = 11,
+                    Foreground = new SolidColorBrush(Color.FromRgb(107, 114, 128)),
+                    Margin = new Thickness(0, 4, 0, 0)
+                });
+                return;
+            }
+
+            for (int i = 0; i < keys.Count; i++)
+            {
+                var key = keys[i];
+                var index = i;
+                var isFirst = i == 0;
+                var isLast = i == keys.Count - 1;
+
+                var row = new Border
+                {
+                    Background = new SolidColorBrush(Color.FromRgb(249, 250, 251)),
+                    BorderBrush = new SolidColorBrush(Color.FromRgb(229, 231, 235)),
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(8),
+                    Padding = new Thickness(12, 8, 12, 8),
+                    Margin = new Thickness(0, 0, 0, 6)
+                };
+
+                var dock = new DockPanel();
+
+                var actions = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center };
+                DockPanel.SetDock(actions, Dock.Right);
+
+                var btnUp = new Button
+                {
+                    Content = $"↑ {i18n.MoveUp}",
+                    Padding = new Thickness(8, 3, 8, 3),
+                    Margin = new Thickness(0, 0, 6, 0),
+                    Background = Brushes.White,
+                    BorderBrush = new SolidColorBrush(Color.FromRgb(209, 213, 219)),
+                    FontSize = 11,
+                    IsEnabled = !isFirst,
+                    Cursor = System.Windows.Input.Cursors.Hand
+                };
+                btnUp.Click += (s, e) => MoveProviderKey(index, -1);
+                actions.Children.Add(btnUp);
+
+                var btnDown = new Button
+                {
+                    Content = $"↓ {i18n.MoveDown}",
+                    Padding = new Thickness(8, 3, 8, 3),
+                    Background = Brushes.White,
+                    BorderBrush = new SolidColorBrush(Color.FromRgb(209, 213, 219)),
+                    FontSize = 11,
+                    IsEnabled = !isLast,
+                    Cursor = System.Windows.Input.Cursors.Hand
+                };
+                btnDown.Click += (s, e) => MoveProviderKey(index, +1);
+                actions.Children.Add(btnDown);
+                dock.Children.Add(actions);
+
+                var nameRow = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+
+                var builtinType = ProviderOrdering.ParseProviderType(key);
+                var iconColor = builtinType.HasValue ? builtinType.Value.GetThemeColor() : Color.FromRgb(99, 102, 241);
+                var iconBadge = new Border
+                {
+                    Width = 20,
+                    Height = 20,
+                    CornerRadius = new CornerRadius(5),
+                    Background = new SolidColorBrush(Color.FromArgb(30, iconColor.R, iconColor.G, iconColor.B)),
+                    Margin = new Thickness(0, 0, 8, 0),
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                iconBadge.Child = new System.Windows.Shapes.Path
+                {
+                    Data = builtinType.HasValue
+                        ? ProviderIcons.GetIconGeometry(builtinType.Value)
+                        : ProviderIcons.GetTabIconGeometry(SettingsTab.Custom),
+                    Fill = new SolidColorBrush(iconColor),
+                    Stretch = Stretch.Uniform,
+                    Width = 12,
+                    Height = 12,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                nameRow.Children.Add(iconBadge);
+
+                var displayName = builtinType.HasValue ? builtinType.Value.GetDisplayName() : key;
+                if (!builtinType.HasValue && ProviderOrdering.TryParseCustomKey(key, out var customId))
+                {
+                    displayName = settings.CustomProviders.FirstOrDefault(c => c.Id == customId)?.Name ?? key;
+                }
+                nameRow.Children.Add(new TextBlock
+                {
+                    Text = displayName,
+                    FontWeight = FontWeights.Bold,
+                    FontSize = 12,
+                    VerticalAlignment = VerticalAlignment.Center
+                });
+
+                dock.Children.Add(nameRow);
+                row.Child = dock;
+                PnlOrderList.Children.Add(row);
+            }
+        }
+
+        private void MoveProviderKey(int index, int delta)
+        {
+            var keys = BuildEnabledOrderKeys();
+            int target = index + delta;
+            if (target < 0 || target >= keys.Count)
+            {
+                return;
+            }
+
+            (keys[index], keys[target]) = (keys[target], keys[index]);
+            RefreshManager.Instance.ApplyProviderOrder(keys);
+            RenderOrderList();
+        }
+
+        private void BtnResetOrder_Click(object sender, RoutedEventArgs e)
+        {
+            RefreshManager.Instance.ApplyProviderOrder(new List<string>());
+            RenderOrderList();
         }
 
         private void CmbPresets_SelectionChanged(object sender, SelectionChangedEventArgs e)
