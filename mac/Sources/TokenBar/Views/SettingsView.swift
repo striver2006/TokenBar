@@ -319,10 +319,13 @@ public struct SettingsView: View {
     /// 走 delete 分支 → 钥匙串里真实存在的 Secret 被抹掉。所以 `.unavailable`
     /// 下只改状态、不动内容，并由 saveAliyunAccessKeyAndTest() 跳过删除。
     private func loadAliyunSecretFromKeychain() async {
+        Log.lifecycle.notice("设置页开始读取 AccessKey Secret")
         aliyunSecretState = .loading
         let before = aliyunAKSecretInput   // 挂起前快照，防止盖掉用户这期间的输入
 
+        let started = DispatchTime.now()
         let result = await KeychainSecretStore.shared.lookupAsync(.aliyunAccessKeySecret)
+        let ms = Double(DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000
 
         // 正常路径下输入框在 loading 期间是 disabled 的，这里是双保险
         let untouched = (aliyunAKSecretInput == before)
@@ -331,12 +334,14 @@ public struct SettingsView: View {
         case .found(let secret):
             if untouched { aliyunAKSecretInput = secret }
             aliyunSecretState = .ready
+            Log.lifecycle.notice("设置页读取 AccessKey Secret：found（\(ms, format: .fixed(precision: 0))ms）")
         case .absent:
             if untouched { aliyunAKSecretInput = "" }
             aliyunSecretState = .ready
+            Log.lifecycle.notice("设置页读取 AccessKey Secret：absent —— 钥匙串里确实没有（\(ms, format: .fixed(precision: 0))ms）")
         case .unavailable:
             aliyunSecretState = .unavailable
-            Log.lifecycle.error("设置页读取 AccessKey Secret 失败（超时或钥匙串不可用），已进入保护模式：不清空、不删除")
+            Log.lifecycle.error("设置页读取 AccessKey Secret：unavailable（\(ms, format: .fixed(precision: 0))ms），已进入保护模式：不清空、不删除")
         }
     }
 
@@ -1642,20 +1647,34 @@ public struct SettingsView: View {
                         .font(.system(size: 10))
                         .foregroundColor(.secondary)
                 } else if aliyunSecretState == .unavailable {
-                    HStack(alignment: .top, spacing: 4) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.system(size: 10))
-                            .foregroundColor(.orange)
-                        Text(I18n(.warnAliyunSecretUnreadable))
-                            .font(.system(size: 10))
-                            .foregroundColor(.orange)
-                            .fixedSize(horizontal: false, vertical: true)
+                    // 做成整块横幅而不是一行文字：这段文案很长，若和按钮挤在同一个
+                    // HStack 里，窗口宽度不够时会被压缩到几乎看不见 —— 而这条提示
+                    // 恰恰是用户判断「输入框为空是否等于没有凭证」的唯一依据。
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(alignment: .firstTextBaseline, spacing: 5) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.system(size: 11))
+                                .foregroundColor(.orange)
+                            Text(I18n(.warnAliyunSecretUnreadable))
+                                .font(.system(size: 11))
+                                .foregroundColor(.orange)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
                         Button(I18n(.btnRetryReadKeychain)) {
                             Task { await loadAliyunSecretFromKeychain() }
                         }
-                        .buttonStyle(.link)
-                        .font(.system(size: 10))
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
                     }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.orange.opacity(0.12))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(Color.orange.opacity(0.45), lineWidth: 1)
+                    )
+                    .cornerRadius(6)
                 }
             }
 
