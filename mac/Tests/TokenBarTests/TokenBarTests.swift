@@ -466,10 +466,10 @@ final class TokenBarTests: XCTestCase {
         }
     }
 
-    func testMenuBarStatusPrefersBalanceInAutoMode() {
+    func testMenuBarStatusAutoModeShowsQuotaFirstThenBalance() {
         withChineseUI {
             var quota = ProviderQuota(provider: .deepseek, isAuthorized: true)
-            // DeepSeek 的余额落在次槽位，主槽位是没有参考价值的 TPM 速率窗口
+            // DeepSeek 的余额落在次槽位（自定义/纯扣费厂商的写法）
             quota.fiveHourWindow = makePercentWindow(title: "TPM 速率配额", used: 10.0)
             quota.weeklyWindow = TokenWindow.balance(
                 title: "账户可用余额",
@@ -482,9 +482,66 @@ final class TokenBarTests: XCTestCase {
             var settings = makeSettings(key: "deepseek", metric: .auto)
             settings.deepseekEnabled = true
             let status = MenuBarStatus.resolve(settings: settings, quotas: [.deepseek: quota], customQuotas: [:])
-            // 余额只显示数字，不带币种符号
+            // 额度优先，余额并列在后；余额只显示数字，不带币种符号
+            XCTAssertEqual(status?.title, "90%/45.09")
+            XCTAssertEqual(status?.tooltip.hasPrefix("DeepSeek · TPM 速率配额"), true)
+            XCTAssertEqual(status?.tooltip.hasSuffix("账户可用余额 ¥45.09"), true)
+        }
+    }
+
+    func testMenuBarStatusAutoModeFallsBackToBalanceOnlyWithoutQuota() {
+        withChineseUI {
+            var quota = ProviderQuota(provider: .deepseek, isAuthorized: true)
+            quota.weeklyWindow = TokenWindow.balance(
+                title: "账户可用余额",
+                amount: 45.09,
+                currency: "CNY",
+                warningThreshold: 10,
+                criticalThreshold: 5
+            )
+
+            var settings = makeSettings(key: "deepseek", metric: .auto)
+            settings.deepseekEnabled = true
+            let status = MenuBarStatus.resolve(settings: settings, quotas: [.deepseek: quota], customQuotas: [:])
+            // 没有额度窗口时，自动模式退化为只显示余额
             XCTAssertEqual(status?.title, "45.09")
-            XCTAssertEqual(status?.tooltip, "DeepSeek · 账户可用余额 ¥45.09")
+        }
+    }
+
+    func testMenuBarStatusUsesBalanceWindowFieldForBuiltInProvider() {
+        withChineseUI {
+            var quota = ProviderQuota(provider: .aliyunBailian, isAuthorized: true)
+            quota.fiveHourWindow = makePercentWindow(title: "5小时额度", used: 38.0)
+            quota.weeklyWindow = makePercentWindow(title: "7天周期额度", used: 70.0)
+            quota.balanceWindow = TokenWindow.balance(
+                title: "账户现金余额",
+                amount: 45.09,
+                currency: "CNY",
+                warningThreshold: 10,
+                criticalThreshold: 5
+            )
+
+            // 修复前 balanceWindow 完全没被纳入候选：auto 会漏掉余额，balance 指标只能显示占位符
+            let auto = MenuBarStatus.resolve(
+                settings: makeSettings(metric: .auto),
+                quotas: [.aliyunBailian: quota],
+                customQuotas: [:]
+            )
+            XCTAssertEqual(auto?.title, "62%/30%/45.09")
+
+            let balance = MenuBarStatus.resolve(
+                settings: makeSettings(metric: .balance),
+                quotas: [.aliyunBailian: quota],
+                customQuotas: [:]
+            )
+            XCTAssertEqual(balance?.title, "45.09")
+
+            let quotaOnly = MenuBarStatus.resolve(
+                settings: makeSettings(metric: .quota),
+                quotas: [.aliyunBailian: quota],
+                customQuotas: [:]
+            )
+            XCTAssertEqual(quotaOnly?.title, "62%/30%")
         }
     }
 

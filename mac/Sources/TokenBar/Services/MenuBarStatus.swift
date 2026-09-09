@@ -5,6 +5,7 @@ import Foundation
 ///
 /// 菜单栏只显示数值、不显示厂商名：额度为剩余百分比（同时展示时以 "/" 分隔，
 /// 如 `34%/67%` 表示 5 小时 / 周期剩余），余额只显示金额数字（如 `45.09`）。
+/// "自动"模式为额度优先、余额并列，如 `34%/67%/45.09`。
 /// 厂商名与额度名称、重置倒计时等完整信息放在悬停 tooltip 中。
 public enum MenuBarStatus {
 
@@ -27,21 +28,28 @@ public enum MenuBarStatus {
     public static func selectWindows(
         primary: TokenWindow?,
         secondary: TokenWindow?,
+        balance: TokenWindow? = nil,
         metric: MenuBarMetric
     ) -> [TokenWindow] {
+        let quotaWindows = [primary, secondary].compactMap { $0 }.filter { !$0.isBalance }
+        let resolvedBalance = balance ?? balanceWindow(primary: primary, secondary: secondary)
+
         switch metric {
         case .fiveHour:
             return [primary].compactMap { $0 }
         case .weekly:
             return [secondary].compactMap { $0 }
+        case .quota:
+            return quotaWindows
         case .balance:
-            return [balanceWindow(primary: primary, secondary: secondary)].compactMap { $0 }
+            return [resolvedBalance].compactMap { $0 }
         case .auto:
-            // 纯扣费厂商（DeepSeek / KIMI 等）的余额比速率窗口更值得盯，故余额优先
-            if let balance = balanceWindow(primary: primary, secondary: secondary) {
-                return [balance]
+            // 额度优先展示，余额（如有）并列在后；纯扣费厂商没有额度窗口时自然退化为只显示余额
+            var windows = quotaWindows
+            if let b = resolvedBalance {
+                windows.append(b)
             }
-            return [primary, secondary].compactMap { $0 }
+            return windows
         }
     }
 
@@ -76,6 +84,7 @@ public enum MenuBarStatus {
         let name: String
         let primary: TokenWindow?
         let secondary: TokenWindow?
+        let balance: TokenWindow?
         let isAuthorized: Bool
         let errorMessage: String?
 
@@ -84,6 +93,7 @@ public enum MenuBarStatus {
             name = type.shortName
             primary = quota.fiveHourWindow
             secondary = quota.weeklyWindow
+            balance = quota.balanceWindow
             isAuthorized = quota.isAuthorized
             errorMessage = quota.errorMessage
         } else if let id = ProviderOrdering.parseCustomKey(key),
@@ -92,6 +102,7 @@ public enum MenuBarStatus {
             name = quota.name
             primary = quota.primaryWindow
             secondary = quota.secondaryWindow
+            balance = nil
             isAuthorized = quota.isAuthorized
             errorMessage = quota.errorMessage
         } else {
@@ -99,7 +110,7 @@ public enum MenuBarStatus {
             return nil
         }
 
-        let windows = selectWindows(primary: primary, secondary: secondary, metric: settings.menuBarMetric)
+        let windows = selectWindows(primary: primary, secondary: secondary, balance: balance, metric: settings.menuBarMetric)
         guard !windows.isEmpty else {
             let hint = errorMessage ?? (isAuthorized ? I18n(.menuBarNoData) : I18n(.notAuthorized))
             return Text(title: placeholder, tooltip: "\(name) · \(hint)")

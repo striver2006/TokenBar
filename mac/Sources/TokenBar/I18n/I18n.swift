@@ -67,6 +67,7 @@ public enum I18nKey: String {
     case menuBarMetricAuto
     case menuBarMetricFiveHour
     case menuBarMetricWeekly
+    case menuBarMetricQuota
     case menuBarMetricBalance
     case menuBarNoProviderSelected
     case menuBarNoData
@@ -418,11 +419,13 @@ public final class LocalizationManager: ObservableObject {
         case .menuBarMetricLabel:
             return isZh ? "显示指标" : "Metric"
         case .menuBarMetricAuto:
-            return isZh ? "自动（余额优先，额度并列）" : "Auto (balance first, both quotas)"
+            return isZh ? "自动（额度优先，余额并列）" : "Auto (quota first, balance alongside)"
         case .menuBarMetricFiveHour:
             return isZh ? "5 小时剩余额度" : "5-hour remaining"
         case .menuBarMetricWeekly:
             return isZh ? "周期剩余额度" : "Weekly remaining"
+        case .menuBarMetricQuota:
+            return isZh ? "额度（5小时+周期并列）" : "Quota (5-hour + weekly)"
         case .menuBarMetricBalance:
             return isZh ? "账户余额" : "Account balance"
         case .menuBarNoProviderSelected:

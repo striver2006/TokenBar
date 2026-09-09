@@ -519,12 +519,13 @@ public struct DomesticProviderPreset: Identifiable {
     ]
 }
 
-/// 菜单栏图标旁展示的指标。auto 表示按厂商可用窗口自动挑选（余额优先，其次 5 小时、周期额度）。
+/// 菜单栏图标旁展示的指标。auto 表示按厂商可用窗口自动挑选（额度优先，余额并列）。
 /// 与 Windows 端保持同名同 rawValue。
 public enum MenuBarMetric: String, CaseIterable, Identifiable, Codable {
     case auto = "auto"
     case fiveHour = "fiveHour"
     case weekly = "weekly"
+    case quota = "quota"
     case balance = "balance"
 
     public var id: String { rawValue }
@@ -534,6 +535,7 @@ public enum MenuBarMetric: String, CaseIterable, Identifiable, Codable {
         case .auto: return I18n(.menuBarMetricAuto)
         case .fiveHour: return I18n(.menuBarMetricFiveHour)
         case .weekly: return I18n(.menuBarMetricWeekly)
+        case .quota: return I18n(.menuBarMetricQuota)
         case .balance: return I18n(.menuBarMetricBalance)
         }
     }
