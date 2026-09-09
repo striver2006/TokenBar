@@ -1,5 +1,31 @@
 import Foundation
 
+/// `GeminiService.readKeychainToken` 的缓存/冷却决策。
+///
+/// 抽成纯函数是为了可测：子进程和系统授权框没法在单测里复现，但「什么时候才该去跑那个
+/// 子进程」这个判断可以，而它恰恰是决定用户会不会被反复弹授权框的地方。
+enum KeychainProbeDecision: Equatable {
+    /// 命中有效缓存，跳过子进程（也就跳过了授权框）
+    case useCache
+    /// 上次探测失败还在冷却期内，直接放弃 —— 用户刚被弹过一次，别马上再弹
+    case cooldown
+    /// 该跑子进程了
+    case probe
+
+    static func resolve(
+        now: Date,
+        cachedAt: Date,
+        hasCache: Bool,
+        lastFailure: Date?,
+        ttl: TimeInterval,
+        cooldown: TimeInterval
+    ) -> KeychainProbeDecision {
+        if hasCache, now.timeIntervalSince(cachedAt) < ttl { return .useCache }
+        if let lastFailure, now.timeIntervalSince(lastFailure) < cooldown { return .cooldown }
+        return .probe
+    }
+}
+
 public final class GeminiService {
     public static let shared = GeminiService()
 
@@ -130,120 +156,243 @@ public final class GeminiService {
 
     private var isZh: Bool { LocalizationManager.shared.effectiveLanguage == "zh" }
 
+    // MARK: - Antigravity 钥匙串读取
+
+    /// 钥匙串探测结果缓存。
+    ///
+    /// 这条路读的是 Antigravity 用 go-keyring 写入的条目（service "gemini" / account
+    /// "antigravity"）。条目的 ACL 归 Antigravity，TokenBar 不在白名单里 —— 给自己固定
+    /// 签名身份（见 Scripts/build_app.sh）对它无效，每次读取都可能弹一次系统授权框。
+    /// 缓存与冷却的意义就是把「每轮刷新弹一次」压成「最多几分钟弹一次」。
+    private var cachedKeychainToken: (token: String?, refreshToken: String?, expiry: Date?)?
+    private var cachedKeychainTokenAt = Date.distantPast
+    private var lastKeychainProbeFailure: Date?
+    /// 必须显著大于默认刷新间隔（5 分钟），否则每轮刷新都会重新探测、缓存形同虚设。
+    /// 代价是用户在 Antigravity 里重新登录后最多晚 15 分钟才被看到，可接受：
+    /// 取到的 token 带 expiry，过期会走 refreshGoogleAccessToken，且还有 ~/.gemini 文件回退。
+    private static let keychainCacheTTL: TimeInterval = 900
+    private static let keychainFailureCooldown: TimeInterval = 30
+    /// 授权框弹出后子进程会一直挂着等用户点，看门狗必须远短于 provider 的刷新预算
+    /// （RefreshManager.budget(for:) 给 gemini 30s）。
+    private static let keychainProbeTimeout: TimeInterval = 3
+
     /// Read Antigravity credentials from macOS Keychain (service: "gemini", account: "antigravity")
-    private func readKeychainToken() -> (token: String?, refreshToken: String?, expiry: Date?) {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-        process.arguments = ["find-generic-password", "-s", "gemini", "-a", "antigravity", "-w"]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = Pipe()
-        do {
-            try process.run()
-            process.waitUntilExit()
-            guard process.terminationStatus == 0 else { return (nil, nil, nil) }
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            guard let raw = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !raw.isEmpty else {
-                return (nil, nil, nil)
-            }
-            let jsonString: String
-            if raw.hasPrefix("go-keyring-base64:") {
-                let b64 = String(raw.dropFirst("go-keyring-base64:".count))
-                guard let dec = Data(base64Encoded: b64), let s = String(data: dec, encoding: .utf8) else {
-                    return (nil, nil, nil)
-                }
-                jsonString = s
-            } else {
-                jsonString = raw
-            }
-            guard let jsonData = jsonString.data(using: .utf8),
-                  let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
-                  let tokDict = json["token"] as? [String: Any] else {
-                return (nil, nil, nil)
-            }
-            let token = tokDict["access_token"] as? String
-            let refreshToken = tokDict["refresh_token"] as? String
-            let expiry = parseServerDate(tokDict["expiry"])
-            return (token, refreshToken, expiry)
-        } catch {
-            return (nil, nil, nil)
+    ///
+    /// 走 `/usr/bin/security` 子进程而不是 Security framework：条目不是本进程写的，
+    /// 拿不到它的 ACL 授权，只能借系统工具读。
+    ///
+    /// **必须异步、必须带看门狗。** 授权框一弹，子进程就无限期挂在那里等用户。这里原先是
+    /// `waitUntilExit()` 同步调用、且被 @MainActor 的 RefreshManager 直接调用，主线程一冻结
+    /// 所有 provider 的刷新任务集体停摆 —— 与 commit 6f332a3 修的是同一个病，只是换了条路径。
+    /// 注意 `SecretStore.assertOffMain` 那道护栏覆盖不到这里：它只拦 Security framework API。
+    private func readKeychainToken() async -> (token: String?, refreshToken: String?, expiry: Date?) {
+        let decision = KeychainProbeDecision.resolve(
+            now: Date(),
+            cachedAt: cachedKeychainTokenAt,
+            hasCache: cachedKeychainToken != nil,
+            lastFailure: lastKeychainProbeFailure,
+            ttl: Self.keychainCacheTTL,
+            cooldown: Self.keychainFailureCooldown
+        )
+        switch decision {
+        case .useCache:
+            Log.provider.debug("provider=gemini 钥匙串命中缓存，跳过子进程")
+            return cachedKeychainToken ?? (nil, nil, nil)
+        case .cooldown:
+            // 用户刚点掉（或忽略）过一次授权框，冷却期内宁可用过期缓存、
+            // 或者干脆让调用方走 ~/.gemini 文件回退，也不再弹第二次。
+            Log.provider.debug("provider=gemini 钥匙串探测在冷却期内，跳过")
+            return cachedKeychainToken ?? (nil, nil, nil)
+        case .probe:
+            Log.provider.debug("provider=gemini 探测钥匙串（可能弹授权框）")
         }
+
+        guard let raw = await Self.runSecurityProbe(timeout: Self.keychainProbeTimeout),
+              let payload = Self.decodeKeychainPayload(raw) else {
+            lastKeychainProbeFailure = Date()
+            return cachedKeychainToken ?? (nil, nil, nil)
+        }
+
+        let result = (
+            token: payload["access_token"] as? String,
+            refreshToken: payload["refresh_token"] as? String,
+            expiry: Self.parseServerDate(payload["expiry"])
+        )
+        cachedKeychainToken = result
+        cachedKeychainTokenAt = Date()
+        lastKeychainProbeFailure = nil
+        return result
+    }
+
+    /// 在后台队列跑 `security find-generic-password`，`timeout` 秒后 SIGTERM、再 2 秒 SIGKILL。
+    /// 返回 nil 表示没读到：进程起不来、超时被杀、条目不存在、或输出为空。
+    private static func runSecurityProbe(timeout: TimeInterval) async -> String? {
+        await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
+            let gate = ResumeOnce<String?>(continuation)
+            DispatchQueue.global(qos: .userInitiated).async {
+                // 主线程护栏。这条路不走 Security framework，SecretStore 的 assertOffMain 管不到，
+                // 所以在这里自己补一道，把后来者的误用在开发期就炸出来。
+                assert(
+                    !Thread.isMainThread,
+                    "security 子进程不得在主线程执行：钥匙串授权框会冻结整个刷新链路")
+
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+                process.arguments = ["find-generic-password", "-s", "gemini", "-a", "antigravity", "-w"]
+
+                let pipe = Pipe()
+                process.standardOutput = pipe
+                process.standardError = Pipe()
+                // stdin 接 /dev/null，杜绝任何形式的交互等待
+                process.standardInput = FileHandle.nullDevice
+
+                do {
+                    try process.run()
+                } catch {
+                    Log.provider.error("provider=gemini security 子进程启动失败")
+                    gate.resume(nil)
+                    return
+                }
+
+                // 看门狗只负责杀进程，绝不 resume continuation —— resume 路径始终唯一
+                // （同 AliyunBailianService.fetchViaCLI）。子进程一死，pipe 写端关闭，
+                // 下面的 readDataToEndOfFile 立刻拿到 EOF。
+                let watchdog = DispatchWorkItem {
+                    guard process.isRunning else { return }
+                    Log.provider.error(
+                        "provider=gemini 钥匙串读取超时 \(timeout, format: .fixed(precision: 0))s（授权框未响应？），terminate")
+                    process.terminate()
+                    DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
+                        if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+                    }
+                }
+                DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: watchdog)
+
+                // 顺序很重要：必须先读到 EOF 再 waitUntilExit。反过来的话，子进程输出超过
+                // pipe 缓冲区（64KB）时会阻塞在写、父进程阻塞在等，形成经典死锁。
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                process.waitUntilExit()
+                watchdog.cancel()
+
+                guard process.terminationStatus == 0 else {
+                    gate.resume(nil)
+                    return
+                }
+                let raw = String(data: data, encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                gate.resume((raw?.isEmpty ?? true) ? nil : raw)
+            }
+        }
+    }
+
+    /// 解 `security -w` 的输出：go-keyring 会把 JSON 再包一层 base64。
+    /// 返回的是内层 `token` 字典（含 access_token / refresh_token / expiry）。
+    private static func decodeKeychainPayload(_ raw: String) -> [String: Any]? {
+        let jsonString: String
+        if raw.hasPrefix("go-keyring-base64:") {
+            let b64 = String(raw.dropFirst("go-keyring-base64:".count))
+            guard let dec = Data(base64Encoded: b64), let s = String(data: dec, encoding: .utf8) else {
+                Log.provider.error("provider=gemini 钥匙串 base64 解码失败")
+                return nil
+            }
+            jsonString = s
+        } else {
+            jsonString = raw
+        }
+        guard let jsonData = jsonString.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
+              let tokDict = json["token"] as? [String: Any] else {
+            Log.provider.error("provider=gemini 钥匙串内容格式不符")
+            return nil
+        }
+        return tokDict
+    }
+
+    // MARK: - 本地凭证
+
+    /// `~/.gemini` 下三个回退文件的解析结果
+    private struct LocalGeminiFiles {
+        var jetskiToken: String?
+        var jetskiRefreshToken: String?
+        var jetskiExpiry: Date?
+        var oauthToken: String?
+        var oauthRefreshToken: String?
+        var account: String?
     }
 
     /// Read local Gemini config from macOS Keychain and ~/.gemini
-    public func readLocalGeminiConfig() -> (token: String?, refreshToken: String?, account: String?, expiry: Date?) {
-        let homeDir = FileManager.default.homeDirectoryForCurrentUser
-        let jetskiTokenPath = homeDir.appendingPathComponent(".gemini/jetski-standalone-oauth-token")
-        let oauthCredsPath = homeDir.appendingPathComponent(".gemini/oauth_creds.json")
-        let accountsPath = homeDir.appendingPathComponent(".gemini/google_accounts.json")
-
-        var token: String? = nil
-        var refreshToken: String? = nil
-        var account: String? = nil
-        var expiry: Date? = nil
-
+    ///
+    /// async 而非同步：内部要跑钥匙串子进程（可能弹授权框）并读三个磁盘文件，
+    /// 在 MainActor 上同步做会冻结整条刷新链路。
+    public func readLocalGeminiConfig() async -> (token: String?, refreshToken: String?, account: String?, expiry: Date?) {
         // 0. Check macOS Keychain first (most up-to-date token managed by Antigravity)
-        let kc = readKeychainToken()
-        if kc.token != nil || kc.refreshToken != nil {
-            token = kc.token
-            refreshToken = kc.refreshToken
-            expiry = kc.expiry
-        }
+        let kc = await readKeychainToken()
+        // 1~3. 文件回退，一并挪出主线程
+        let files = await Self.readLocalGeminiFiles()
 
-        // 1. Check jetski-standalone-oauth-token (fallback/merge if keychain was empty)
-        if FileManager.default.fileExists(atPath: jetskiTokenPath.path) {
-            do {
-                let data = try Data(contentsOf: jetskiTokenPath)
-                if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+        // 钥匙串优先，逐字段补齐：钥匙串里只有 refresh_token 而没有 access_token 时，
+        // 缺的那个仍然从文件里取。
+        var token = kc.token
+        var refreshToken = kc.refreshToken
+        var expiry = kc.expiry
+
+        // 1. jetski-standalone-oauth-token
+        if token == nil { token = files.jetskiToken }
+        if refreshToken == nil { refreshToken = files.jetskiRefreshToken }
+        if expiry == nil { expiry = files.jetskiExpiry }
+
+        // 2. oauth_creds.json（不含 expiry）
+        if token == nil { token = files.oauthToken }
+        if refreshToken == nil { refreshToken = files.oauthRefreshToken }
+
+        return (token, refreshToken, files.account, expiry)
+    }
+
+    /// 在后台队列读 `~/.gemini` 下的三个文件。都是本地小文件，没有超时看门狗的必要，
+    /// 但同样不该占着主线程。
+    private static func readLocalGeminiFiles() async -> LocalGeminiFiles {
+        await withCheckedContinuation { (continuation: CheckedContinuation<LocalGeminiFiles, Never>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let homeDir = FileManager.default.homeDirectoryForCurrentUser
+                let jetskiTokenPath = homeDir.appendingPathComponent(".gemini/jetski-standalone-oauth-token")
+                let oauthCredsPath = homeDir.appendingPathComponent(".gemini/oauth_creds.json")
+                let accountsPath = homeDir.appendingPathComponent(".gemini/google_accounts.json")
+
+                var result = LocalGeminiFiles()
+
+                // 1. jetski-standalone-oauth-token
+                if let data = try? Data(contentsOf: jetskiTokenPath),
+                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                    let tokDict = json["token"] as? [String: Any] {
-                    if token == nil {
-                        token = tokDict["access_token"] as? String
-                    }
-                    if refreshToken == nil {
-                        refreshToken = tokDict["refresh_token"] as? String
-                    }
-                    if expiry == nil {
-                        expiry = parseServerDate(tokDict["expiry"])
-                    }
+                    result.jetskiToken = tokDict["access_token"] as? String
+                    result.jetskiRefreshToken = tokDict["refresh_token"] as? String
+                    result.jetskiExpiry = Self.parseServerDate(tokDict["expiry"])
                 }
-            } catch {}
-        }
 
-        // 2. Fallback to oauth_creds.json
-        if (token == nil || refreshToken == nil) && FileManager.default.fileExists(atPath: oauthCredsPath.path) {
-            do {
-                let data = try Data(contentsOf: oauthCredsPath)
-                if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                    if token == nil {
-                        token = json["access_token"] as? String
-                    }
-                    if refreshToken == nil {
-                        refreshToken = json["refresh_token"] as? String
-                    }
+                // 2. oauth_creds.json
+                if let data = try? Data(contentsOf: oauthCredsPath),
+                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    result.oauthToken = json["access_token"] as? String
+                    result.oauthRefreshToken = json["refresh_token"] as? String
                 }
-            } catch {}
-        }
 
-        // 3. Read Google account email
-        if FileManager.default.fileExists(atPath: accountsPath.path) {
-            do {
-                let data = try Data(contentsOf: accountsPath)
-                if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                // 3. Read Google account email
+                if let data = try? Data(contentsOf: accountsPath),
+                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
                     if let active = json["active"] as? String, !active.isEmpty {
-                        account = active
+                        result.account = active
                     } else if let old = json["old"] as? [String], let first = old.first, !first.isEmpty {
-                        account = first
+                        result.account = first
                     }
                 }
-            } catch {}
-        }
 
-        return (token, refreshToken, account, expiry)
+                continuation.resume(returning: result)
+            }
+        }
     }
 
     /// Parses ISO-8601 strings (with or without fractional seconds) or epoch seconds into a Date.
-    private func parseServerDate(_ any: Any?) -> Date? {
+    private static func parseServerDate(_ any: Any?) -> Date? {
         if let s = any as? String {
             let fractional = ISO8601DateFormatter()
             fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -336,7 +485,7 @@ public final class GeminiService {
     /// Fetch Gemini usage quota and window limits from the Antigravity (Google Code Assist)
     /// quota API — the same source the Antigravity IDE's usage panel displays.
     public func fetchQuota(token: String?) async throws -> (fiveHour: TokenWindow?, weekly: TokenWindow?, account: String?) {
-        let local = readLocalGeminiConfig()
+        let local = await readLocalGeminiConfig()
         let refreshToken = local.refreshToken
         var detectedAccount = local.account
 
@@ -479,7 +628,7 @@ public final class GeminiService {
 
         let span: TimeInterval = isWeekly ? 7 * 86400 : 5 * 3600
         // While idle the API keeps the last reset anchor; roll forward so the countdown stays positive.
-        var end = parseServerDate(bucket["resetTime"]) ?? Date().addingTimeInterval(span)
+        var end = Self.parseServerDate(bucket["resetTime"]) ?? Date().addingTimeInterval(span)
         while end <= Date() { end = end.addingTimeInterval(span) }
 
         let usedPct = min(max((1.0 - remainingFraction!) * 100.0, 0.0), 100.0)
@@ -509,7 +658,7 @@ public final class GeminiService {
             let fraction = n.doubleValue
             if minRemaining == nil || fraction < minRemaining! {
                 minRemaining = fraction
-                reset = parseServerDate(quota["resetTime"])
+                reset = Self.parseServerDate(quota["resetTime"])
             }
         }
         guard let remaining = minRemaining else { return (nil, nil) }

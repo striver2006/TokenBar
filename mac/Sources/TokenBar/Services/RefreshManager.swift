@@ -155,7 +155,7 @@ public final class RefreshManager: ObservableObject {
         }
 
         // Auto-detect local Gemini if available
-        let localGemini = GeminiService.shared.readLocalGeminiConfig()
+        let localGemini = await GeminiService.shared.readLocalGeminiConfig()
         if localGemini.token != nil || localGemini.account != nil {
             var quota = quotas[.gemini] ?? ProviderQuota(provider: .gemini)
             quota.isAuthorized = true
@@ -472,7 +472,7 @@ public final class RefreshManager: ObservableObject {
                 return
             } catch {
                 // If API Key failed, only fall back to OAuth/local if available
-                let local = GeminiService.shared.readLocalGeminiConfig()
+                let local = await GeminiService.shared.readLocalGeminiConfig()
                 let hasOAuth = !settings.geminiToken.isEmpty || local.account != nil || local.token != nil || local.refreshToken != nil
                 if !hasOAuth {
                     quota.isAuthorized = false
@@ -614,8 +614,10 @@ public final class RefreshManager: ObservableObject {
         return false
     }
 
-    public func importGeminiFromLocal() -> Bool {
-        let local = GeminiService.shared.readLocalGeminiConfig()
+    /// async 是因为它要读钥匙串（可能弹授权框）—— 调用方 SettingsView 用 Task 包起来，
+    /// 别让按钮点击把主线程占住。
+    public func importGeminiFromLocal() async -> Bool {
+        let local = await GeminiService.shared.readLocalGeminiConfig()
         if let token = local.token {
             settings.geminiToken = token
             saveSettings()

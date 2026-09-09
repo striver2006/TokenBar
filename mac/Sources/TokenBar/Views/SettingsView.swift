@@ -820,12 +820,15 @@ public struct SettingsView: View {
                     .buttonStyle(.bordered)
 
                     Button {
-                        if refreshManager.importGeminiFromLocal() {
-                            statusAlertMessage = I18n(.alertGeminiLocalSuccess)
-                        } else {
-                            statusAlertMessage = I18n(.alertGeminiLocalNotFound)
+                        // 读本地凭证会碰钥匙串（可能弹授权框），必须异步，否则点一下按钮
+                        // 就把主线程占住了
+                        Task {
+                            let imported = await refreshManager.importGeminiFromLocal()
+                            statusAlertMessage = imported
+                                ? I18n(.alertGeminiLocalSuccess)
+                                : I18n(.alertGeminiLocalNotFound)
+                            showStatusAlert = true
                         }
-                        showStatusAlert = true
                     } label: {
                         HStack {
                             Image(systemName: "desktopcomputer")

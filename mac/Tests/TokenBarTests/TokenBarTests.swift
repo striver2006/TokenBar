@@ -344,8 +344,8 @@ final class TokenBarTests: XCTestCase {
         LocalizationManager.shared.setLanguage(.system)
     }
 
-    func testGeminiLocalConfig() {
-        let local = GeminiService.shared.readLocalGeminiConfig()
+    func testGeminiLocalConfig() async {
+        let local = await GeminiService.shared.readLocalGeminiConfig()
         // If antigravity/gemini CLI is present locally on developer machine, test that account and token are detected
         if let localToken = local.token {
             XCTAssertFalse(localToken.isEmpty)
@@ -1418,5 +1418,59 @@ final class TokenBarTests: XCTestCase {
                 return XCTFail("应分类为 unexpectedFormat，实际是 \(error)")
             }
         }
+    }
+
+    // MARK: - Gemini 钥匙串探测的缓存/冷却决策
+
+    // 这几条守的是两件事：定时刷新不因授权框停摆（超时后进冷却，不再阻塞后续轮次），
+    // 以及用户不被每轮弹一次授权框。子进程本身没法在单测里跑，但决策逻辑可以。
+
+    private func probeDecision(
+        cachedAgo: TimeInterval?,
+        failedAgo: TimeInterval?,
+        ttl: TimeInterval = 300,
+        cooldown: TimeInterval = 30
+    ) -> KeychainProbeDecision {
+        let now = Date()
+        return KeychainProbeDecision.resolve(
+            now: now,
+            cachedAt: cachedAgo.map { now.addingTimeInterval(-$0) } ?? .distantPast,
+            hasCache: cachedAgo != nil,
+            lastFailure: failedAgo.map { now.addingTimeInterval(-$0) },
+            ttl: ttl,
+            cooldown: cooldown
+        )
+    }
+
+    func testKeychainProbeUsesFreshCache() {
+        XCTAssertEqual(probeDecision(cachedAgo: 10, failedAgo: nil), .useCache)
+    }
+
+    func testKeychainProbeAfterCacheExpired() {
+        XCTAssertEqual(probeDecision(cachedAgo: 301, failedAgo: nil), .probe)
+    }
+
+    func testKeychainProbeColdStart() {
+        XCTAssertEqual(probeDecision(cachedAgo: nil, failedAgo: nil), .probe)
+    }
+
+    /// 最关键的一条：上一轮读钥匙串超时（用户没理授权框）后，冷却期内不许再跑子进程。
+    /// 这条挂了就意味着刷新间隔设成 1 分钟时，用户每分钟被弹一次授权框。
+    func testKeychainProbeCooldownAfterFailureWithoutCache() {
+        XCTAssertEqual(probeDecision(cachedAgo: nil, failedAgo: 5), .cooldown)
+    }
+
+    func testKeychainProbeResumesAfterCooldownElapsed() {
+        XCTAssertEqual(probeDecision(cachedAgo: nil, failedAgo: 31), .probe)
+    }
+
+    /// 缓存有效时优先用缓存，不受失败冷却影响 —— 两个条件同时成立时不该退化成放弃。
+    func testKeychainProbeCacheWinsOverCooldown() {
+        XCTAssertEqual(probeDecision(cachedAgo: 10, failedAgo: 5), .useCache)
+    }
+
+    /// 缓存过期 + 仍在冷却：既不读也不弹，调用方拿过期缓存或走文件回退。
+    func testKeychainProbeExpiredCacheStillRespectsCooldown() {
+        XCTAssertEqual(probeDecision(cachedAgo: 301, failedAgo: 5), .cooldown)
     }
 }
