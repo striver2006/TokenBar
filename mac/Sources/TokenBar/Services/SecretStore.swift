@@ -184,7 +184,7 @@ public struct KeychainSecretStore: SecretStoring, Sendable {
     ///
     /// Security 的同步 API 走 mach IPC 等 securityd，授权框弹出时更是无限期等待。
     /// 在 MainActor 上调用 = 主线程冻结 = 所有 provider 的刷新任务集体停摆
-    /// （commit 6f332a3 修的就是这个）。Release 下被编译掉，只在开发期把误用炸出来。
+    /// （commit 514ed13 修的就是这个）。Release 下被编译掉，只在开发期把误用炸出来。
     private static func assertOffMain(_ fn: String) {
         assert(
             !Thread.isMainThread,

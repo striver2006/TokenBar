@@ -197,7 +197,7 @@ extension AliyunBailianService {
     /// - Parameter secretStore: **必须**传入已经在后台读好的内存快照
     ///   （`KeychainSecretStore.prefetch(_:)` 的返回值）。刻意不给默认值：
     ///   直接传 `KeychainSecretStore.shared` 会让这个同步函数在调用线程上阻塞等
-    ///   securityd，在 MainActor 上就是全局刷新停摆（commit 6f332a3）。
+    ///   securityd，在 MainActor 上就是全局刷新停摆（commit 514ed13）。
     ///   默认值会把最危险的选项做成打字最少的选项。
     public static func resolveCredentials(
         settings: AppSettings,

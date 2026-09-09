@@ -183,7 +183,7 @@ public final class GeminiService {
     ///
     /// **必须异步、必须带看门狗。** 授权框一弹，子进程就无限期挂在那里等用户。这里原先是
     /// `waitUntilExit()` 同步调用、且被 @MainActor 的 RefreshManager 直接调用，主线程一冻结
-    /// 所有 provider 的刷新任务集体停摆 —— 与 commit 6f332a3 修的是同一个病，只是换了条路径。
+    /// 所有 provider 的刷新任务集体停摆 —— 与 commit 514ed13 修的是同一个病，只是换了条路径。
     /// 注意 `SecretStore.assertOffMain` 那道护栏覆盖不到这里：它只拦 Security framework API。
     private func readKeychainToken() async -> (token: String?, refreshToken: String?, expiry: Date?) {
         let decision = KeychainProbeDecision.resolve(
