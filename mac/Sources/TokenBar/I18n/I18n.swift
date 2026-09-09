@@ -455,7 +455,7 @@ public final class LocalizationManager: ObservableObject {
         case .launchAtLoginSubtitle:
             return isZh ? "登录 macOS 时自动在状态栏运行 TokenBar" : "Automatically launch TokenBar when logging into macOS"
         case .appAboutFooter:
-            return isZh ? "TokenBar v1.1.0 • 模型额度监控" : "TokenBar v1.1.0 • Model Quota Monitor"
+            return isZh ? "TokenBar v1.1.1 • 模型额度监控" : "TokenBar v1.1.1 • Model Quota Monitor"
 
         case .openAITitle:
             return "OpenAI API"

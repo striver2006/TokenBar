@@ -100,7 +100,7 @@ namespace TokenBar.I18n
         public string EnableHoverSubtitle => IsChinese ? "鼠标移动到托盘图标上方时自动展示额度卡片" : "Show quota popover when cursor hovers tray icon";
         public string LaunchAtLoginTitle => IsChinese ? "开机自动启动" : "Launch at Login";
         public string LaunchAtLoginSubtitle => IsChinese ? "登录 Windows 时自动在系统托盘运行 TokenBar" : "Automatically launch TokenBar when logging into Windows";
-        public string AppAboutFooter => IsChinese ? "TokenBar v1.1.0 • 模型额度监控" : "TokenBar v1.1.0 • Model Quota Monitor";
+        public string AppAboutFooter => IsChinese ? "TokenBar v1.1.1 • 模型额度监控" : "TokenBar v1.1.1 • Model Quota Monitor";
         public string SaveAllSettings => IsChinese ? "保存全部设置" : "Save All Settings";
         public string SelectPresetPrompt => IsChinese ? "选择常用厂商配置..." : "Select preset...";
         public string QuotaBadge => IsChinese ? "配额" : "Quota";
