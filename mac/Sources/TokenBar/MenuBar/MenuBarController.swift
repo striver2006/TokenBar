@@ -355,10 +355,21 @@ public final class MenuBarController: NSObject {
             workspaceCenter
                 .publisher(for: name)
                 .sink { [weak self] _ in
-                    Task { @MainActor in self?.scheduleStatusItemRelayout() }
+                    Task { @MainActor in
+                        self?.scheduleStatusItemRelayout()
+                        await self?.refreshAfterWake()
+                    }
                 }
                 .store(in: &cancellables)
         }
+    }
+
+    /// 睡眠期间定时器不 fire，唤醒后数据可能已经过期若干个周期，这里补刷一次。
+    /// 两个唤醒通知会先后到达，靠 refreshIfStale 的时间判断 + refreshAll 的 isRefreshing 闸门去重。
+    private func refreshAfterWake() async {
+        let manager = RefreshManager.shared
+        let halfInterval = Double(manager.settings.refreshIntervalMinutes * 30)
+        await manager.refreshIfStale(olderThan: halfInterval)
     }
 
     /// 显示器重配置期间通知会连发多次，合并到最后一次之后再动布局

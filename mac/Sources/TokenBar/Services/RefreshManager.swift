@@ -14,6 +14,8 @@ public final class RefreshManager: ObservableObject {
     @Published public var lastRefreshDate: Date? = nil
 
     private var refreshTimer: Timer?
+    /// 当前定时器生效的间隔，用于判断设置变更是否真的需要重建定时器
+    private var activeIntervalMinutes: Int?
     private let userDefaultsKey = "TokenBar_AppSettings"
 
     // 余额窗口的展示辅助状态（较上次差值 + 低余额提醒状态机），进程内有效
@@ -56,17 +58,32 @@ public final class RefreshManager: ObservableObject {
         if let encoded = try? JSONEncoder().encode(settings) {
             UserDefaults.standard.set(encoded, forKey: userDefaultsKey)
         }
-        startPeriodicTimer()
+        // 只有间隔真的变了才重建定时器：设置页里切厂商开关、改语言等都会走到这里，
+        // 每次都 invalidate 会把计时相位打回零，间隔较长时可能永远刷不到。
+        if activeIntervalMinutes != settings.refreshIntervalMinutes {
+            startPeriodicTimer()
+        }
     }
 
     public func startPeriodicTimer() {
         refreshTimer?.invalidate()
         let intervalSec = max(60, Double(settings.refreshIntervalMinutes * 60))
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: intervalSec, repeats: true) { [weak self] _ in
+        // 注册到 .common 而非默认的 .default —— 否则右键菜单打开、状态项拖拽等
+        // 进入 .eventTracking 的交互期间定时器会被暂停。
+        let timer = Timer(timeInterval: intervalSec, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 await self?.refreshAll()
             }
         }
+        RunLoop.main.add(timer, forMode: .common)
+        refreshTimer = timer
+        activeIntervalMinutes = settings.refreshIntervalMinutes
+    }
+
+    /// 数据过期时才刷新，用于系统唤醒这类"可能已经错过若干个周期"的补刷场景
+    public func refreshIfStale(olderThan seconds: TimeInterval) async {
+        if let last = lastRefreshDate, Date().timeIntervalSince(last) < seconds { return }
+        await refreshAll()
     }
 
     private func setupInitialData() async {
@@ -97,10 +114,10 @@ public final class RefreshManager: ObservableObject {
     public func refreshAll() async {
         guard !isRefreshing else { return }
         isRefreshing = true
-        defer {
-            isRefreshing = false
-            lastRefreshDate = Date()
-        }
+        defer { isRefreshing = false }
+
+        // 各刷新方法只在成功拿到数据时才推进自己的 lastUpdated，据此判断本轮是否有实际收获
+        let updatedBefore = latestQuotaUpdate()
 
         await withTaskGroup(of: Void.self) { group in
             if settings.openAIEnabled {
@@ -154,6 +171,18 @@ public final class RefreshManager: ObservableObject {
                 }
             }
         }
+
+        // 全部厂商都失败时不推进时间戳，避免弹窗上显示"刚刚更新"却是一屏旧数据
+        if let after = latestQuotaUpdate(), after != updatedBefore {
+            lastRefreshDate = after
+        }
+    }
+
+    /// 所有厂商中最近一次成功更新的时间
+    private func latestQuotaUpdate() -> Date? {
+        let providerDates = quotas.values.compactMap(\.lastUpdated)
+        let customDates = customQuotas.values.compactMap(\.lastUpdated)
+        return (providerDates + customDates).max()
     }
 
     public func refreshClaude() async {
@@ -232,7 +261,10 @@ public final class RefreshManager: ObservableObject {
             }
         }
 
-        quota.lastUpdated = Date()
+        // 与其他厂商对齐：只有真的拿到数据才算一次成功更新
+        if foundAuth {
+            quota.lastUpdated = Date()
+        }
         quota.isLoading = false
         quotas[.claudeCode] = quota
     }

@@ -3,10 +3,18 @@ import Combine
 
 public final class AppDelegate: NSObject, NSApplicationDelegate {
     private var cancellables = Set<AnyCancellable>()
+    private var activityToken: NSObjectProtocol?
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
         // Ensure app runs as an accessory menu bar application without Dock icon
         NSApp.setActivationPolicy(.accessory)
+
+        // 没有窗口的 accessory 进程会被 App Nap 降频，定时刷新的间隔会被拉长到不可预期。
+        // 只声明 .background，不阻止系统休眠。
+        activityToken = ProcessInfo.processInfo.beginActivity(
+            options: .background,
+            reason: "Periodic quota refresh"
+        )
 
         // Setup standard system Edit menu to enable Cmd+C, Cmd+V, Cmd+X, Cmd+A, Cmd+Z
         setupMainMenu()
@@ -30,7 +38,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     public func applicationWillTerminate(_ notification: Notification) {
-        // Cleanup if needed
+        if let activityToken {
+            ProcessInfo.processInfo.endActivity(activityToken)
+            self.activityToken = nil
+        }
     }
 
     private func setupMainMenu() {
