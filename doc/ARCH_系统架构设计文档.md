@@ -62,10 +62,11 @@ macOS 客户端采用纯 Swift 打造，支持 macOS 13 (Ventura) 及以上系�
   - 维护系统状态栏 `NSStatusItem`，通过 `HoverTrackingView`（基于 `NSTrackingArea`）监听鼠标悬浮与移出事件。
   - 支持“鼠标悬停快速展开”与“点击固定（Pin）”双重交互模型。
   - 绑定 `NSPopover`，将其根视图托管至 SwiftUI `TokenSummaryPopoverView`。
+  - 订阅 `RefreshManager.objectWillChange`，按用户配置把某个厂商的剩余额度 / 余额渲染到 `NSStatusItem` 标题（文案由纯函数 `MenuBarStatus` 计算，便于单测）。
 - **SwiftUI 视图组件**：
   - `TokenSummaryPopoverView`：主看板，包含标题区（TokenBar 及中英文副标题）、即时刷新动画按钮、滚动卡片列表以及状态栏。
   - `ProviderCardView` & `CustomProviderCardView`：展示各模型厂商卡片，双窗口（5 小时与每周）进度条及重置时间。
-  - `SettingsView`：包含 10 个配置选项卡（OpenAI、Anthropic、Gemini、DeepSeek、火山方舟、KIMI、GLM、阿里云百炼、国内厂商/自定义、通用设置）。
+  - `SettingsView`：包含 12 个配置选项卡（OpenAI、Anthropic、Gemini、DeepSeek、火山方舟、KIMI、OpenRouter、GLM、阿里云百炼、国内厂商/自定义、显示顺序、通用设置）。
 
 ### 2.2 状态与并发管理 (State & Concurrency Layer)
 - **`RefreshManager`**：

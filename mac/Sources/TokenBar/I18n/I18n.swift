@@ -59,6 +59,18 @@ public enum I18nKey: String {
     case resetOrder
     case noEnabledProviders
 
+    // 菜单栏额度摘要
+    case menuBarQuotaTitle
+    case menuBarQuotaSubtitle
+    case menuBarProviderLabel
+    case menuBarMetricLabel
+    case menuBarMetricAuto
+    case menuBarMetricFiveHour
+    case menuBarMetricWeekly
+    case menuBarMetricBalance
+    case menuBarNoProviderSelected
+    case menuBarNoData
+
     // General Preferences Tab
     case generalPreferencesTitle
     case interfaceLanguage
@@ -369,6 +381,27 @@ public final class LocalizationManager: ObservableObject {
             return isZh ? "恢复默认顺序" : "Reset to Default"
         case .noEnabledProviders:
             return isZh ? "尚未启用任何厂商，请先在各厂商页开启监控" : "No providers enabled yet. Turn on monitoring in each provider tab first."
+
+        case .menuBarQuotaTitle:
+            return isZh ? "菜单栏显示额度" : "Show Quota in Menu Bar"
+        case .menuBarQuotaSubtitle:
+            return isZh ? "在菜单栏图标旁显示指定厂商的剩余额度或余额" : "Display a provider's remaining quota or balance next to the menu bar icon"
+        case .menuBarProviderLabel:
+            return isZh ? "显示厂商" : "Provider"
+        case .menuBarMetricLabel:
+            return isZh ? "显示指标" : "Metric"
+        case .menuBarMetricAuto:
+            return isZh ? "自动（余额优先）" : "Auto (balance first)"
+        case .menuBarMetricFiveHour:
+            return isZh ? "5 小时剩余额度" : "5-hour remaining"
+        case .menuBarMetricWeekly:
+            return isZh ? "周期剩余额度" : "Weekly remaining"
+        case .menuBarMetricBalance:
+            return isZh ? "账户余额" : "Account balance"
+        case .menuBarNoProviderSelected:
+            return isZh ? "未选择厂商" : "No provider selected"
+        case .menuBarNoData:
+            return isZh ? "暂无数据" : "No data"
 
         case .generalPreferencesTitle:
             return isZh ? "通用偏好设置" : "General Preferences"

@@ -74,7 +74,7 @@ final class TokenBarTests: XCTestCase {
 
     func testSettingsTabOrder() {
         let tabs = SettingsTab.allCases
-        XCTAssertEqual(tabs.count, 11)
+        XCTAssertEqual(tabs.count, 12)
         XCTAssertEqual(tabs[0], .openAI)
         XCTAssertEqual(tabs[1], .anthropic)
         XCTAssertEqual(tabs[2], .gemini)
@@ -85,7 +85,8 @@ final class TokenBarTests: XCTestCase {
         XCTAssertEqual(tabs[7], .glm)
         XCTAssertEqual(tabs[8], .aliyun)
         XCTAssertEqual(tabs[9], .custom)
-        XCTAssertEqual(tabs[10], .general)
+        XCTAssertEqual(tabs[10], .displayOrder)
+        XCTAssertEqual(tabs[11], .general)
     }
 
     func testBalanceTokenWindow() {
@@ -381,7 +382,128 @@ final class TokenBarTests: XCTestCase {
             XCTFail("Fetch quota threw error: \(error)")
         }
     }
+
+    // MARK: - 菜单栏额度摘要
+
+    /// 文案断言依赖中文，显式固定语言，避免受系统区域影响
+    private func withChineseUI(_ body: () -> Void) {
+        let previous = LocalizationManager.shared.currentLanguage
+        LocalizationManager.shared.setLanguage(.zhHans)
+        defer { LocalizationManager.shared.setLanguage(previous) }
+        body()
+    }
+
+    private func makeSettings(
+        enabled: Bool = true,
+        key: String = "aliyun",
+        metric: MenuBarMetric = .auto
+    ) -> AppSettings {
+        var settings = AppSettings()
+        settings.menuBarQuotaEnabled = enabled
+        settings.menuBarProviderKey = key
+        settings.menuBarMetric = metric
+        return settings
+    }
+
+    private func makePercentWindow(title: String, used: Double) -> TokenWindow {
+        TokenWindow(
+            title: title,
+            usedPercentage: used,
+            startTime: Date().addingTimeInterval(-3600),
+            endTime: Date().addingTimeInterval(3600)
+        )
+    }
+
+    func testMenuBarStatusDisabledOrUnselected() {
+        let quotas: [ProviderType: ProviderQuota] = [:]
+        XCTAssertNil(MenuBarStatus.resolve(settings: makeSettings(enabled: false), quotas: quotas, customQuotas: [:]))
+        XCTAssertNil(MenuBarStatus.resolve(settings: makeSettings(key: ""), quotas: quotas, customQuotas: [:]))
+    }
+
+    func testMenuBarStatusShowsRemainingPercentage() {
+        withChineseUI {
+            var quota = ProviderQuota(provider: .aliyunBailian, isAuthorized: true)
+            quota.fiveHourWindow = makePercentWindow(title: "5小时额度", used: 38.0)
+            quota.weeklyWindow = makePercentWindow(title: "7天周期额度", used: 70.0)
+
+            let five = MenuBarStatus.resolve(
+                settings: makeSettings(metric: .fiveHour),
+                quotas: [.aliyunBailian: quota],
+                customQuotas: [:]
+            )
+            XCTAssertEqual(five?.title, "百炼 5时 62%")
+
+            let weekly = MenuBarStatus.resolve(
+                settings: makeSettings(metric: .weekly),
+                quotas: [.aliyunBailian: quota],
+                customQuotas: [:]
+            )
+            XCTAssertEqual(weekly?.title, "百炼 周 30%")
+        }
+    }
+
+    func testMenuBarStatusPrefersBalanceInAutoMode() {
+        withChineseUI {
+            var quota = ProviderQuota(provider: .deepseek, isAuthorized: true)
+            // DeepSeek 的余额落在次槽位，主槽位是没有参考价值的 TPM 速率窗口
+            quota.fiveHourWindow = makePercentWindow(title: "TPM 速率配额", used: 10.0)
+            quota.weeklyWindow = TokenWindow.balance(
+                title: "账户可用余额",
+                amount: 12.34,
+                currency: "CNY",
+                warningThreshold: 10,
+                criticalThreshold: 5
+            )
+
+            var settings = makeSettings(key: "deepseek", metric: .auto)
+            settings.deepseekEnabled = true
+            let status = MenuBarStatus.resolve(settings: settings, quotas: [.deepseek: quota], customQuotas: [:])
+            XCTAssertEqual(status?.title, "DeepSeek ¥12.34")
+        }
+    }
+
+    func testMenuBarStatusFallsBackWhenNoWindow() {
+        withChineseUI {
+            var quota = ProviderQuota(provider: .aliyunBailian)
+            quota.isAuthorized = false
+            quota.errorMessage = "未授权连接"
+
+            let status = MenuBarStatus.resolve(
+                settings: makeSettings(metric: .fiveHour),
+                quotas: [.aliyunBailian: quota],
+                customQuotas: [:]
+            )
+            XCTAssertEqual(status?.title, "百炼 --")
+            XCTAssertEqual(status?.tooltip, "百炼 · 未授权连接")
+        }
+    }
+
+    func testMenuBarStatusHiddenWhenProviderDisabled() {
+        var quota = ProviderQuota(provider: .aliyunBailian, isAuthorized: true)
+        quota.fiveHourWindow = makePercentWindow(title: "5小时额度", used: 10.0)
+
+        var settings = makeSettings()
+        settings.aliyunEnabled = false
+        XCTAssertNil(MenuBarStatus.resolve(settings: settings, quotas: [.aliyunBailian: quota], customQuotas: [:]))
+    }
+
+    func testAppSettingsMenuBarFieldsRoundTrip() {
+        var settings = AppSettings()
+        settings.menuBarQuotaEnabled = true
+        settings.menuBarProviderKey = "glm"
+        settings.menuBarMetric = .balance
+
+        let data = try! JSONEncoder().encode(settings)
+        let decoded = try! JSONDecoder().decode(AppSettings.self, from: data)
+        XCTAssertTrue(decoded.menuBarQuotaEnabled)
+        XCTAssertEqual(decoded.menuBarProviderKey, "glm")
+        XCTAssertEqual(decoded.menuBarMetric, .balance)
+
+        // 旧版本配置（无这三个字段）应能解码并回落到默认值
+        let legacy = "{\"refreshIntervalMinutes\":5}".data(using: .utf8)!
+        let legacyDecoded = try! JSONDecoder().decode(AppSettings.self, from: legacy)
+        XCTAssertFalse(legacyDecoded.menuBarQuotaEnabled)
+        XCTAssertEqual(legacyDecoded.menuBarProviderKey, "")
+        XCTAssertEqual(legacyDecoded.menuBarMetric, .auto)
+    }
 }
-
-
-

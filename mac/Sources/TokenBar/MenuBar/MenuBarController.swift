@@ -1,5 +1,6 @@
 import Cocoa
 import SwiftUI
+import Combine
 
 final class HoverTrackingView: NSView {
     var onMouseEnter: (() -> Void)?
@@ -36,6 +37,7 @@ public final class MenuBarController: NSObject {
     private var isPinnedByClick: Bool = false
     private var settingsWindow: NSWindow?
     private var trackingView: HoverTrackingView?
+    private var cancellables = Set<AnyCancellable>()
 
     public override init() {
         super.init()
@@ -55,6 +57,8 @@ public final class MenuBarController: NSObject {
                 button.image = fallbackImage
             }
 
+            // 等宽数字，避免额度百分比跳动时菜单栏宽度抖动
+            button.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
             button.target = self
             button.action = #selector(statusBarButtonClicked(_:))
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
@@ -96,6 +100,15 @@ public final class MenuBarController: NSObject {
         )
 
         popover.contentViewController = NSHostingController(rootView: popoverContent)
+
+        // 额度 / 设置任一变化后刷新菜单栏摘要文案（objectWillChange 早于赋值，故延到下一轮 runloop）
+        RefreshManager.shared.objectWillChange
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.updateStatusItemTitle()
+            }
+            .store(in: &cancellables)
+        updateStatusItemTitle()
 
         // Mouse moved monitor to maintain hover when cursor is in popover or button
         NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved]) { [weak self] event in
@@ -179,6 +192,27 @@ public final class MenuBarController: NSObject {
                     return
                 }
             }
+        }
+    }
+
+    /// 依据设置刷新菜单栏图标旁的额度摘要；未开启时只保留图标。
+    public func updateStatusItemTitle() {
+        guard let button = statusItem?.button else { return }
+
+        let status = MenuBarStatus.resolve(
+            settings: RefreshManager.shared.settings,
+            quotas: RefreshManager.shared.quotas,
+            customQuotas: RefreshManager.shared.customQuotas
+        )
+
+        if let status = status {
+            button.title = " " + status.title
+            button.imagePosition = .imageLeading
+            button.toolTip = status.tooltip
+        } else {
+            button.title = ""
+            button.imagePosition = .imageOnly
+            button.toolTip = "TokenBar - \(I18n(.subtitle))"
         }
     }
 

@@ -514,6 +514,26 @@ public struct DomesticProviderPreset: Identifiable {
     ]
 }
 
+/// 菜单栏图标旁展示的指标。auto 表示按厂商可用窗口自动挑选（余额优先，其次 5 小时、周期额度）。
+/// 与 Windows 端保持同名同 rawValue。
+public enum MenuBarMetric: String, CaseIterable, Identifiable, Codable {
+    case auto = "auto"
+    case fiveHour = "fiveHour"
+    case weekly = "weekly"
+    case balance = "balance"
+
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .auto: return I18n(.menuBarMetricAuto)
+        case .fiveHour: return I18n(.menuBarMetricFiveHour)
+        case .weekly: return I18n(.menuBarMetricWeekly)
+        case .balance: return I18n(.menuBarMetricBalance)
+        }
+    }
+}
+
 public struct AppSettings: Codable {
     public var refreshIntervalMinutes: Int
     public var enableHover: Bool
@@ -570,6 +590,11 @@ public struct AppSettings: Codable {
     // 未列入的已启用厂商按默认顺序追加在末尾
     public var providerOrder: [String]
 
+    // 菜单栏图标旁的额度摘要：是否显示、展示哪个厂商（键约定见 ProviderOrdering）、展示哪个指标
+    public var menuBarQuotaEnabled: Bool
+    public var menuBarProviderKey: String
+    public var menuBarMetric: MenuBarMetric
+
     enum CodingKeys: String, CodingKey {
         case refreshIntervalMinutes
         case enableHover
@@ -622,6 +647,9 @@ public struct AppSettings: Codable {
         case customProviders
         case appLanguage
         case providerOrder
+        case menuBarQuotaEnabled
+        case menuBarProviderKey
+        case menuBarMetric
     }
 
     public init(
@@ -667,7 +695,10 @@ public struct AppSettings: Codable {
         openRouterBalanceAlertThreshold: Double = 5,
         customProviders: [CustomProviderConfig] = [],
         appLanguage: AppLanguage = .system,
-        providerOrder: [String] = []
+        providerOrder: [String] = [],
+        menuBarQuotaEnabled: Bool = false,
+        menuBarProviderKey: String = "",
+        menuBarMetric: MenuBarMetric = .auto
     ) {
         self.refreshIntervalMinutes = refreshIntervalMinutes
         self.enableHover = enableHover
@@ -712,6 +743,9 @@ public struct AppSettings: Codable {
         self.customProviders = customProviders
         self.appLanguage = appLanguage
         self.providerOrder = providerOrder
+        self.menuBarQuotaEnabled = menuBarQuotaEnabled
+        self.menuBarProviderKey = menuBarProviderKey
+        self.menuBarMetric = menuBarMetric
     }
 
     public init(from decoder: Decoder) throws {
@@ -767,9 +801,29 @@ public struct AppSettings: Codable {
         self.customProviders = try container.decodeIfPresent([CustomProviderConfig].self, forKey: .customProviders) ?? []
         self.appLanguage = try container.decodeIfPresent(AppLanguage.self, forKey: .appLanguage) ?? .system
         self.providerOrder = try container.decodeIfPresent([String].self, forKey: .providerOrder) ?? []
+        self.menuBarQuotaEnabled = try container.decodeIfPresent(Bool.self, forKey: .menuBarQuotaEnabled) ?? false
+        self.menuBarProviderKey = try container.decodeIfPresent(String.self, forKey: .menuBarProviderKey) ?? ""
+        self.menuBarMetric = try container.decodeIfPresent(MenuBarMetric.self, forKey: .menuBarMetric) ?? .auto
     }
 
     public static let defaultSettings = AppSettings()
+}
+
+extension AppSettings {
+    /// 内置厂商是否已开启监控
+    public func isEnabled(_ type: ProviderType) -> Bool {
+        switch type {
+        case .openAI: return openAIEnabled
+        case .claudeCode: return claudeEnabled
+        case .gemini: return geminiEnabled
+        case .deepseek: return deepseekEnabled
+        case .volcengine: return volcengineEnabled
+        case .kimi: return kimiEnabled
+        case .openRouter: return openRouterEnabled
+        case .glm: return glmEnabled
+        case .aliyunBailian: return aliyunEnabled
+        }
+    }
 }
 
 public enum SettingsTab: String, CaseIterable, Identifiable {

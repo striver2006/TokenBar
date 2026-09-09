@@ -1977,16 +1977,10 @@ public struct SettingsView: View {
     /// 当前已启用厂商的显示顺序键（已按 providerOrder 排序，未列入的按默认顺序追加）。
     private var enabledOrderKeys: [String] {
         let settings = refreshManager.settings
-        var keys: [String] = []
-        if settings.openAIEnabled { keys.append(ProviderOrdering.key(of: .openAI)) }
-        if settings.claudeEnabled { keys.append(ProviderOrdering.key(of: .claudeCode)) }
-        if settings.geminiEnabled { keys.append(ProviderOrdering.key(of: .gemini)) }
-        if settings.deepseekEnabled { keys.append(ProviderOrdering.key(of: .deepseek)) }
-        if settings.volcengineEnabled { keys.append(ProviderOrdering.key(of: .volcengine)) }
-        if settings.kimiEnabled { keys.append(ProviderOrdering.key(of: .kimi)) }
-        if settings.openRouterEnabled { keys.append(ProviderOrdering.key(of: .openRouter)) }
-        if settings.glmEnabled { keys.append(ProviderOrdering.key(of: .glm)) }
-        if settings.aliyunEnabled { keys.append(ProviderOrdering.key(of: .aliyunBailian)) }
+        var keys: [String] = ProviderOrdering.defaultOrder.compactMap { key in
+            guard let type = ProviderOrdering.parseProviderType(key), settings.isEnabled(type) else { return nil }
+            return key
+        }
         keys.append(contentsOf: settings.customProviders.filter(\.isEnabled).map { ProviderOrdering.customKey($0.id) })
 
         let order = settings.providerOrder
@@ -2095,6 +2089,66 @@ public struct SettingsView: View {
                 .id(i18n.currentLanguage)
                 .onChange(of: refreshManager.settings.refreshIntervalMinutes) { _ in
                     refreshManager.saveSettings()
+                }
+            }
+
+            // 菜单栏额度摘要（开关 + 厂商 + 指标）
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(I18n(.menuBarQuotaTitle))
+                            .font(.system(size: 13))
+                        Text(I18n(.menuBarQuotaSubtitle))
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                    Toggle("", isOn: $refreshManager.settings.menuBarQuotaEnabled)
+                        .toggleStyle(.switch)
+                        .onChange(of: refreshManager.settings.menuBarQuotaEnabled) { enabled in
+                            // 首次开启时默认选中第一个已启用厂商，省去再点一次
+                            if enabled, refreshManager.settings.menuBarProviderKey.isEmpty {
+                                refreshManager.settings.menuBarProviderKey = enabledOrderKeys.first ?? ""
+                            }
+                            refreshManager.saveSettings()
+                        }
+                }
+
+                if refreshManager.settings.menuBarQuotaEnabled {
+                    HStack {
+                        Text(I18n(.menuBarProviderLabel))
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Picker("", selection: $refreshManager.settings.menuBarProviderKey) {
+                            Text(I18n(.menuBarNoProviderSelected)).tag("")
+                            ForEach(enabledOrderKeys, id: \.self) { key in
+                                Text(orderDisplayName(for: key)).tag(key)
+                            }
+                        }
+                        .frame(width: 180)
+                        .id(i18n.currentLanguage)
+                        .onChange(of: refreshManager.settings.menuBarProviderKey) { _ in
+                            refreshManager.saveSettings()
+                        }
+                    }
+
+                    HStack {
+                        Text(I18n(.menuBarMetricLabel))
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Picker("", selection: $refreshManager.settings.menuBarMetric) {
+                            ForEach(MenuBarMetric.allCases) { metric in
+                                Text(metric.displayName).tag(metric)
+                            }
+                        }
+                        .frame(width: 180)
+                        .id(i18n.currentLanguage)
+                        .onChange(of: refreshManager.settings.menuBarMetric) { _ in
+                            refreshManager.saveSettings()
+                        }
+                    }
                 }
             }
 
