@@ -641,7 +641,7 @@ namespace TokenBar.Views
 
         private async void BtnRefresh_Click(object sender, RoutedEventArgs e)
         {
-            await RefreshManager.Instance.RefreshAllAsync();
+            await RefreshManager.Instance.RefreshAllAsync(RefreshTrigger.Manual);
         }
 
         private void BtnSettings_Click(object sender, RoutedEventArgs e)

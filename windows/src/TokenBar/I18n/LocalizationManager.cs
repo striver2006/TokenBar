@@ -56,6 +56,10 @@ namespace TokenBar.I18n
         public string Refreshing => IsChinese ? "刷新中..." : "Refreshing...";
         public string Ready => IsChinese ? "准备就绪" : "Ready";
         public string UpdatedAt => IsChinese ? "更新于: " : "Updated: ";
+        public string AttemptedAt => IsChinese ? "尝试于: " : "Tried: ";
+        public string RefreshFailedRound => IsChinese ? "本轮刷新失败" : "last round failed";
+        public string ErrRefreshTimeout => IsChinese ? "刷新超时，已跳过本轮" : "Refresh timed out; round skipped";
+        public string DataStale => IsChinese ? "数据可能已过期" : "Data may be stale";
         public string OpenSettings => IsChinese ? "偏好设置..." : "Settings...";
         public string QuitApp => IsChinese ? "退出 TokenBar" : "Quit TokenBar";
         public string RefreshAll => IsChinese ? "立即刷新全部额度" : "Refresh All Quotas Now";

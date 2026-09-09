@@ -383,6 +383,8 @@ namespace TokenBar.Services
                 Arguments = "usage token-plan --console-region cn-beijing --console-site domestic --output json",
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
+                // stdin 也重定向后立刻关闭：bl 未登录时可能等待交互输入而永远不退出
+                RedirectStandardInput = true,
                 UseShellExecute = false,
                 CreateNoWindow = true
             };
@@ -392,9 +394,27 @@ namespace TokenBar.Services
                 throw new AliyunChannelException(AliyunErrorKind.CliFailed,
                     IsZh ? "无法启动百炼 CLI 进程" : "Unable to launch the Bailian CLI process");
 
+            try { proc.StandardInput.Close(); } catch { }
+
+            // 先启动异步读取再等退出（顺序反了会在输出超过管道缓冲区时父子互等死锁），
+            // 并且必须带超时：WaitForExitAsync 不加 token 的话 bl 一挂住就永久等待，
+            // 上层的 RunProviderAsync 超时救不了它（进程不会因 Task 取消而退出）。
             var outputTask = proc.StandardOutput.ReadToEndAsync();
             var errorTask = proc.StandardError.ReadToEndAsync();
-            await proc.WaitForExitAsync();
+
+            using var cliCts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            try
+            {
+                await proc.WaitForExitAsync(cliCts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                Log.Error("provider", "bl CLI 超时 20s，终止进程");
+                try { proc.Kill(entireProcessTree: true); } catch { }
+                throw new AliyunChannelException(AliyunErrorKind.CliFailed,
+                    IsZh ? "百炼 CLI 执行超时" : "Bailian CLI timed out");
+            }
+
             var stdout = await outputTask;
             var stderr = await errorTask;
 

@@ -13,6 +13,16 @@ using TokenBar.Tray;
 
 namespace TokenBar.Services
 {
+    /// <summary>一轮刷新的触发来源，只用于日志定位（"到底是定时器没响，还是每轮都失败"）</summary>
+    public enum RefreshTrigger
+    {
+        Initial,   // App 启动首刷
+        Timer,     // 周期定时器
+        Manual,    // 托盘菜单 / 弹窗刷新按钮
+        Wake,      // 系统唤醒补刷
+        Settings   // 设置变更后立即刷新
+    }
+
     public class RefreshManager : IDisposable
     {
         public static RefreshManager Instance { get; } = new RefreshManager();
@@ -26,6 +36,22 @@ namespace TokenBar.Services
         // 0 = 空闲，1 = 刷新中。定时器回调在线程池线程、手动刷新在 UI 线程，
         // 无锁的 check-then-set 会让两者同时通过检查并发跑两轮全量刷新。
         private int _refreshing;
+
+        // 本轮开始时刻（UTC ticks，0 表示空闲）。闸门卡死时用它判断是否该强制抢占。
+        private long _refreshStartedAtTicks;
+        // 轮次代数：被抢占的旧轮次结束时不能把新轮次的闸门误清掉。
+        private long _refreshGeneration;
+        // 上一次定时器触发的时刻，用于在日志里暴露真实间隔
+        private DateTime? _lastTimerFire;
+
+        // 闸门抢占阈值。有了单厂商超时隔离后一轮最多约 35s 返回，
+        // 90s 纯粹是兜底：防住子进程这类不响应取消的路径。
+        private static readonly TimeSpan GateStaleThreshold = TimeSpan.FromSeconds(90);
+
+        /// <summary>最近一次"发起过刷新"的时刻，无论成败都推进。</summary>
+        public DateTime? LastAttemptDate { get; private set; }
+        /// <summary>最近一轮是否拿到了新数据，用于让"刷新了但全失败"对用户可见。</summary>
+        public bool LastRoundAdvanced { get; private set; }
 
         private Timer? _timer;
         // 当前定时器生效的间隔，用于判断设置变更是否真的需要重建定时器
@@ -68,7 +94,8 @@ namespace TokenBar.Services
 
             SetupInitialData();
             StartTimer();
-            _ = RefreshAllAsync();
+            Log.Notice("lifecycle", $"TokenBar 启动，refreshInterval={Settings.RefreshIntervalMinutes}min");
+            _ = RefreshAllAsync(RefreshTrigger.Initial);
         }
 
         private void SetupInitialData()
@@ -138,6 +165,8 @@ namespace TokenBar.Services
             var interval = Math.Max(1, Settings.RefreshIntervalMinutes);
             _timer = new Timer(TimerTickAsync, null, TimeSpan.FromMinutes(interval), TimeSpan.FromMinutes(interval));
             _activeIntervalMinutes = Settings.RefreshIntervalMinutes;
+            _lastTimerFire = null;
+            Log.Notice("timer", $"定时器已创建：interval={interval}min");
         }
 
         // TimerCallback 返回 void，异常一旦逃出这个 async void 方法就会终止进程，
@@ -146,7 +175,18 @@ namespace TokenBar.Services
         {
             try
             {
-                await RefreshAllAsync();
+                // 距上次触发的真实间隔是判断"定时器是否被系统挂起拉长"的关键指标
+                if (_lastTimerFire is DateTime previous)
+                {
+                    Log.Notice("timer", $"timer fired，距上次 {(DateTime.Now - previous).TotalSeconds:F1}s");
+                }
+                else
+                {
+                    Log.Notice("timer", "timer fired（本定时器首次触发）");
+                }
+                _lastTimerFire = DateTime.Now;
+
+                await RefreshAllAsync(RefreshTrigger.Timer);
             }
             catch { }
         }
@@ -154,8 +194,19 @@ namespace TokenBar.Services
         /// <summary>数据过期时才刷新，用于系统唤醒这类"可能已经错过若干个周期"的补刷场景</summary>
         public async Task RefreshIfStaleAsync(TimeSpan olderThan)
         {
+            // 唤醒事件可能连续到达，60 秒内只认一次
+            if (LastAttemptDate is DateTime attempt && DateTime.Now - attempt < TimeSpan.FromSeconds(60))
+            {
+                Log.Debug("lifecycle", "跳过唤醒补刷：刚刚已尝试过");
+                return;
+            }
+            // 判据是 LastRefreshDate（最近一次真的拿到数据），全失败轮次不会推进它，
+            // 所以补刷不会被"刷过但没成功"骗过去。
             if (LastRefreshDate is DateTime last && DateTime.Now - last < olderThan) return;
-            await RefreshAllAsync();
+
+            var age = LastRefreshDate.HasValue ? (DateTime.Now - LastRefreshDate.Value).TotalSeconds : -1;
+            Log.Notice("lifecycle", $"唤醒补刷，dataAge={age:F0}s");
+            await RefreshAllAsync(RefreshTrigger.Wake);
         }
 
         private void NotifyQuotasUpdated()
@@ -171,11 +222,37 @@ namespace TokenBar.Services
             }
         }
 
-        public async Task RefreshAllAsync()
+        public async Task RefreshAllAsync(RefreshTrigger trigger = RefreshTrigger.Manual)
         {
             // 原子地抢占闸门，避免定时器（线程池）与手动刷新（UI 线程）同时进入
-            if (Interlocked.CompareExchange(ref _refreshing, 1, 0) != 0) return;
+            if (Interlocked.CompareExchange(ref _refreshing, 1, 0) != 0)
+            {
+                var startedTicks = Volatile.Read(ref _refreshStartedAtTicks);
+                var elapsed = startedTicks == 0
+                    ? TimeSpan.Zero
+                    : TimeSpan.FromTicks(DateTime.UtcNow.Ticks - startedTicks);
+
+                if (startedTicks != 0 && elapsed > GateStaleThreshold)
+                {
+                    // 上一轮卡死了。以前这里只是 return，于是每一次 tick 和每一次手动刷新
+                    // 都被静默丢弃，界面上完全没有痕迹 —— 这正是"定时刷新彻底停摆"的成因。
+                    // 闸门已经是 1，无需再 CAS，直接接管这一轮。
+                    Log.Error("refresh", $"闸门被卡住 {elapsed.TotalSeconds:F1}s，强制抢占；trigger={trigger}");
+                }
+                else
+                {
+                    Log.Debug("refresh", $"跳过本次刷新：上一轮进行中 {elapsed.TotalSeconds:F1}s；trigger={trigger}");
+                    return;
+                }
+            }
+
+            Volatile.Write(ref _refreshStartedAtTicks, DateTime.UtcNow.Ticks);
+            var myGeneration = Interlocked.Increment(ref _refreshGeneration);
+            LastAttemptDate = DateTime.Now;
+            var roundStart = System.Diagnostics.Stopwatch.StartNew();
             NotifyQuotasUpdated();
+
+            Log.Notice("refresh", $"round begin trigger={trigger} providers={EnabledProviderNames()}");
 
             // 各刷新方法只在成功拿到数据时才推进自己的 LastUpdated，据此判断本轮是否有实际收获
             var updatedBefore = LatestQuotaUpdate();
@@ -184,35 +261,137 @@ namespace TokenBar.Services
             {
                 var tasks = new List<Task>();
 
-                if (Settings.OpenAIEnabled) tasks.Add(RefreshOpenAIAsync());
-                if (Settings.ClaudeEnabled) tasks.Add(RefreshClaudeAsync());
-                if (Settings.GeminiEnabled) tasks.Add(RefreshGeminiAsync());
-                if (Settings.DeepSeekEnabled) tasks.Add(RefreshDeepSeekAsync());
-                if (Settings.VolcengineEnabled) tasks.Add(RefreshVolcengineAsync());
-                if (Settings.KimiEnabled) tasks.Add(RefreshKimiAsync());
-                if (Settings.OpenRouterEnabled) tasks.Add(RefreshOpenRouterAsync());
-                if (Settings.GLMEnabled) tasks.Add(RefreshGLMAsync());
-                if (Settings.AliyunEnabled) tasks.Add(RefreshAliyunAsync());
+                if (Settings.OpenAIEnabled) tasks.Add(RunProviderAsync("openai", RefreshOpenAIAsync, ProviderType.OpenAI));
+                if (Settings.ClaudeEnabled) tasks.Add(RunProviderAsync("claude", RefreshClaudeAsync, ProviderType.ClaudeCode));
+                if (Settings.GeminiEnabled) tasks.Add(RunProviderAsync("gemini", RefreshGeminiAsync, ProviderType.Gemini));
+                if (Settings.DeepSeekEnabled) tasks.Add(RunProviderAsync("deepseek", RefreshDeepSeekAsync, ProviderType.DeepSeek));
+                if (Settings.VolcengineEnabled) tasks.Add(RunProviderAsync("volcengine", RefreshVolcengineAsync, ProviderType.Volcengine));
+                if (Settings.KimiEnabled) tasks.Add(RunProviderAsync("kimi", RefreshKimiAsync, ProviderType.Kimi));
+                if (Settings.OpenRouterEnabled) tasks.Add(RunProviderAsync("openrouter", RefreshOpenRouterAsync, ProviderType.OpenRouter));
+                if (Settings.GLMEnabled) tasks.Add(RunProviderAsync("glm", RefreshGLMAsync, ProviderType.GLM));
+                if (Settings.AliyunEnabled) tasks.Add(RunProviderAsync("aliyun", RefreshAliyunAsync, ProviderType.AliyunBailian));
 
                 foreach (var config in Settings.CustomProviders.Where(c => c.IsEnabled))
                 {
-                    tasks.Add(RefreshCustomProviderAsync(config));
+                    var captured = config;
+                    tasks.Add(RunProviderAsync("custom", () => RefreshCustomProviderAsync(captured), null, captured.Id));
                 }
 
                 await Task.WhenAll(tasks);
 
                 // 全部厂商都失败时不推进时间戳，避免界面显示"刚刚更新"却是一屏旧数据
                 var after = LatestQuotaUpdate();
-                if (after.HasValue && after != updatedBefore)
+                var advanced = after.HasValue && after != updatedBefore;
+                if (advanced)
                 {
                     LastRefreshDate = after;
                 }
+                LastRoundAdvanced = advanced;
+
+                Log.Notice("refresh", $"round end in {roundStart.ElapsedMilliseconds}ms, advanced={advanced}");
             }
             finally
             {
-                Volatile.Write(ref _refreshing, 0);
+                // 只有仍然是"当前那一轮"才收闸门；被抢占的旧轮次结束时什么都不做，
+                // 否则会把接替它的新轮次的闸门提前打开。
+                if (Volatile.Read(ref _refreshGeneration) == myGeneration)
+                {
+                    Volatile.Write(ref _refreshStartedAtTicks, 0);
+                    Volatile.Write(ref _refreshing, 0);
+                }
                 NotifyQuotasUpdated();
             }
+        }
+
+        /// <summary>各厂商单轮的时间预算。百炼链路最长（AK 签发 + 网关 + 重试 + 余额），Gemini 次之。</summary>
+        private static TimeSpan BudgetFor(string name) => name switch
+        {
+            "aliyun" => TimeSpan.FromSeconds(35),
+            "gemini" => TimeSpan.FromSeconds(30),
+            _ => TimeSpan.FromSeconds(25)
+        };
+
+        /// <summary>
+        /// 给单个厂商的刷新套一层独立超时。
+        ///
+        /// 这是"一个厂商挂起就拖垮整轮刷新"的解药：Task.WhenAll 会等待全部任务，
+        /// 以前任何一个厂商卡住都会让 RefreshAllAsync 迟迟不返回，闸门被占住，
+        /// 之后每一次定时触发和手动刷新都被静默丢弃。
+        ///
+        /// 注意超时后被放弃的 Task 仍在后台跑，可能稍后写回 quota。Quotas 的写入都在
+        /// 各 Refresh 方法内部完成，CustomQuotas 是 ConcurrentDictionary，不会破坏结构。
+        /// </summary>
+        private async Task RunProviderAsync(string name, Func<Task> body, ProviderType? key, Guid? customId = null)
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            Task work;
+            try
+            {
+                work = body();
+            }
+            catch (Exception ex)
+            {
+                // body 同步抛出（参数校验之类），不该让整轮挂掉
+                Log.Error("provider", $"provider={name} 启动失败: {ex.Message}");
+                return;
+            }
+
+            using var cts = new CancellationTokenSource();
+            var timeout = Task.Delay(BudgetFor(name), cts.Token);
+            var winner = await Task.WhenAny(work, timeout).ConfigureAwait(false);
+
+            if (winner == work)
+            {
+                cts.Cancel();   // 回收 Task.Delay 的定时器，避免堆积
+                try
+                {
+                    await work.ConfigureAwait(false);
+                    Log.Info("provider", $"provider={name} done in {sw.ElapsedMilliseconds}ms");
+                }
+                catch (Exception ex)
+                {
+                    Log.Error("provider", $"provider={name} failed: {ex.Message}");
+                }
+                return;
+            }
+
+            Log.Error("provider", $"provider={name} TIMEOUT after {sw.ElapsedMilliseconds}ms，已放弃本轮");
+            // 被放弃的厂商，其 IsLoading 会停在 true（卡片一直转圈），这里补一次收尾。
+            FinishTimedOutProvider(key, customId);
+        }
+
+        private void FinishTimedOutProvider(ProviderType? key, Guid? customId)
+        {
+            var message = LocalizationManager.Instance.ErrRefreshTimeout;
+
+            if (key.HasValue && Quotas.TryGetValue(key.Value, out var quota) && quota != null)
+            {
+                quota.IsLoading = false;
+                quota.ErrorMessage = message;
+            }
+            else if (customId.HasValue && CustomQuotas.TryGetValue(customId.Value, out var custom) && custom != null)
+            {
+                custom.IsLoading = false;
+                custom.ErrorMessage = message;
+            }
+        }
+
+        /// <summary>本轮参与刷新的厂商名，只用于日志（都是固定标识，不含任何凭证）</summary>
+        private string EnabledProviderNames()
+        {
+            var names = new List<string>();
+            if (Settings.OpenAIEnabled) names.Add("openai");
+            if (Settings.ClaudeEnabled) names.Add("claude");
+            if (Settings.GeminiEnabled) names.Add("gemini");
+            if (Settings.DeepSeekEnabled) names.Add("deepseek");
+            if (Settings.VolcengineEnabled) names.Add("volcengine");
+            if (Settings.KimiEnabled) names.Add("kimi");
+            if (Settings.OpenRouterEnabled) names.Add("openrouter");
+            if (Settings.GLMEnabled) names.Add("glm");
+            if (Settings.AliyunEnabled) names.Add("aliyun");
+            var customCount = Settings.CustomProviders.Count(c => c.IsEnabled);
+            if (customCount > 0) names.Add($"custom x{customCount}");
+            return string.Join(",", names);
         }
 
         /// <summary>所有厂商中最近一次成功更新的时间</summary>
@@ -263,6 +442,7 @@ namespace TokenBar.Services
             {
                 quota.IsAuthorized = false;
                 quota.ErrorMessage = ex.Message;
+                Log.Error("provider", $"provider=openai failed: {ex.Message}");
             }
             finally
             {
@@ -343,6 +523,7 @@ namespace TokenBar.Services
                     if (!foundAuth)
                     {
                         quota.ErrorMessage = ex.Message;
+                        Log.Error("provider", $"provider=claude failed: {ex.Message}");
                     }
                 }
             }
@@ -397,6 +578,7 @@ namespace TokenBar.Services
                     {
                         quota.IsAuthorized = false;
                         quota.ErrorMessage = ex.Message;
+                        Log.Error("provider", $"provider=gemini failed: {ex.Message}");
                         quota.IsLoading = false;
                         NotifyQuotasUpdated();
                         return;
@@ -418,6 +600,7 @@ namespace TokenBar.Services
             {
                 quota.IsAuthorized = false;
                 quota.ErrorMessage = ex.Message;
+                Log.Error("provider", $"provider=gemini failed: {ex.Message}");
             }
             finally
             {
@@ -463,6 +646,7 @@ namespace TokenBar.Services
             {
                 quota.IsAuthorized = false;
                 quota.ErrorMessage = ex.Message;
+                Log.Error("provider", $"provider=deepseek failed: {ex.Message}");
             }
             finally
             {
@@ -504,6 +688,7 @@ namespace TokenBar.Services
             {
                 quota.IsAuthorized = false;
                 quota.ErrorMessage = ex.Message;
+                Log.Error("provider", $"provider=volcengine failed: {ex.Message}");
             }
             finally
             {
@@ -549,6 +734,7 @@ namespace TokenBar.Services
             {
                 quota.IsAuthorized = false;
                 quota.ErrorMessage = ex.Message;
+                Log.Error("provider", $"provider=kimi failed: {ex.Message}");
             }
             finally
             {
@@ -593,6 +779,7 @@ namespace TokenBar.Services
             {
                 quota.IsAuthorized = false;
                 quota.ErrorMessage = ex.Message;
+                Log.Error("provider", $"provider=openrouter failed: {ex.Message}");
             }
             finally
             {
@@ -633,6 +820,7 @@ namespace TokenBar.Services
             {
                 quota.IsAuthorized = false;
                 quota.ErrorMessage = ex.Message;
+                Log.Error("provider", $"provider=glm failed: {ex.Message}");
             }
             finally
             {
@@ -699,6 +887,7 @@ namespace TokenBar.Services
             {
                 quota.IsAuthorized = false;
                 quota.ErrorMessage = ex.Message;
+                Log.Error("provider", $"provider=aliyun failed: {ex.Message}");
             }
             finally
             {
@@ -749,6 +938,7 @@ namespace TokenBar.Services
             {
                 q.IsAuthorized = false;
                 q.ErrorMessage = ex.Message;
+                Log.Error("provider", $"provider=custom failed: {ex.Message}");
             }
             finally
             {

@@ -121,6 +121,14 @@ namespace TokenBar.Services
         private static string? _cachedAccessToken;
         private static DateTime _cachedAccessTokenExpiryUtc = DateTime.MinValue;
 
+        // 上一次令牌刷新整体失败的时刻。候选逐个试是昂贵操作，凭证真失效时每轮都重试纯属浪费。
+        private static DateTime? _lastTokenRefreshFailureUtc;
+        private static readonly TimeSpan TokenRefreshCooldown = TimeSpan.FromSeconds(120);
+        // 候选循环的总预算。HttpClient 的 Timeout 是 15s，8 个候选串行最坏 120s，
+        // 远超刷新间隔，会把 RefreshManager 的闸门长时间占住。
+        private static readonly TimeSpan TokenRefreshBudget = TimeSpan.FromSeconds(20);
+        private const int TokenClientCandidateLimit = 3;
+
         private sealed class QuotaAuthException : Exception
         {
             public QuotaAuthException() : base("quota auth rejected") { }
@@ -477,11 +485,32 @@ namespace TokenBar.Services
         /// </summary>
         private async Task<string> RefreshAntigravityTokenAsync(string refreshToken)
         {
+            if (_lastTokenRefreshFailureUtc is DateTime lastFailure
+                && DateTime.UtcNow - lastFailure < TokenRefreshCooldown)
+            {
+                Log.Info("provider", "gemini token 刷新处于冷却期，跳过本轮");
+                throw new Exception(LocalizationManager.Instance.IsChinese
+                    ? "Google 凭证刷新处于冷却期，请稍后重试或重新运行 agy 登录"
+                    : "Google credential refresh is cooling down; retry later or log in again via agy");
+            }
+
             var candidates = GetAntigravityClientCandidates();
             string? lastDetail = null;
 
-            foreach (var client in candidates)
+            // 整个候选循环的硬预算：任何一个候选慢下来都不能让整轮刷新失控
+            var budget = System.Diagnostics.Stopwatch.StartNew();
+
+            // ToList 物化成快照：循环体内成功时会 Remove/Insert 修改 _antigravityClientCandidates
+            // （candidates 就是它的同一个引用），而 Take 是延迟求值、包装原 List 的迭代器。
+            // 当前靠"改完立即 return"侥幸不触发迭代器校验，快照能彻底消除这个隐患。
+            foreach (var client in candidates.Take(TokenClientCandidateLimit).ToList())
             {
+                if (budget.Elapsed > TokenRefreshBudget)
+                {
+                    Log.Error("provider", $"gemini token 刷新超出 {TokenRefreshBudget.TotalSeconds:F0}s 预算，放弃剩余候选");
+                    break;
+                }
+
                 using var resp = await HttpClient.PostAsync("https://oauth2.googleapis.com/token",
                     new FormUrlEncodedContent(new[]
                     {
@@ -516,8 +545,12 @@ namespace TokenBar.Services
                     expiresIn = secs;
                 }
                 _cachedAccessTokenExpiryUtc = DateTime.UtcNow.AddSeconds(Math.Max(60, expiresIn - 120));
+                _lastTokenRefreshFailureUtc = null;
                 return _cachedAccessToken!;
             }
+
+            _lastTokenRefreshFailureUtc = DateTime.UtcNow;
+            Log.Error("provider", "gemini token 刷新失败：所有候选都没能换到 access token");
 
             var hint = LocalizationManager.Instance.IsChinese
                 ? $"Google 凭证刷新失败{(_antigravityClientCandidates is { Count: 0 } ? "（未在本机找到 Antigravity/agy 安装，可设置环境变量 ANTIGRAVITY_CLIENT_ID / ANTIGRAVITY_CLIENT_SECRET）" : $"（HTTP {lastDetail}）")}，请重新运行 agy 登录"

@@ -1343,7 +1343,7 @@ namespace TokenBar.Views
                 i18n.AlertNotice,
                 MessageBoxButton.OK,
                 MessageBoxImage.Information);
-            _ = RefreshManager.Instance.RefreshAllAsync();
+            _ = RefreshManager.Instance.RefreshAllAsync(RefreshTrigger.Settings);
         }
 
         private void BtnClose_Click(object sender, RoutedEventArgs e)

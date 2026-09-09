@@ -155,8 +155,25 @@ Windows 客户端采用轻量现代的 **.NET 8 WPF** 架构，利用 Windows �
 3. **`SettingsWindow`**：
    - 独立的偏好设置窗口，提供厂商 Key/端点配置及中英文语言即时切换。
 4. **`RefreshManager`**：
-   - 基于 `System.Threading.Timer` 运行异步定时调度。
+   - 基于 `System.Threading.Timer` 运行异步定时调度，定时器在 `Initialize()` 中先于首刷创建。
    - 配置通过 `System.Text.Json` 本地持久化到 `%AppData%\TokenBar\settings.json`。
+   - **闸门看门狗**：`Interlocked` 抢占的基础上加 `_refreshStartedAtTicks` + `_refreshGeneration`，
+     上一轮超过 90 秒未结束时强制抢占。以前一轮卡死就会让之后每次定时触发与手动刷新
+     都被静默丢弃（与 macOS 端同源缺陷，详见 2.2 节）。
+   - **单厂商超时隔离** `RunProviderAsync`：`Task.WhenAny(work, Task.Delay(budget))` 给每个
+     provider 套独立预算（百炼 35s / Gemini 30s / 其余 25s），超时后补一次 `IsLoading=false`
+     收尾，避免卡片一直转圈。`Quotas` 在初始化时已预填充全部 `ProviderType`，各刷新方法
+     只改 `ProviderQuota`（class）的属性、不做结构性写入，因此并发访问该 `Dictionary` 是安全的。
+   - **日志** `Log.cs`：写入 `%AppData%\TokenBar\tokenbar.log`（2MB 轮转一次）。Windows 没有
+     `log stream` 的等价物，排查用 `Get-Content "$env:APPDATA\TokenBar\tokenbar.log" -Wait -Tail 50`。
+     关键指标同样是 `timer fired，距上次 xxxs` 是否稳定在设定周期。
+
+> **与 macOS 端的差异**：2.2.1 的第 1 条（`URLSession.shared` 的 7 天 resource 超时、URLCache
+> 回放旧响应头）在 Windows 上不成立 —— `HttpClient.Timeout` 本身就是端到端总超时，且
+> `SocketsHttpHandler` 默认不做响应缓存。第 2 条的钥匙串阻塞风险也低得多：凭据管理器
+> (`CredReadW`) 不会弹授权框，且刷新链路跑在线程池线程而非 UI 线程。第 3 条的 pipe 读取
+> 顺序 Windows 端本就正确（先 `ReadToEndAsync` 再 `WaitForExitAsync`），但补上了 20s 超时
+> 与 `Kill(entireProcessTree)`，并关闭 stdin 防 `bl` 交互等待。
 5. **凭据安全与系统集成 (`GeminiService` / `Advapi32`)**：
    - 原生 P/Invoke 调用 Windows 凭据管理器 (`advapi32.dll` `CredReadW`)，安全提取 Antigravity CLI (`agy`) 及 Antigravity IDE 托管的 Google One PRO 凭证（目标名 `gemini:antigravity`）。
    - 使用凭证中的 refresh_token 自动续期访问令牌（内存缓存约 1 小时有效期），调用 Google Code Assist 配额接口获取与 Antigravity 官方用量面板一致的真实数据；自动请求 Google UserInfo 接口解析用户邮箱，实现与 macOS 凭证管理完全同构。

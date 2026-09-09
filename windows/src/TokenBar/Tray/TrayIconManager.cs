@@ -159,7 +159,7 @@ namespace TokenBar.Tray
 
             var refreshItem = new ToolStripMenuItem(LocalizationManager.Instance.RefreshAll, null, async (s, e) =>
             {
-                await RefreshManager.Instance.RefreshAllAsync();
+                await RefreshManager.Instance.RefreshAllAsync(RefreshTrigger.Manual);
             });
             contextMenu.Items.Add(refreshItem);
 
