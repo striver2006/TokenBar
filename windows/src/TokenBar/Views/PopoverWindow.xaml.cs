@@ -263,7 +263,7 @@ namespace TokenBar.Views
                 errorDock.Children.Add(msgBlock);
                 stack.Children.Add(errorDock);
             }
-            else if (quota.FiveHourWindow == null && quota.WeeklyWindow == null)
+            else if (quota.FiveHourWindow == null && quota.WeeklyWindow == null && quota.BalanceWindow == null)
             {
                 var syncBlock = new TextBlock
                 {
@@ -276,23 +276,40 @@ namespace TokenBar.Views
             }
             else
             {
-                // Windows
+                UIElement CreateSeparator() => new Border
+                {
+                    Height = 1,
+                    Background = new SolidColorBrush(Color.FromRgb(243, 244, 246)),
+                    Margin = new Thickness(0, 6, 0, 6)
+                };
+
+                // 5小时窗口
                 if (quota.FiveHourWindow != null)
                 {
                     stack.Children.Add(CreateWindowQuotaRow(quota.FiveHourWindow, LocalizationManager.Instance.FiveHourWindow));
                 }
 
-                if (quota.FiveHourWindow != null && quota.WeeklyWindow != null)
+                if (quota.FiveHourWindow != null && quota.WeeklyWindow != null && quota.BalanceWindow == null)
                 {
-                    var sep = new Border
-                    {
-                        Height = 1,
-                        Background = new SolidColorBrush(Color.FromRgb(243, 244, 246)),
-                        Margin = new Thickness(0, 6, 0, 6)
-                    };
-                    stack.Children.Add(sep);
+                    stack.Children.Add(CreateSeparator());
                 }
 
+                // 账户余额（与时间窗口并存，例如百炼的账户现金余额）
+                if (quota.BalanceWindow != null)
+                {
+                    if (quota.FiveHourWindow != null)
+                    {
+                        stack.Children.Add(CreateSeparator());
+                    }
+                    stack.Children.Add(CreateWindowQuotaRow(quota.BalanceWindow, LocalizationManager.Instance.BalanceBadge));
+                }
+
+                if (quota.BalanceWindow != null && quota.WeeklyWindow != null)
+                {
+                    stack.Children.Add(CreateSeparator());
+                }
+
+                // 每周/周期窗口
                 if (quota.WeeklyWindow != null)
                 {
                     stack.Children.Add(CreateWindowQuotaRow(quota.WeeklyWindow, LocalizationManager.Instance.WeeklyWindow));

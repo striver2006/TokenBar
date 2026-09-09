@@ -680,7 +680,7 @@ namespace TokenBar.Services
                             .FetchAccountBalanceAsync(credentials);
                         quota.BalanceWindow = new TokenWindow
                         {
-                            Title = LocalizationManager.Instance.IsChinese ? "账户余额" : "Balance",
+                            Title = "账户余额",
                             Kind = TokenWindowKind.Balance,
                             BalanceAmount = (decimal)balance.Amount,
                             Currency = balance.Currency,
