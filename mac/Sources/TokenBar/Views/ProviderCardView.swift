@@ -68,7 +68,7 @@ public struct ProviderCardView: View {
                 }
                 .padding(.vertical, 4)
             } else {
-                if quota.fiveHourWindow == nil && quota.weeklyWindow == nil {
+                if quota.fiveHourWindow == nil && quota.weeklyWindow == nil && quota.balanceWindow == nil {
                     HStack {
                         Image(systemName: "hourglass")
                             .foregroundColor(.secondary)
@@ -85,7 +85,22 @@ public struct ProviderCardView: View {
                         WindowQuotaRow(window: fiveHour, badgeText: I18n(.fiveHourWindow))
                     }
 
-                    if quota.fiveHourWindow != nil && quota.weeklyWindow != nil {
+                    if quota.fiveHourWindow != nil && quota.weeklyWindow != nil
+                        && quota.balanceWindow == nil {
+                        Divider()
+                            .opacity(0.5)
+                    }
+
+                    // Balance Section（与时间窗口并存，例如百炼的账户现金余额）
+                    if let balance = quota.balanceWindow {
+                        if quota.fiveHourWindow != nil {
+                            Divider()
+                                .opacity(0.5)
+                        }
+                        WindowQuotaRow(window: balance, badgeText: I18n(.menuBarMetricBalance))
+                    }
+
+                    if quota.balanceWindow != nil && quota.weeklyWindow != nil {
                         Divider()
                             .opacity(0.5)
                     }

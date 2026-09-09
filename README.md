@@ -61,7 +61,7 @@
   - 可在「通用设置」中选定任一已启用厂商，将其剩余额度直接显示在菜单栏图标旁：只显示数值，如 `34%/67%`（5 小时 / 周期剩余）或 `45.09`（账户余额），不展开面板也能一眼掌握，厂商名与重置倒计时见悬停提示。
 - 🌐 **广泛的模型厂商生态**：
   - **海外主流**：OpenAI (TPM/RPM)、Anthropic (Claude Code 5h/每周双窗口)、Google Gemini / Google One (AI Studio / OAuth 网页授权 / Antigravity 凭据管理器)。
-  - **国内前沿**：DeepSeek (余额/速率)、火山方舟 (Ark 接入点)、月之暗面 KIMI、智谱清言 GLM、阿里云百炼 (Token Plan)。
+  - **国内前沿**：DeepSeek (余额/速率)、火山方舟 (Ark 接入点)、月之暗面 KIMI、智谱清言 GLM、阿里云百炼 (Token Plan 额度 + 账户余额，支持 AccessKey 多设备并发监控)。
   - **开放生态**：支持通过 OpenAI Chat、OpenAI Response 或 Anthropic 协议自定义任意端点（如 OneAPI、NewAPI、硅基流动、MiniMax、阶跃星辰等）。
 - 🌍 **动态中英文双语**：
   - 界面全面支持「简体中文」与「English」实时切换，无需重启即时响应。

@@ -591,16 +591,50 @@ namespace TokenBar.Services
 
             try
             {
-                var (fiveHour, weekly, account) = await AliyunBailianService.Instance.FetchQuotaAsync(
-                    Settings.AliyunApiKey,
-                    Settings.AliyunCookie,
-                    Settings.AliyunEndpoint);
+                var credentials = AliyunBailianService.ResolveCredentials(Settings);
+                var res = await AliyunBailianService.Instance.FetchQuotaAsync(credentials);
 
-                quota.FiveHourWindow = fiveHour;
-                quota.WeeklyWindow = weekly;
-                quota.AccountInfo = account;
+                // 新签发的控制台令牌落进凭据管理器，下次刷新直接复用，避免重复签发
+                if (!string.IsNullOrEmpty(res.RefreshedToken))
+                {
+                    CredentialSecretStore.Instance.Set(
+                        SecretKey.AliyunConsoleAccessToken, res.RefreshedToken!);
+                }
+
+                quota.FiveHourWindow = res.FiveHour;
+                quota.WeeklyWindow = res.Weekly;
+                quota.AccountInfo = res.Account;
                 quota.IsAuthorized = true;
+                // 网关成功但没返回窗口数据时，用 Note 说明「可能不限量」，
+                // 而不是让卡片停在「同步中」——但仍算已授权，不是失败态
+                quota.ErrorMessage = res.Note;
                 quota.LastUpdated = DateTime.Now;
+
+                // 账户现金余额与额度相互独立：需要 AK/SK 且额外的 bss:DescribeAcccount 权限，
+                // 查不到时静默跳过，不能连累已经拿到的额度数据
+                quota.BalanceWindow = null;
+                if (credentials.HasAccessKey)
+                {
+                    try
+                    {
+                        var balance = await AliyunBailianService.Instance
+                            .FetchAccountBalanceAsync(credentials);
+                        quota.BalanceWindow = new TokenWindow
+                        {
+                            Title = LocalizationManager.Instance.IsChinese ? "账户余额" : "Balance",
+                            Kind = TokenWindowKind.Balance,
+                            BalanceAmount = (decimal)balance.Amount,
+                            Currency = balance.Currency,
+                            WarningThreshold = Settings.AliyunBalanceAlertThreshold,
+                            CriticalThreshold = Settings.AliyunBalanceAlertThreshold / 2,
+                            StartTime = DateTime.Now,
+                            EndTime = DateTime.Now.AddDays(30)
+                        };
+                        ProcessBalance("aliyun", ProviderType.AliyunBailian.GetDisplayName(),
+                            quota.BalanceWindow, Settings.AliyunBalanceAlertThreshold);
+                    }
+                    catch { }
+                }
             }
             catch (Exception ex)
             {

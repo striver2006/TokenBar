@@ -213,6 +213,27 @@ namespace TokenBar.I18n
         public string LabelAliyunCookie => IsChinese ? "控制台 Cookie:" : "Console Cookie:";
         public string BtnAliyunSaveCookie => IsChinese ? "保存 Cookie 并测试连接" : "Save Cookie & Test Connection";
 
+        // 阿里云百炼 AK/SK 通道（与 mac 端 I18n 键一一对应）
+        public string AliyunMethodAKTitle => IsChinese ? "方式一：OpenAPI AccessKey（推荐 · 多台设备可同时在线）" : "Option 1: OpenAPI AccessKey (recommended - several machines at once)";
+        public string AliyunMethodAKDesc => IsChinese ? "AccessKey 是服务端凭证，不受控制台单点登录的多设备互踢影响。TokenBar 用它自动换取控制台令牌；令牌被其他设备顶掉时会静默续期。密钥保存在 Windows 凭据管理器，不写入配置文件。" : "An AccessKey is a server-side credential, so it is not affected by console single sign-on kicking other devices offline. TokenBar exchanges it for a console token and renews that token silently. The secret lives in Windows Credential Manager, never in a config file.";
+        public string BtnAliyunOpenRAMConsole => IsChinese ? "前往 RAM 控制台创建" : "Create one in the RAM console";
+        public string AliyunRAMHowToTitle => IsChinese ? "如何创建专用 AccessKey？" : "How do I create a dedicated AccessKey?";
+        public string AliyunRAMHowToSteps => IsChinese ? "1. 用主账号登录 RAM 控制台，创建用户，登录名例如 tokenbar-monitor\n2. 访问方式只勾选「使用永久 AccessKey 访问」，不要勾控制台登录\n3. 创建后立即复制 AccessKey ID 与 Secret（Secret 只显示一次）\n4. 授权：系统策略里搜 Bailian，优先选只读策略；要显示账户余额再加财务只读 bss:DescribeAcccount\n5. 回百炼控制台，再给该用户授予对应业务空间的只读权限（RAM 权限与百炼空间权限是两套体系，都要授）\n6. 把 ID / Secret 粘贴到下方，点「保存并测试」" : "1. Sign in to the RAM console as the main account and create a user, e.g. tokenbar-monitor\n2. Under access mode tick only permanent AccessKey; leave console sign-in off\n3. Copy the AccessKey ID and Secret right away - the Secret is shown only once\n4. Grant permissions: search Bailian in the system policies and prefer a read-only one; add the read-only billing action bss:DescribeAcccount if you also want the account balance\n5. Back in the Bailian console, also grant that user read access to the workspace - RAM and Bailian workspace permissions are two separate systems\n6. Paste the ID / Secret below and press Save and test";
+        public string LabelAliyunAccessKeyId => IsChinese ? "AccessKey ID:" : "AccessKey ID:";
+        public string LabelAliyunAccessKeySecret => IsChinese ? "AccessKey Secret:" : "AccessKey Secret:";
+        public string LabelAliyunConsoleRegion => IsChinese ? "控制台区域:" : "Console region:";
+        public string LabelAliyunConsoleSite => IsChinese ? "控制台站点:" : "Console site:";
+        public string AliyunAdvancedTitle => IsChinese ? "高级选项" : "Advanced";
+        public string LabelAliyunSwitchAgent => IsChinese ? "代操作 UID:" : "Switch-agent UID:";
+        public string HintAliyunSwitchAgent => IsChinese ? "仅企业代操作 / 子账号代管场景需要，留空即可。本机若已登录百炼 CLI，会自动带入。" : "Only needed for enterprise delegated access. Leave it blank otherwise - it is filled in automatically if the Bailian CLI is signed in on this machine.";
+        public string ToggleAliyunReuseCliConfig => IsChinese ? "复用本机百炼 CLI 的登录凭证" : "Reuse credentials from the local Bailian CLI";
+        public string HintAliyunReuseCliConfig => IsChinese ? "只读取 %USERPROFILE%\\.bailian\\config.json，绝不写回。开启后即使没填 AccessKey 也能直接看到额度。" : "Reads %USERPROFILE%\\.bailian\\config.json and never writes to it. With this on, quotas show up even before you add an AccessKey.";
+        public string BtnAliyunSaveAndTestAK => IsChinese ? "保存并测试 AccessKey 通道" : "Save and test the AccessKey channel";
+        public string LabelAliyunBalanceThreshold => IsChinese ? "账户余额提醒阈值:" : "Balance alert threshold:";
+        public string AliyunMethodCLITitle => IsChinese ? "方式二：百炼 CLI（备用 · 仅单机）" : "Option 2: Bailian CLI (backup - single machine)";
+        public string AliyunMethodCLIDesc => IsChinese ? "需先安装 bl 并用浏览器登录。同一账号在第二台设备登录会把第一台顶下线，不适合多机并发。" : "Requires bl to be installed and signed in through a browser. Signing in on a second machine kicks the first one offline.";
+        public string AliyunMethodCookieTitle => IsChinese ? "方式三：控制台 Cookie（兜底）" : "Option 3: Console cookie (last resort)";
+
         public string FormTitleAddProvider => IsChinese ? "添加模型厂商" : "Add Model Provider";
         public string FormTitleEditProvider => IsChinese ? "编辑模型厂商" : "Edit Model Provider";
         public string LabelCustomBaseUrl => IsChinese ? "API 接入端点 (Base URL):" : "API Endpoint (Base URL):";

@@ -263,6 +263,9 @@ namespace TokenBar.Models
         public string? AccountInfo { get; set; }
         public TokenWindow? FiveHourWindow { get; set; }
         public TokenWindow? WeeklyWindow { get; set; }
+        // 第三个槽位：与时间窗口额度并存的货币余额（目前用于阿里云百炼的账户现金余额）。
+        // 只用两个槽位的厂商保持 null，卡片不会渲染这一行。与 mac 端 balanceWindow 同名。
+        public TokenWindow? BalanceWindow { get; set; }
         public DateTime? LastUpdated { get; set; }
         public string? ErrorMessage { get; set; }
         public bool IsLoading { get; set; }

@@ -452,10 +452,67 @@
                             </DockPanel>
                         </Border>
 
+                        <!-- 方式一：OpenAPI AccessKey（推荐 · 多台设备可同时在线） -->
+                        <Border Background="#EFF6FF" BorderBrush="#BFDBFE" BorderThickness="1" CornerRadius="8" Padding="14" Margin="0,0,0,14">
+                            <StackPanel>
+                                <TextBlock x:Name="TxtAliyunMethodAKTitle" TextWrapping="Wrap" Text="方式一：OpenAPI AccessKey（推荐 · 多台设备可同时在线）" FontWeight="Bold" FontSize="12" Margin="0,0,0,8"/>
+                                <TextBlock x:Name="TxtAliyunMethodAKDesc" TextWrapping="Wrap" Text="AccessKey 是服务端凭证，不受控制台单点登录的多设备互踢影响。TokenBar 用它自动换取控制台令牌；令牌被其他设备顶掉时会静默续期。密钥保存在 Windows 凭据管理器，不写入配置文件。" FontSize="11" Foreground="#6B7280" Margin="0,0,0,10"/>
+
+                                <Button x:Name="BtnOpenRamConsole" Content="前往 RAM 控制台创建" Padding="10,6" HorizontalAlignment="Left" Background="#FFFFFF" BorderBrush="#93C5FD" Foreground="#1D4ED8" Margin="0,0,0,10" Click="BtnOpenRamConsole_Click"/>
+
+                                <Expander x:Name="ExpAliyunRamHowTo" Header="如何创建专用 AccessKey？" FontSize="11" Margin="0,0,0,10">
+                                    <TextBlock x:Name="TxtAliyunRamHowToSteps" TextWrapping="Wrap" FontSize="10" Foreground="#6B7280" Margin="0,6,0,0"/>
+                                </Expander>
+
+                                <TextBlock x:Name="TxtAliyunAkIdLabel" TextWrapping="Wrap" Text="AccessKey ID:" FontSize="11" Margin="0,0,0,4"/>
+                                <TextBox x:Name="TxtAliyunAkId" Margin="0,0,0,10" Padding="6"/>
+
+                                <TextBlock x:Name="TxtAliyunAkSecretLabel" TextWrapping="Wrap" Text="AccessKey Secret:" FontSize="11" Margin="0,0,0,4"/>
+                                <PasswordBox x:Name="PwdAliyunAkSecret" Margin="0,0,0,10" Padding="6"/>
+
+                                <Grid Margin="0,0,0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="12"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock x:Name="TxtAliyunRegionLabel" TextWrapping="Wrap" Text="控制台区域:" FontSize="11" Margin="0,0,0,4"/>
+                                        <ComboBox x:Name="CmbAliyunRegion" Padding="6">
+                                            <ComboBoxItem Tag="cn-beijing" Content="cn-beijing（中国大陆）"/>
+                                            <ComboBoxItem Tag="ap-southeast-1" Content="ap-southeast-1（新加坡）"/>
+                                        </ComboBox>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock x:Name="TxtAliyunSiteLabel" TextWrapping="Wrap" Text="控制台站点:" FontSize="11" Margin="0,0,0,4"/>
+                                        <ComboBox x:Name="CmbAliyunSite" Padding="6">
+                                            <ComboBoxItem Tag="domestic" Content="domestic（aliyun.com）"/>
+                                            <ComboBoxItem Tag="international" Content="international（alibabacloud.com）"/>
+                                        </ComboBox>
+                                    </StackPanel>
+                                </Grid>
+
+                                <TextBlock x:Name="TxtAliyunBalanceThresholdLabel" TextWrapping="Wrap" Text="账户余额提醒阈值:" FontSize="11" Margin="0,0,0,4"/>
+                                <TextBox x:Name="TxtAliyunBalanceThreshold" Width="120" HorizontalAlignment="Left" Margin="0,0,0,10" Padding="6"/>
+
+                                <Expander x:Name="ExpAliyunAdvanced" Header="高级选项" FontSize="11" Margin="0,0,0,10">
+                                    <StackPanel Margin="0,6,0,0">
+                                        <TextBlock x:Name="TxtAliyunSwitchAgentLabel" TextWrapping="Wrap" Text="代操作 UID:" FontSize="11" Margin="0,0,0,4"/>
+                                        <TextBox x:Name="TxtAliyunSwitchAgent" Width="200" HorizontalAlignment="Left" Margin="0,0,0,4" Padding="6"/>
+                                        <TextBlock x:Name="TxtAliyunSwitchAgentHint" TextWrapping="Wrap" FontSize="10" Foreground="#6B7280" Margin="0,0,0,10"/>
+                                        <CheckBox x:Name="ChkAliyunReuseCliConfig" Content="复用本机百炼 CLI 的登录凭证" FontSize="11" Margin="0,0,0,4"/>
+                                        <TextBlock x:Name="TxtAliyunReuseCliHint" TextWrapping="Wrap" FontSize="10" Foreground="#6B7280"/>
+                                    </StackPanel>
+                                </Expander>
+
+                                <Button x:Name="BtnTestAliyunAK" Content="保存并测试 AccessKey 通道" Padding="12,6" HorizontalAlignment="Left" Background="#2563EB" Foreground="White" BorderThickness="0" Cursor="Hand" Click="BtnTestAliyunAK_Click"/>
+                            </StackPanel>
+                        </Border>
+
                         <Border Background="#F9FAFB" BorderBrush="#E5E7EB" BorderThickness="1" CornerRadius="8" Padding="14" Margin="0,0,0,14">
                             <StackPanel>
-                                <TextBlock x:Name="TxtAliyunMethod1Title" TextWrapping="Wrap" Text="方式一：百炼官方 CLI (`bl`) (推荐)" FontWeight="Bold" FontSize="12" Margin="0,0,0,8"/>
-                                <TextBlock x:Name="TxtAliyunMethod1Desc" TextWrapping="Wrap" Text="百炼 Token Plan 仅支持 CLI 或控制台 Cookie 读取，OpenAI 兼容接口不支持配额查询。" FontSize="11" Foreground="#6B7280" Margin="0,0,0,10"/>
+                                <TextBlock x:Name="TxtAliyunMethod1Title" TextWrapping="Wrap" Text="方式二：百炼 CLI（备用 · 仅单机）" FontWeight="Bold" FontSize="12" Margin="0,0,0,8"/>
+                                <TextBlock x:Name="TxtAliyunMethod1Desc" TextWrapping="Wrap" Text="需先安装 bl 并用浏览器登录。同一账号在第二台设备登录会把第一台顶下线，不适合多机并发。" FontSize="11" Foreground="#6B7280" Margin="0,0,0,10"/>
                                 <WrapPanel>
                                     <Button x:Name="BtnOpenAliyunCLI" Content="打开终端登录 CLI (`bl auth login --console`)" Padding="10,6" Background="#EFF6FF" BorderBrush="#93C5FD" Foreground="#1D4ED8" Margin="0,0,8,0" Click="BtnOpenAliyunCLI_Click"/>
                                     <Button x:Name="BtnTestAliyunCLI" Content="测试 CLI 配额读取" Padding="10,6" Background="#F3F4F6" BorderBrush="#D1D5DB" Click="BtnTestAliyunCLI_Click"/>
@@ -465,7 +522,7 @@
 
                         <Border Background="#F9FAFB" BorderBrush="#E5E7EB" BorderThickness="1" CornerRadius="8" Padding="14">
                             <StackPanel>
-                                <TextBlock x:Name="TxtAliyunMethod2Title" TextWrapping="Wrap" Text="方式二：控制台网页 Cookie 授权 (备用)" FontWeight="Bold" FontSize="12" Margin="0,0,0,8"/>
+                                <TextBlock x:Name="TxtAliyunMethod2Title" TextWrapping="Wrap" Text="方式三：控制台 Cookie（兜底）" FontWeight="Bold" FontSize="12" Margin="0,0,0,8"/>
                                 <TextBlock x:Name="TxtAliyunCookieLabel" TextWrapping="Wrap" Text="控制台 Cookie:" FontSize="11" Margin="0,0,0,4"/>
                                 <TextBox x:Name="TxtAliyunCookie" Margin="0,0,0,10" Padding="6"/>
                                 <Button x:Name="BtnTestAliyunCookie" Content="保存 Cookie 并测试连接" Width="160" Height="28" HorizontalAlignment="Left" Background="#F3F4F6" BorderBrush="#D1D5DB" Click="BtnTestAliyunCookie_Click"/>

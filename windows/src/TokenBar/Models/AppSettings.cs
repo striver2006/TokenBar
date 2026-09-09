@@ -81,9 +81,25 @@ namespace TokenBar.Models
         public string GLMEndpoint { get; set; } = "https://open.bigmodel.cn/api/v1";
 
         public bool AliyunEnabled { get; set; } = true;
+        // 历史字段：从未参与额度查询链路（百炼兼容 OpenAI 端点只能对话），
+        // 仅为旧配置反序列化兼容保留，UI 已移除。
         public string AliyunApiKey { get; set; } = string.Empty;
+        // 历史字段，同上。
         public string AliyunEndpoint { get; set; } = "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1";
         public string AliyunCookie { get; set; } = string.Empty;
+
+        // 阿里云百炼 AK/SK 通道（首选，不受控制台 SSO 多设备互踢限制）。
+        // AccessKey Secret 与控制台 token 不落在这里 —— 见 SecretStore（Windows 凭据管理器）。
+        // 字段名与 mac 端 AppSettings 同名（大小写各随本端风格）。
+        public string AliyunAccessKeyId { get; set; } = string.Empty;
+        public string AliyunConsoleRegion { get; set; } = "cn-beijing";
+        public string AliyunConsoleSite { get; set; } = "domestic";
+        // 企业代操作 UID；0 表示未设置。阿里云 UID 可能是 16 位，必须用 64 位整数。
+        public long AliyunConsoleSwitchAgent { get; set; } = 0;
+        // 是否复用本机 %USERPROFILE%\.bailian\config.json 里已有的控制台凭证（只读，不写回）。
+        public bool AliyunReuseCliConfig { get; set; } = true;
+        // 阿里云账户现金余额提醒阈值，默认值对齐 DeepSeek / Kimi。
+        public decimal AliyunBalanceAlertThreshold { get; set; } = 10;
 
         public List<CustomProviderConfig> CustomProviders { get; set; } = new();
 

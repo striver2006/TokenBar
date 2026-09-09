@@ -137,11 +137,18 @@ Windows 客户端采用轻量现代的 **.NET 8 WPF** 架构，利用 Windows �
 +-------------------+-------------------------------------------------------------+
 | DeepSeek          | 查询 /user/balance 接口获取实时账户余额与赠送金额           |
 +-------------------+-------------------------------------------------------------+
-| 阿里云百炼         | 1. 优先调用官方 CLI (`bl usage token-plan --output json`)   |
-|                   |    获取 5 小时滚动窗口与 7 天周期额度剩余百分比及重置时间；  |
-|                   | 2. 支持配置 OpenAPI AK/SK 实现双端（macOS/Windows）自动无感   |
-|                   |    续期，彻底规避浏览器 Web SSO 单点登录互踢；               |
-|                   | 3. 备用通道支持通过 Console Cookie 直调网关查询接口。        |
+| 阿里云百炼         | 四级通道，顺序即优先级：                                     |
+|                   | 1. AK/SK 原生（首选，双端并发）：以 ACS3-HMAC-SHA256 签名调用 |
+|                   |    modelstudio.<region>.aliyuncs.com/modelstudio/cli/       |
+|                   |    generateAccessToken (GenerateCLIAccessToken, 2026-02-10)  |
+|                   |    换取控制台令牌，再以 Bearer 直调 /cli/api.json 网关查询    |
+|                   |    tokenplan/personal/api/v2/usage；网关返回 NotLogined 时    |
+|                   |    自动重新签发令牌并单次重试，天然规避 Web SSO 单点互踢；    |
+|                   | 2. 只读复用本机 ~/.bailian/config.json 中已有的控制台令牌；   |
+|                   | 3. 备用：官方 CLI (`bl usage token-plan --output json`) 子进程；|
+|                   | 4. 兜底：控制台 Cookie 直调 /data/api.json 网关。             |
+|                   | 响应解析统一走多层 unwrap，兼容以上三种嵌套形状。            |
+|                   | 另经 BSS OpenAPI QueryAccountBalance 查询阿里云账户现金余额。|
 +-------------------+-------------------------------------------------------------+
 ```
 
@@ -151,6 +158,11 @@ Windows 客户端采用轻量现代的 **.NET 8 WPF** 架构，利用 Windows �
 
 1. **本地存储隔离**：
    - 所有 API Key、OAuth Token 与用户设置均直接保存在用户本地电脑磁盘中，不上传至任何中心化云服务。
+   - 阿里云 AccessKey Secret 与控制台令牌属账号级长期凭证，**不落明文配置**：macOS 存入系统钥匙串
+     （Security.framework，service `TokenBar`），Windows 存入凭据管理器（`CredWriteW`，
+     TargetName `TokenBar/AliyunAccessKeySecret`）。安全存储不可用时**不降级为明文**，而是如实报错提示用户。
+   - 本机 `~/.bailian/config.json`（百炼 CLI 的配置）只读复用，**绝不写回** —— CLI 用 tmp+rename
+     原子替换整个文件，并发写会覆盖掉它的其他字段。
 2. **纯客户端通讯**：
    - 应用直接向模型提供商官方接入端点发起 HTTPS 请求，无任何二次代理服务器。
 3. **开源透明**：

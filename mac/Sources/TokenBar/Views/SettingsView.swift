@@ -61,6 +61,15 @@ public struct SettingsView: View {
     @State private var aliyunEndpointInput: String = "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
     @State private var isAliyunKeyVisible: Bool = false
     @State private var aliyunCookieInput: String = ""
+    // 方式一：OpenAPI AccessKey
+    @State private var aliyunAKIdInput: String = ""
+    @State private var aliyunAKSecretInput: String = ""
+    @State private var isAliyunAKSecretVisible: Bool = false
+    @State private var aliyunRegionInput: String = "cn-beijing"
+    @State private var aliyunSiteInput: String = "domestic"
+    @State private var aliyunSwitchAgentInput: String = ""
+    @State private var aliyunReuseCLIInput: Bool = true
+    @State private var aliyunBalanceThresholdInput: String = "10"
 
     // Custom Providers State
     @State private var isAddingProvider: Bool = false
@@ -114,6 +123,18 @@ public struct SettingsView: View {
         _aliyunKeyInput = State(initialValue: refreshManager.settings.aliyunApiKey)
         _aliyunEndpointInput = State(initialValue: refreshManager.settings.aliyunEndpoint)
         _aliyunCookieInput = State(initialValue: refreshManager.settings.aliyunCookie)
+        _aliyunAKIdInput = State(initialValue: refreshManager.settings.aliyunAccessKeyId)
+        // Secret 只从钥匙串读，读不到就留空（不会退回明文）
+        _aliyunAKSecretInput = State(
+            initialValue: KeychainSecretStore.shared.get(.aliyunAccessKeySecret) ?? "")
+        _aliyunRegionInput = State(initialValue: refreshManager.settings.aliyunConsoleRegion)
+        _aliyunSiteInput = State(initialValue: refreshManager.settings.aliyunConsoleSite)
+        _aliyunSwitchAgentInput = State(
+            initialValue: refreshManager.settings.aliyunConsoleSwitchAgent > 0
+                ? String(refreshManager.settings.aliyunConsoleSwitchAgent) : "")
+        _aliyunReuseCLIInput = State(initialValue: refreshManager.settings.aliyunReuseCLIConfig)
+        _aliyunBalanceThresholdInput = State(
+            initialValue: String(format: "%g", refreshManager.settings.aliyunBalanceAlertThreshold))
     }
 
     public var body: some View {
@@ -253,6 +274,15 @@ public struct SettingsView: View {
         aliyunKeyInput = refreshManager.settings.aliyunApiKey
         aliyunEndpointInput = refreshManager.settings.aliyunEndpoint
         aliyunCookieInput = refreshManager.settings.aliyunCookie
+        aliyunAKIdInput = refreshManager.settings.aliyunAccessKeyId
+        aliyunAKSecretInput = KeychainSecretStore.shared.get(.aliyunAccessKeySecret) ?? ""
+        aliyunRegionInput = refreshManager.settings.aliyunConsoleRegion
+        aliyunSiteInput = refreshManager.settings.aliyunConsoleSite
+        aliyunSwitchAgentInput = refreshManager.settings.aliyunConsoleSwitchAgent > 0
+            ? String(refreshManager.settings.aliyunConsoleSwitchAgent) : ""
+        aliyunReuseCLIInput = refreshManager.settings.aliyunReuseCLIConfig
+        aliyunBalanceThresholdInput = String(
+            format: "%g", refreshManager.settings.aliyunBalanceAlertThreshold)
     }
 
     /// 阈值显示：整数值省略小数位
@@ -1422,188 +1452,332 @@ public struct SettingsView: View {
     }
 
     // MARK: - 8. Aliyun Bailian Tab
+    //
+    // 三张方式卡片，顺序即通道优先级：
+    //   方式一 AccessKey（推荐，多机并发）→ 方式二 CLI（备用）→ 方式三 Cookie（兜底）
     private var aliyunSettingsView: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Image(systemName: "cloud.fill")
-                    .font(.system(size: 24))
-                    .foregroundColor(ProviderType.aliyunBailian.themeColor)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(I18n(.aliyunTitle))
-                        .font(.system(size: 15, weight: .bold))
-                    Text(I18n(.aliyunSubtitle))
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-                }
-                Spacer()
-                Toggle("", isOn: $refreshManager.settings.aliyunEnabled)
-                    .toggleStyle(.switch)
-                    .onChange(of: refreshManager.settings.aliyunEnabled) { _ in
-                        refreshManager.saveSettings()
-                    }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                aliyunHeader
+                Divider()
+                aliyunStatusCard
+                aliyunAccessKeyCard
+                aliyunCLICard
+                aliyunCookieCard
+                Spacer(minLength: 8)
             }
+            .padding(.trailing, 4)
+        }
+    }
 
-            Divider()
-
-            // Status Card
-            HStack {
-                let isAuth = refreshManager.quotas[.aliyunBailian]?.isAuthorized == true
-                Image(systemName: isAuth ? "checkmark.circle.fill" : "xmark.circle.fill")
-                    .foregroundColor(isAuth ? .green : .secondary)
-                Text(isAuth ? I18n(.statusConnected) : I18n(.statusNotConnected))
-                    .font(.system(size: 12, weight: .semibold))
-
-                if let acc = refreshManager.quotas[.aliyunBailian]?.accountInfo {
-                    Text("(\(acc))")
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-                }
-
-                Spacer()
-            }
-            .padding(10)
-            .background(Color.primary.opacity(0.04))
-            .cornerRadius(8)
-
-            // Mechanism Note Card
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 6) {
-                    Image(systemName: "info.circle.fill")
-                        .foregroundColor(.accentColor)
-                    Text(I18n(.aliyunQuotaNoticeTitle))
-                        .font(.system(size: 12, weight: .semibold))
-                }
-                Text(I18n(.aliyunQuotaNoticeDesc))
+    private var aliyunHeader: some View {
+        HStack {
+            Image(systemName: "cloud.fill")
+                .font(.system(size: 24))
+                .foregroundColor(ProviderType.aliyunBailian.themeColor)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(I18n(.aliyunTitle))
+                    .font(.system(size: 15, weight: .bold))
+                Text(I18n(.aliyunSubtitle))
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
             }
-            .padding(10)
-            .background(Color.accentColor.opacity(0.06))
-            .cornerRadius(8)
+            Spacer()
+            Toggle("", isOn: $refreshManager.settings.aliyunEnabled)
+                .toggleStyle(.switch)
+                .onChange(of: refreshManager.settings.aliyunEnabled) { _ in
+                    refreshManager.saveSettings()
+                }
+        }
+    }
 
-            // Auth Actions
-            VStack(alignment: .leading, spacing: 8) {
-                Text(I18n(.aliyunRecommendedAuthTitle))
-                    .font(.system(size: 12, weight: .medium))
+    private var aliyunStatusCard: some View {
+        HStack {
+            let isAuth = refreshManager.quotas[.aliyunBailian]?.isAuthorized == true
+            Image(systemName: isAuth ? "checkmark.circle.fill" : "xmark.circle.fill")
+                .foregroundColor(isAuth ? .green : .secondary)
+            Text(isAuth ? I18n(.statusConnected) : I18n(.statusNotConnected))
+                .font(.system(size: 12, weight: .semibold))
 
-                HStack(spacing: 12) {
-                    Button {
-                        // 终端拉起结果由服务层回调（主线程），失败时给出可手动执行的提示
-                        AliyunBailianService.openTerminalToLoginCLI { success, message in
-                            statusAlertMessage = success
-                                ? I18n(.alertAliyunCLIOpened)
-                                : (message ?? I18n(.alertUnknownError))
-                            showStatusAlert = true
-                        }
-                    } label: {
-                        HStack {
-                            Image(systemName: "terminal")
-                            Text(I18n(.btnAliyunTerminalCLI))
-                        }
-                    }
-                    .buttonStyle(.borderedProminent)
+            // accountInfo 里带着实际生效的通道名，便于排障
+            if let acc = refreshManager.quotas[.aliyunBailian]?.accountInfo {
+                Text("(\(acc))")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+            }
+            Spacer()
+        }
+        .padding(10)
+        .background(Color.primary.opacity(0.04))
+        .cornerRadius(8)
+    }
 
-                    Button {
-                        WebLoginWindowController.show(provider: .aliyun) { cookie in
-                            if let cookie = cookie, !cookie.isEmpty {
-                                refreshManager.settings.aliyunCookie = cookie
-                                refreshManager.saveSettings()
-                                Task {
-                                    await refreshManager.refreshAliyun()
-                                    statusAlertMessage = I18n(.alertAliyunWebSuccess)
-                                    showStatusAlert = true
-                                }
-                            }
-                        }
-                    } label: {
-                        HStack {
-                            Image(systemName: "globe")
-                            Text(I18n(.btnAliyunWebLogin))
-                        }
-                    }
-                    .buttonStyle(.bordered)
+    // MARK: 方式一：OpenAPI AccessKey
+
+    private var aliyunAccessKeyCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Image(systemName: "key.horizontal.fill")
+                    .foregroundColor(.accentColor)
+                Text(I18n(.aliyunMethodAKTitle))
+                    .font(.system(size: 12, weight: .semibold))
+            }
+            Text(I18n(.aliyunMethodAKDesc))
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Button {
+                if let url = URL(string: "https://ram.console.aliyun.com/manage/ak") {
+                    NSWorkspace.shared.open(url)
+                }
+            } label: {
+                HStack {
+                    Image(systemName: "arrow.up.forward.square")
+                    Text(I18n(.btnAliyunOpenRAMConsole))
                 }
             }
+            .buttonStyle(.bordered)
 
-            // Aliyun API Key Field (Optional)
+            DisclosureGroup(I18n(.aliyunRAMHowToTitle)) {
+                Text(I18n(.aliyunRAMHowToSteps))
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 4)
+            }
+            .font(.system(size: 11))
+
             VStack(alignment: .leading, spacing: 6) {
-                Text(I18n(.apiKeyLabel))
+                Text(I18n(.labelAliyunAccessKeyId))
                     .font(.system(size: 12, weight: .medium))
+                TextField(I18n(.placeholderAliyunAccessKeyId), text: $aliyunAKIdInput)
+                    .textFieldStyle(.roundedBorder)
+            }
 
+            VStack(alignment: .leading, spacing: 6) {
+                Text(I18n(.labelAliyunAccessKeySecret))
+                    .font(.system(size: 12, weight: .medium))
                 HStack {
-                    if isAliyunKeyVisible {
-                        TextField(I18n(.placeholderApiKeyAliyun), text: $aliyunKeyInput)
+                    if isAliyunAKSecretVisible {
+                        TextField(I18n(.placeholderAliyunAccessKeySecret), text: $aliyunAKSecretInput)
                             .textFieldStyle(.roundedBorder)
                     } else {
-                        SecureField(I18n(.placeholderApiKeyAliyun), text: $aliyunKeyInput)
+                        SecureField(I18n(.placeholderAliyunAccessKeySecret), text: $aliyunAKSecretInput)
                             .textFieldStyle(.roundedBorder)
                     }
-
                     Button {
-                        isAliyunKeyVisible.toggle()
+                        isAliyunAKSecretVisible.toggle()
                     } label: {
-                        Image(systemName: isAliyunKeyVisible ? "eye.slash" : "eye")
+                        Image(systemName: isAliyunAKSecretVisible ? "eye.slash" : "eye")
                     }
                     .buttonStyle(.borderless)
                 }
-
-                Text(I18n(.hintAliyunKey))
-                    .font(.system(size: 10))
-                    .foregroundColor(.secondary)
             }
 
-            // Platform Endpoint
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(I18n(.labelAliyunConsoleRegion))
+                        .font(.system(size: 12, weight: .medium))
+                    Picker("", selection: $aliyunRegionInput) {
+                        Text("cn-beijing（中国大陆）").tag("cn-beijing")
+                        Text("ap-southeast-1（新加坡）").tag("ap-southeast-1")
+                    }
+                    .labelsHidden()
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(I18n(.labelAliyunConsoleSite))
+                        .font(.system(size: 12, weight: .medium))
+                    Picker("", selection: $aliyunSiteInput) {
+                        Text("domestic（aliyun.com）").tag("domestic")
+                        Text("international（alibabacloud.com）").tag("international")
+                    }
+                    .labelsHidden()
+                }
+            }
+
             VStack(alignment: .leading, spacing: 6) {
-                Text(I18n(.apiEndpointLabel))
+                Text(I18n(.labelAliyunBalanceThreshold))
                     .font(.system(size: 12, weight: .medium))
-
-                TextField("https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1", text: $aliyunEndpointInput)
+                TextField("10", text: $aliyunBalanceThresholdInput)
                     .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 11))
+                    .frame(width: 120)
             }
 
-            // Manual Cookie (Advanced)
+            DisclosureGroup(I18n(.aliyunAdvancedTitle)) {
+                VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(I18n(.labelAliyunSwitchAgent))
+                            .font(.system(size: 11, weight: .medium))
+                        TextField("", text: $aliyunSwitchAgentInput)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 200)
+                        Text(I18n(.hintAliyunSwitchAgent))
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Toggle(I18n(.toggleAliyunReuseCLIConfig), isOn: $aliyunReuseCLIInput)
+                        .font(.system(size: 11))
+                    Text(I18n(.hintAliyunReuseCLIConfig))
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.top, 6)
+            }
+            .font(.system(size: 11))
+
+            Button {
+                saveAliyunAccessKeyAndTest()
+            } label: {
+                HStack {
+                    Image(systemName: "checkmark.shield")
+                    Text(I18n(.btnAliyunSaveAndTestAK))
+                }
+            }
+            .buttonStyle(.borderedProminent)
+        }
+        .padding(12)
+        .background(Color.accentColor.opacity(0.06))
+        .cornerRadius(8)
+    }
+
+    /// 保存 AccessKey 并立即验证。
+    ///
+    /// Secret 只写钥匙串 —— 写不进去就如实报错并中止，绝不降级成明文存进 AppSettings。
+    private func saveAliyunAccessKeyAndTest() {
+        let akId = aliyunAKIdInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        let akSecret = aliyunAKSecretInput.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if !akSecret.isEmpty {
+            guard KeychainSecretStore.shared.set(akSecret, for: .aliyunAccessKeySecret) else {
+                statusAlertMessage = I18n(.alertAliyunSecretStoreFailed)
+                showStatusAlert = true
+                return
+            }
+        } else {
+            KeychainSecretStore.shared.delete(.aliyunAccessKeySecret)
+        }
+
+        refreshManager.settings.aliyunAccessKeyId = akId
+        refreshManager.settings.aliyunConsoleRegion = aliyunRegionInput
+        refreshManager.settings.aliyunConsoleSite = aliyunSiteInput
+        refreshManager.settings.aliyunConsoleSwitchAgent =
+            Int(aliyunSwitchAgentInput.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+        refreshManager.settings.aliyunReuseCLIConfig = aliyunReuseCLIInput
+        refreshManager.settings.aliyunBalanceAlertThreshold =
+            Double(aliyunBalanceThresholdInput.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 10
+        refreshManager.saveSettings()
+
+        Task {
+            await refreshManager.refreshAliyun()
+            let quota = refreshManager.quotas[.aliyunBailian]
+            if quota?.isAuthorized == true {
+                let channel = quota?.accountInfo ?? ""
+                statusAlertMessage = "\(I18n(.alertAliyunSuccess))\(channel.isEmpty ? "" : "\n\(channel)")"
+            } else {
+                statusAlertMessage = "\(I18n(.alertAliyunFailed))\(quota?.errorMessage ?? "")"
+            }
+            showStatusAlert = true
+        }
+    }
+
+    // MARK: 方式二：百炼 CLI（备用）
+
+    private var aliyunCLICard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(I18n(.aliyunMethodCLITitle))
+                .font(.system(size: 12, weight: .semibold))
+            Text(I18n(.aliyunMethodCLIDesc))
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Button {
+                // 终端拉起结果由服务层回调（主线程），失败时给出可手动执行的提示
+                AliyunBailianService.openTerminalToLoginCLI { success, message in
+                    statusAlertMessage = success
+                        ? I18n(.alertAliyunCLIOpened)
+                        : (message ?? I18n(.alertUnknownError))
+                    showStatusAlert = true
+                }
+            } label: {
+                HStack {
+                    Image(systemName: "terminal")
+                    Text(I18n(.btnAliyunTerminalCLI))
+                }
+            }
+            .buttonStyle(.bordered)
+        }
+        .padding(12)
+        .background(Color.primary.opacity(0.04))
+        .cornerRadius(8)
+    }
+
+    // MARK: 方式三：控制台 Cookie（兜底）
+
+    private var aliyunCookieCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(I18n(.aliyunMethodCookieTitle))
+                .font(.system(size: 12, weight: .semibold))
+            Text(I18n(.aliyunMethodCookieDesc))
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Button {
+                WebLoginWindowController.show(provider: .aliyun) { cookie in
+                    if let cookie = cookie, !cookie.isEmpty {
+                        refreshManager.settings.aliyunCookie = cookie
+                        aliyunCookieInput = cookie
+                        refreshManager.saveSettings()
+                        Task {
+                            await refreshManager.refreshAliyun()
+                            statusAlertMessage = I18n(.alertAliyunWebSuccess)
+                            showStatusAlert = true
+                        }
+                    }
+                }
+            } label: {
+                HStack {
+                    Image(systemName: "globe")
+                    Text(I18n(.btnAliyunWebLogin))
+                }
+            }
+            .buttonStyle(.bordered)
+
             VStack(alignment: .leading, spacing: 6) {
                 Text(I18n(.labelAliyunCookie))
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
-
                 SecureField(I18n(.placeholderAliyunCookie), text: $aliyunCookieInput)
                     .textFieldStyle(.roundedBorder)
                     .font(.system(size: 11))
             }
 
-            // Save & Check Quota Button
-            HStack {
-                Button {
-                    refreshManager.settings.aliyunApiKey = aliyunKeyInput
-                    refreshManager.settings.aliyunEndpoint = aliyunEndpointInput
-                    refreshManager.settings.aliyunCookie = aliyunCookieInput
-                    refreshManager.saveSettings()
-
-                    Task {
-                        await refreshManager.refreshAliyun()
-                        if refreshManager.quotas[.aliyunBailian]?.isAuthorized == true {
-                            statusAlertMessage = I18n(.alertAliyunSuccess)
-                        } else {
-                            statusAlertMessage = "\(I18n(.alertAliyunFailed))\(refreshManager.quotas[.aliyunBailian]?.errorMessage ?? "bl auth login --console")"
-                        }
-                        showStatusAlert = true
-                    }
-                } label: {
-                    HStack {
-                        Image(systemName: "arrow.clockwise.circle")
-                        Text(I18n(.btnAliyunSaveAndRefresh))
-                    }
+            Button {
+                refreshManager.settings.aliyunCookie = aliyunCookieInput
+                refreshManager.saveSettings()
+                Task {
+                    await refreshManager.refreshAliyun()
+                    let quota = refreshManager.quotas[.aliyunBailian]
+                    statusAlertMessage = quota?.isAuthorized == true
+                        ? I18n(.alertAliyunSuccess)
+                        : "\(I18n(.alertAliyunFailed))\(quota?.errorMessage ?? "")"
+                    showStatusAlert = true
                 }
-                .buttonStyle(.borderedProminent)
-
-                Spacer()
+            } label: {
+                HStack {
+                    Image(systemName: "arrow.clockwise.circle")
+                    Text(I18n(.btnAliyunSaveAndRefresh))
+                }
             }
-
-            Spacer()
+            .buttonStyle(.bordered)
         }
+        .padding(12)
+        .background(Color.primary.opacity(0.04))
+        .cornerRadius(8)
     }
 
     // MARK: - 9. Domestic / Custom Providers Tab

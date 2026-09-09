@@ -330,16 +330,43 @@ public final class RefreshManager: ObservableObject {
         quotas[.aliyunBailian] = quota
 
         do {
-            let res = try await AliyunBailianService.shared.fetchQuota(
-                apiKey: settings.aliyunApiKey,
-                cookie: settings.aliyunCookie,
-                endpoint: settings.aliyunEndpoint
-            )
+            let credentials = AliyunBailianService.resolveCredentials(settings: settings)
+            let res = try await AliyunBailianService.shared.fetchQuota(credentials: credentials)
+
+            // 新签发的控制台令牌落进安全存储，下次刷新直接复用，避免重复签发
+            if let refreshed = res.refreshedToken, !refreshed.isEmpty {
+                KeychainSecretStore.shared.set(refreshed, for: .aliyunConsoleAccessToken)
+            }
+
             quota.fiveHourWindow = res.fiveHour
             quota.weeklyWindow = res.weekly
             quota.accountInfo = res.account
             quota.isAuthorized = true
+            // 网关成功但没返回窗口数据时，用 note 说明「可能不限量」，
+            // 而不是让卡片停在「同步中」——但仍算已授权，不是失败态
+            quota.errorMessage = res.note
             quota.lastUpdated = Date()
+
+            // 账户现金余额与额度相互独立：需要 AK/SK 且额外的 bss:DescribeAcccount 权限，
+            // 查不到时静默跳过，不能连累已经拿到的额度数据
+            if credentials.hasAccessKey,
+               let balance = try? await AliyunBailianService.shared.fetchAccountBalance(credentials) {
+                let window = TokenWindow.balance(
+                    title: I18n(.menuBarMetricBalance),
+                    amount: balance.amount,
+                    currency: balance.currency,
+                    warningThreshold: settings.aliyunBalanceAlertThreshold,
+                    criticalThreshold: settings.aliyunBalanceAlertThreshold / 2
+                )
+                quota.balanceWindow = processBalance(
+                    providerKey: "aliyun",
+                    displayName: ProviderType.aliyunBailian.displayName,
+                    window: window,
+                    threshold: settings.aliyunBalanceAlertThreshold
+                )
+            } else {
+                quota.balanceWindow = nil
+            }
         } catch {
             quota.isAuthorized = false
             quota.errorMessage = error.localizedDescription

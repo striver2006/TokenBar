@@ -114,31 +114,51 @@ TokenBar 支持实时监控阿里云百炼的 **5 小时滚动滑动窗口** 与
 
 #### 1. 额度获取机制说明
 - 阿里云百炼的官方 API Key（包括兼容 OpenAI 的端点）仅用于模型对话与推理，**服务端未开放通过 API Key 查询 Token Plan 额度的接口**。
-- 配额查询必须通过百炼控制台网关接口（即官方 CLI 的 `bl usage token-plan` 命令）或控制台网页会话获取。
+- 配额查询必须走百炼控制台网关。TokenBar **已内置**「AccessKey → 控制台令牌 → 网关」的完整实现，
+  **不再需要安装 `bl`、也不需要浏览器 Cookie**；`bl` 与 Cookie 仅作为备用与兜底通道保留。
+- TokenBar 依次尝试四条通道，任一成功即停止：
+  1. **AccessKey 原生**（推荐，多机并发，令牌失效自动续期）
+  2. 只读复用本机 `~/.bailian/config.json` 里已有的控制台令牌
+  3. 官方 CLI `bl usage token-plan` 子进程
+  4. 控制台 Cookie 直调网关
+  卡片上的账号标签会显示**当前实际生效的通道**，便于排障。
 
 #### 2. 授权方式与多设备（macOS / Windows）并发指南
 
-- **方式一：OpenAPI AK/SK 认证（最推荐，支持 Mac 与 Windows 同时在线）**：
-  - **原理**：阿里云 AccessKey (AK/SK) 为服务端调用凭证，**不受浏览器单点登录 (SSO) 会话互踢限制**。百炼 CLI 原生支持在控制台 Token 过期时利用 AK/SK 自动调用 `GenerateCLIAccessToken` 无感换取控制台凭证。
+- **方式一：OpenAPI AccessKey（最推荐，Mac 与 Windows 可同时在线）**：
+  - **原理**：阿里云 AccessKey (AK/SK) 是服务端调用凭证，**不受浏览器单点登录 (SSO) 的多设备互踢限制**。TokenBar 用它调用 `GenerateCLIAccessToken` 换取控制台令牌；令牌被其他设备顶掉时（网关返回 `NotLogined`）会自动重新签发并重试一次，全程无感、无需任何手工操作。
+  - **不需要安装 `bl`** —— 这条链路完全内置在 TokenBar 里。
   - **操作步骤**：
-    1. 前往 [阿里云 RAM 控制台 AccessKey 页面](https://ram.console.aliyun.com/manage/ak) 创建 AccessKey（建议创建专用的 RAM 子用户并授予百炼工作空间权限）。
-    2. 分别在 Mac 和 Windows 终端执行一次：
-       ```bash
-       bl auth login --open-api --access-key-id <你的AccessKey_ID> --access-key-secret <你的AccessKey_Secret>
-       ```
-    3. 在 TokenBar 设置中开启「阿里云百炼 (Token Plan)」，点击「保存并刷新检测额度」即可。
-    4. **两台设备可共用同一对 AK/SK（或各自使用独立的子账号 AK/SK），永久稳定并发监控，互不下线**。
+    1. 用主账号登录 [RAM 控制台](https://ram.console.aliyun.com/users)，创建用户，登录名例如 `tokenbar-monitor`。
+    2. 访问方式**只勾选「使用永久 AccessKey 访问」**，不要勾控制台登录。
+    3. 创建后**立即复制** AccessKey ID 与 Secret（Secret 只显示一次）。
+    4. 给该用户授权：系统策略里搜 `Bailian`，优先选**只读**策略；若还想显示账户现金余额，再加财务只读权限 `bss:DescribeAcccount`（官方文档就是这个拼写，多一个 c）。
+    5. 回到[百炼控制台](https://bailian.console.aliyun.com/)，再给该用户授予对应业务空间的**只读**权限 —— 阿里云的 RAM 权限与百炼业务空间权限是**两套独立体系，两边都要授**。
+    6. 打开 TokenBar 设置 →「阿里云百炼」→「方式一：OpenAPI AccessKey」，填入 ID / Secret，选好控制台区域与站点，点「保存并测试 AccessKey 通道」。
+  - **密钥存放**：AccessKey Secret 与控制台令牌保存在 **macOS 钥匙串 / Windows 凭据管理器**，不写进配置文件。若安全存储不可用，TokenBar **不会**降级存成明文，而是提示你处理后重试。
+  - **国际站用户**：控制台区域选 `ap-southeast-1`，站点选 `international`。
+  - **两台设备可共用同一对 AK/SK，或各自使用独立子账号的 AK/SK，永久稳定并发监控，互不下线**。
 
-- **方式二：控制台浏览器登录（`bl auth login --console`）**：
-  - **适用**：仅单台设备使用的场景。
+- **方式二：百炼 CLI 浏览器登录（`bl auth login --console`）—— 备用**：
+  - **适用**：仅单台设备使用的场景；已装 `bl` 且用浏览器登录过时可用。
   - **一键操作**：在 TokenBar 百炼设置页点击「在终端登录百炼 CLI (推荐)」，应用会自动打开「终端」并执行 `bl auth login --console`；若本机未安装 `bl`，终端会直接给出安装命令提示。登录完成后回到设置页点击「保存并刷新检测额度」即可。
   - **注意**：同一主账号若在 Mac 和 Windows 上分别通过浏览器登录，后登录的设备会将前一设备的 Web 会话注销（触发单点登录互踢）。
-  - **多端共用技巧**：在其中一台设备完成浏览器登录后，直接将生成的配置文件同步至另一台设备，两端共用同一个有效 Token：
-    - Windows 路径：`C:\Users\<用户名>\.bailian\config.json`
-    - macOS 路径：`~/.bailian/config.json`
+  - TokenBar 会**自动只读复用**本机 `~/.bailian/config.json`（Windows：`C:\Users\<用户名>\.bailian\config.json`）里的令牌，无需手工拷贝；这个行为可在「高级选项」里关闭。TokenBar 只读该文件，**绝不写回**。
+  - 跨机器手工同步 config.json 的老办法仍然可用，但既然方式一已经内置，不再推荐。
 
-- **方式三：控制台网页 Cookie 授权**：
+- **方式三：控制台网页 Cookie 授权 —— 兜底**：
   - 在 TokenBar 偏好设置的百炼选项卡中，点击「网站登录授权」，在弹出的 WebView 中登录阿里云账号，应用将自动捕获登录 Cookie 并直调网关查询。
+
+#### 3. 常见问题排查
+
+| 提示 | 原因与处理 |
+| --- | --- |
+| 签名校验失败 / `SignatureDoesNotMatch` | AccessKey Secret 填错，**或本机系统时间不准** —— 签名带时间戳，容差约 15 分钟。先校时再重试。 |
+| `InvalidAccessKeyId` | AccessKey ID 不存在或已被禁用，去 RAM 控制台确认。 |
+| `Forbidden` / `NoPermission` / 含 `RAM` | 子用户没授权。注意 **RAM 权限与百炼业务空间权限是两套体系，两边都要授**；账户余额还需额外的 `bss:DescribeAcccount`。 |
+| 反复出现「控制台会话已失效」 | 已自动重签过令牌仍失败，检查控制台**区域 / 站点 / 代操作 UID** 是否与你的账号匹配（国际站要选 `ap-southeast-1` + `international`）。 |
+| 「本周期未返回限额数据」 | **不是错误**。该窗口可能不限量，可在百炼 Token Plan 控制台核对。 |
+| 无法写入钥匙串 / 凭据管理器 | TokenBar 不会把 Secret 降级成明文。macOS 在「钥匙串访问」中允许 TokenBar 后重试；Windows 检查凭据管理器是否可用。 |
 
 ### 3.6 国内第三方厂商与自定义端点
 在「国内厂商 / 自定义」标签页，点击「＋ 添加新厂商」：

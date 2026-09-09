@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Globalization;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
@@ -264,11 +266,29 @@ namespace TokenBar.Views
             TxtAliyunTitle.Text = i18n.AliyunTitle;
             TxtAliyunSubtitle.Text = i18n.AliyunSubtitle;
             ChkAliyunEnabled.Content = i18n.EnableMonitoring;
-            TxtAliyunMethod1Title.Text = i18n.AliyunMethodCLI;
-            TxtAliyunMethod1Desc.Text = i18n.AliyunNoticeDesc;
+            // 方式一：AccessKey（推荐）
+            TxtAliyunMethodAKTitle.Text = i18n.AliyunMethodAKTitle;
+            TxtAliyunMethodAKDesc.Text = i18n.AliyunMethodAKDesc;
+            BtnOpenRamConsole.Content = i18n.BtnAliyunOpenRAMConsole;
+            ExpAliyunRamHowTo.Header = i18n.AliyunRAMHowToTitle;
+            TxtAliyunRamHowToSteps.Text = i18n.AliyunRAMHowToSteps;
+            TxtAliyunAkIdLabel.Text = i18n.LabelAliyunAccessKeyId;
+            TxtAliyunAkSecretLabel.Text = i18n.LabelAliyunAccessKeySecret;
+            TxtAliyunRegionLabel.Text = i18n.LabelAliyunConsoleRegion;
+            TxtAliyunSiteLabel.Text = i18n.LabelAliyunConsoleSite;
+            TxtAliyunBalanceThresholdLabel.Text = i18n.LabelAliyunBalanceThreshold;
+            ExpAliyunAdvanced.Header = i18n.AliyunAdvancedTitle;
+            TxtAliyunSwitchAgentLabel.Text = i18n.LabelAliyunSwitchAgent;
+            TxtAliyunSwitchAgentHint.Text = i18n.HintAliyunSwitchAgent;
+            ChkAliyunReuseCliConfig.Content = i18n.ToggleAliyunReuseCliConfig;
+            TxtAliyunReuseCliHint.Text = i18n.HintAliyunReuseCliConfig;
+            BtnTestAliyunAK.Content = i18n.BtnAliyunSaveAndTestAK;
+            // 方式二：CLI（备用）／方式三：Cookie（兜底）
+            TxtAliyunMethod1Title.Text = i18n.AliyunMethodCLITitle;
+            TxtAliyunMethod1Desc.Text = i18n.AliyunMethodCLIDesc;
             BtnOpenAliyunCLI.Content = i18n.BtnAliyunTerminalCLI;
             BtnTestAliyunCLI.Content = i18n.BtnAliyunTestCLI;
-            TxtAliyunMethod2Title.Text = i18n.AliyunMethodCookie;
+            TxtAliyunMethod2Title.Text = i18n.AliyunMethodCookieTitle;
             TxtAliyunCookieLabel.Text = i18n.LabelAliyunCookie;
             BtnTestAliyunCookie.Content = i18n.BtnAliyunSaveCookie;
 
@@ -419,6 +439,17 @@ namespace TokenBar.Views
             // Aliyun
             ChkAliyunEnabled.IsChecked = s.AliyunEnabled;
             TxtAliyunCookie.Text = s.AliyunCookie;
+            TxtAliyunAkId.Text = s.AliyunAccessKeyId;
+            // Secret 只从凭据管理器读，读不到就留空（不会退回明文）
+            PwdAliyunAkSecret.Password =
+                CredentialSecretStore.Instance.Get(SecretKey.AliyunAccessKeySecret) ?? string.Empty;
+            SelectComboByTag(CmbAliyunRegion, s.AliyunConsoleRegion);
+            SelectComboByTag(CmbAliyunSite, s.AliyunConsoleSite);
+            TxtAliyunSwitchAgent.Text = s.AliyunConsoleSwitchAgent > 0
+                ? s.AliyunConsoleSwitchAgent.ToString(CultureInfo.InvariantCulture) : string.Empty;
+            ChkAliyunReuseCliConfig.IsChecked = s.AliyunReuseCliConfig;
+            TxtAliyunBalanceThreshold.Text =
+                s.AliyunBalanceAlertThreshold.ToString(CultureInfo.InvariantCulture);
 
             // General
             CmbLanguage.SelectedIndex = s.Language switch
@@ -489,6 +520,17 @@ namespace TokenBar.Views
 
             s.AliyunEnabled = ChkAliyunEnabled.IsChecked == true;
             s.AliyunCookie = TxtAliyunCookie.Text.Trim();
+            s.AliyunAccessKeyId = TxtAliyunAkId.Text.Trim();
+            s.AliyunConsoleRegion = SelectedTag(CmbAliyunRegion) ?? "cn-beijing";
+            s.AliyunConsoleSite = SelectedTag(CmbAliyunSite) ?? "domestic";
+            s.AliyunConsoleSwitchAgent =
+                long.TryParse(TxtAliyunSwitchAgent.Text.Trim(), NumberStyles.Integer,
+                    CultureInfo.InvariantCulture, out var switchAgent) ? switchAgent : 0;
+            s.AliyunReuseCliConfig = ChkAliyunReuseCliConfig.IsChecked == true;
+            s.AliyunBalanceAlertThreshold =
+                decimal.TryParse(TxtAliyunBalanceThreshold.Text.Trim(), NumberStyles.Float,
+                    CultureInfo.InvariantCulture, out var threshold) ? threshold : 10m;
+            // AccessKey Secret 不写进 settings.json —— 见 BtnTestAliyunAK_Click
 
             s.Language = CmbLanguage.SelectedIndex switch
             {
@@ -736,6 +778,77 @@ namespace TokenBar.Views
                 MessageBox.Show(i18n.IsChinese ? $"GLM 连接失败: {q.ErrorMessage}" : $"GLM connection failed: {q.ErrorMessage}", i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Warning);
         }
 
+        private static void SelectComboByTag(ComboBox combo, string? tag)
+        {
+            foreach (var item in combo.Items.OfType<ComboBoxItem>())
+            {
+                if ((item.Tag as string) == tag) { combo.SelectedItem = item; return; }
+            }
+            combo.SelectedIndex = 0;
+        }
+
+        private static string? SelectedTag(ComboBox combo)
+            => (combo.SelectedItem as ComboBoxItem)?.Tag as string;
+
+        private void BtnOpenRamConsole_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "https://ram.console.aliyun.com/manage/ak",
+                    UseShellExecute = true
+                });
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// 保存 AccessKey 并立即验证。
+        ///
+        /// Secret 只写凭据管理器 —— 写不进去就如实报错并中止，绝不降级成明文存进 settings.json。
+        /// </summary>
+        private async void BtnTestAliyunAK_Click(object sender, RoutedEventArgs e)
+        {
+            var i18n = LocalizationManager.Instance;
+            var secret = PwdAliyunAkSecret.Password.Trim();
+
+            if (!string.IsNullOrEmpty(secret))
+            {
+                if (!CredentialSecretStore.Instance.Set(SecretKey.AliyunAccessKeySecret, secret))
+                {
+                    MessageBox.Show(i18n.IsChinese
+                        ? "无法写入 Windows 凭据管理器，AccessKey Secret 未能保存。TokenBar 不会把它降级存成明文 —— 请检查凭据管理器是否可用后重试。"
+                        : "Could not write to Windows Credential Manager, so the AccessKey Secret was not saved. TokenBar will not fall back to plain text - check that Credential Manager is available and try again.",
+                        i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+            }
+            else
+            {
+                CredentialSecretStore.Instance.Delete(SecretKey.AliyunAccessKeySecret);
+            }
+
+            SyncToSettings();
+            await RefreshManager.Instance.RefreshAliyunAsync();
+
+            var q = RefreshManager.Instance.Quotas[ProviderType.AliyunBailian];
+            if (q.IsAuthorized)
+            {
+                var channel = string.IsNullOrEmpty(q.AccountInfo) ? string.Empty : "\n" + q.AccountInfo;
+                MessageBox.Show((i18n.IsChinese
+                        ? "百炼额度读取成功！AccessKey 已保存到 Windows 凭据管理器。"
+                        : "Bailian quota retrieved. The AccessKey is stored in Windows Credential Manager.") + channel,
+                    i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            else
+            {
+                MessageBox.Show(i18n.IsChinese
+                        ? $"百炼连接失败: {q.ErrorMessage}" : $"Bailian connection failed: {q.ErrorMessage}",
+                    i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        }
+
         private void BtnOpenAliyunCLI_Click(object sender, RoutedEventArgs e)
         {
             AliyunBailianService.OpenTerminalToLoginCLI();
@@ -746,7 +859,7 @@ namespace TokenBar.Views
             var i18n = LocalizationManager.Instance;
             try
             {
-                var res = await AliyunBailianService.Instance.FetchViaCLIAsync();
+                var res = await AliyunBailianService.Instance.FetchViaCliAsync();
                 MessageBox.Show(i18n.IsChinese ? "百炼 CLI 配额读取成功！已检测到 7天 与 5小时额度。" : "Bailian CLI quota retrieved successfully! 7-day and 5-hour quotas detected.", i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Information);
                 _ = RefreshManager.Instance.RefreshAliyunAsync();
             }

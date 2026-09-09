@@ -4,8 +4,24 @@ import AppKit
 public final class AliyunBailianService: @unchecked Sendable {
     public static let shared = AliyunBailianService()
 
+    /// 控制台网关上查询 Token Plan 用量的 API 名。
+    static let tokenPlanUsageAPI = "zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/usage"
+    /// 用 AK/SK 换控制台令牌的 OpenAPI。
+    static let generateTokenPath = "/modelstudio/cli/generateAccessToken"
+    static let generateTokenAction = "GenerateCLIAccessToken"
+    static let generateTokenVersion = "2026-02-10"
+    /// 查询阿里云账户现金余额的 BSS OpenAPI。
+    static let balanceHost = "business.aliyuncs.com"
+    static let balanceAction = "QueryAccountBalance"
+    static let balanceVersion = "2017-12-14"
+
     /// 待在终端执行的百炼 CLI 登录命令
     public static let cliLoginCommand = "bl auth login --console"
+
+    private let tokenCoordinator = TokenCoordinator()
+    private var isZh: Bool { LocalizationManager.shared.effectiveLanguage == "zh" }
+
+    // MARK: - 终端登录（保留，作为备用通道的入口）
 
     /// 在「终端」中运行 `bl auth login --console`。
     ///
@@ -92,79 +108,290 @@ public final class AliyunBailianService: @unchecked Sendable {
         }
     }
 
-    /// Fetch Aliyun Bailian Token Plan quota.
-    /// Priority:
-    /// 1. Official Bailian CLI (`bl usage token-plan ...`)
-    /// 2. Bailian Console Web API (via Session Cookie)
-    public func fetchQuota(
-        apiKey: String? = nil,
-        cookie: String? = nil,
-        endpoint: String = "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
-    ) async throws -> (fiveHour: TokenWindow?, weekly: TokenWindow?, account: String?) {
-        var cliError: Error? = nil
+    // MARK: - 通道编排
 
-        // 1. Try official Bailian CLI (`bl`)
-        do {
-            return try await fetchViaCLI()
-        } catch {
-            cliError = error
+    /// 依据手上的凭证决定要依次尝试哪些通道。纯函数，便于单测。
+    ///
+    /// 有 AK/SK 时不单独跑 `.consoleToken` —— `.accessKey` 内部本来就会先用缓存令牌，
+    /// 只有拿不到或遇到 NotLogined 才签发新的。
+    public static func plannedChannels(for credentials: AliyunCredentials) -> [AliyunChannel] {
+        var channels: [AliyunChannel] = []
+        if credentials.hasAccessKey {
+            channels.append(.accessKey)
+        } else if credentials.hasConsoleToken {
+            channels.append(.consoleToken)
         }
+        channels.append(.cli)
+        if credentials.hasCookie {
+            channels.append(.cookie)
+        }
+        return channels
+    }
 
-        // 2. Try Console Web Cookie if available
-        if let cookie = cookie?.trimmingCharacters(in: .whitespacesAndNewlines), !cookie.isEmpty {
+    /// 按优先级依次尝试各通道；全部失败时抛出一条聚合了每级失败原因的错误。
+    public func fetchQuota(credentials: AliyunCredentials) async throws -> AliyunQuotaResult {
+        let channels = Self.plannedChannels(for: credentials)
+        var failures: [(AliyunChannel, String)] = []
+
+        for channel in channels {
             do {
-                return try await fetchViaConsole(cookie: cookie)
+                switch channel {
+                case .accessKey:
+                    return try await fetchViaAccessKey(credentials)
+                case .consoleToken:
+                    return try await fetchViaConsoleToken(credentials)
+                case .cli:
+                    return try await fetchViaCLI()
+                case .cookie:
+                    return try await fetchViaCookie(credentials)
+                }
             } catch {
-                throw error
+                failures.append((channel, (error as? LocalizedError)?.errorDescription ?? error.localizedDescription))
             }
         }
 
-        // 3. If neither worked, provide clear, accurate guidance
-        if let err = cliError {
-            throw err
+        throw Self.aggregateError(failures: failures, credentials: credentials)
+    }
+
+    /// 把各通道的失败原因拼成一条对用户有指导意义的错误。
+    static func aggregateError(
+        failures: [(AliyunChannel, String)],
+        credentials: AliyunCredentials
+    ) -> Error {
+        let isZh = LocalizationManager.shared.effectiveLanguage == "zh"
+        guard !failures.isEmpty else { return AliyunChannelError.missingCredentials }
+
+        let header = isZh ? "百炼额度获取失败：" : "Could not read Bailian quota:"
+        let lines = failures.map { "· \($0.0.displayName)：\($0.1)" }
+        var message = ([header] + lines).joined(separator: "\n")
+
+        if !credentials.hasAccessKey {
+            message += "\n" + (isZh
+                ? "建议在设置中填写 AccessKey ID / Secret —— 这是唯一支持多台设备同时在线的方式。"
+                : "Add an AccessKey ID / Secret in Settings — it is the only option that keeps several machines online at once.")
+        }
+        return NSError(domain: "AliyunBailianService", code: 401,
+                       userInfo: [NSLocalizedDescriptionKey: message])
+    }
+
+    // MARK: - 通道 1：AK/SK 原生（含失效自愈）
+
+    /// 先用缓存令牌打网关；遇到 NotLogined 才用 AK/SK 换新令牌并**重试一次**。
+    ///
+    /// 三重防失控：直线代码不自我调用（最多 2 次网关 + 2 次签名）；
+    /// `TokenCoordinator` 串行化签发，避免定时刷新与设置页「测试」按钮并发各签一个；
+    /// 签发失败后 30 秒内复用上次错误，避免 AK 填错时反复打 OpenAPI。
+    func fetchViaAccessKey(_ credentials: AliyunCredentials) async throws -> AliyunQuotaResult {
+        var token = credentials.consoleAccessToken.trimmed
+        var refreshedToken: String? = nil
+        var freshlyIssued = false
+
+        if token.isEmpty {
+            token = try await tokenCoordinator.issue(using: credentials) { [weak self] in
+                guard let self else { throw AliyunChannelError.missingCredentials }
+                return try await self.generateConsoleAccessToken(credentials)
+            }
+            refreshedToken = token
+            freshlyIssued = true
         }
 
-        let isZh = LocalizationManager.shared.effectiveLanguage == "zh"
-        throw NSError(
-            domain: "AliyunBailianService",
-            code: 400,
-            userInfo: [NSLocalizedDescriptionKey: isZh ? "百炼兼容 OpenAI 接口仅用于模型对话，不支持配额查询。请在终端登录百炼 CLI (`bl auth login --console`) 或使用网页登录授权获取 7天 与 5小时额度。" : "Aliyun Bailian OpenAI-compatible endpoint only supports chat, not quota queries. Please run `bl auth login --console` in terminal or configure web cookies to monitor 7-day and 5-hour quotas."]
+        do {
+            var result = try await queryTokenPlan(token: token, credentials: credentials, channel: .accessKey)
+            result.refreshedToken = refreshedToken
+            return result
+        } catch AliyunChannelError.notLogined {
+            // 刚换的令牌仍被判未登录 → 不是过期问题，直接抛，避免死循环
+            if freshlyIssued { throw AliyunChannelError.notLoginedAfterRefresh }
+
+            let newToken = try await tokenCoordinator.issue(using: credentials, force: true) { [weak self] in
+                guard let self else { throw AliyunChannelError.missingCredentials }
+                return try await self.generateConsoleAccessToken(credentials)
+            }
+            var result = try await queryTokenPlan(token: newToken, credentials: credentials, channel: .accessKey)
+            result.refreshedToken = newToken
+            return result
+        }
+    }
+
+    /// 通道 2：只有现成令牌、没有 AK/SK —— 无法自愈，失败即降级。
+    func fetchViaConsoleToken(_ credentials: AliyunCredentials) async throws -> AliyunQuotaResult {
+        try await queryTokenPlan(
+            token: credentials.consoleAccessToken.trimmed,
+            credentials: credentials,
+            channel: .consoleToken
         )
     }
 
-    /// Fetch Token Plan quota via official Bailian CLI (`bl`)
-    public func fetchViaCLI() async throws -> (fiveHour: TokenWindow?, weekly: TokenWindow?, account: String?) {
-        let blCandidates = [
-            "/opt/homebrew/bin/bl",
-            "/usr/local/bin/bl",
-            "/usr/bin/bl"
-        ]
-        var resolvedPath: String? = nil
-        for candidate in blCandidates {
-            if FileManager.default.isExecutableFile(atPath: candidate) {
-                resolvedPath = candidate
-                break
-            }
-        }
-        if resolvedPath == nil {
-            let envPath = ProcessInfo.processInfo.environment["PATH"] ?? ""
-            for dir in envPath.split(separator: ":") {
-                let candidate = URL(fileURLWithPath: String(dir)).appendingPathComponent("bl").path
-                if FileManager.default.isExecutableFile(atPath: candidate) {
-                    resolvedPath = candidate
-                    break
-                }
-            }
+    /// 用 AK/SK 调 `GenerateCLIAccessToken` 换一枚控制台令牌。
+    func generateConsoleAccessToken(_ credentials: AliyunCredentials) async throws -> String {
+        let host = Self.openAPIHost(region: credentials.consoleRegion)
+        // 官方 CLI 在这里发的是**空 body、空 query**，签名必须完全一致
+        let headers = AliyunSigner.signedHeaders(
+            host: host,
+            pathname: Self.generateTokenPath,
+            method: "POST",
+            action: Self.generateTokenAction,
+            version: Self.generateTokenVersion,
+            accessKeyId: credentials.accessKeyId.trimmed,
+            accessKeySecret: credentials.accessKeySecret.trimmed
+        )
+
+        var request = URLRequest(url: URL(string: "https://\(host)\(Self.generateTokenPath)")!)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 15
+        for (key, value) in headers where key != "host" {
+            // host 交给 URLSession 自动填，手动设会被忽略甚至重复
+            request.setValue(value, forHTTPHeaderField: key)
         }
 
-        guard let blBinary = resolvedPath else {
-            let isZh = LocalizationManager.shared.effectiveLanguage == "zh"
-            throw NSError(
-                domain: "AliyunBailianService",
-                code: 404,
-                userInfo: [NSLocalizedDescriptionKey: isZh ? "未检测到百炼 CLI ('bl')。可在终端通过 npm install -g @modelstudio/cli 安装，或使用网页登录授权。" : "Bailian CLI ('bl') not detected. Install via npm install -g @modelstudio/cli in terminal, or configure web cookies."]
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch {
+            throw AliyunChannelError.network(error.localizedDescription)
+        }
+
+        let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        let code = (json["Code"] as? String) ?? ""
+        let message = (json["Message"] as? String) ?? ""
+
+        if let token = (json["cliAccessToken"] as? String)?.trimmed,
+           !token.isEmpty, status == 200, (json["Success"] as? Bool) != false {
+            return token
+        }
+        throw Self.classifyOpenAPIError(status: status, code: code, message: message, raw: data)
+    }
+
+    /// 把 OpenAPI 的错误码翻译成可操作的分类。
+    static func classifyOpenAPIError(status: Int, code: String, message: String, raw: Data) -> AliyunChannelError {
+        let detail = message.isEmpty
+            ? String(data: raw, encoding: .utf8)?.prefix(200).description ?? ""
+            : message
+        let joined = "\(code) \(message)"
+
+        if code.contains("SignatureDoesNotMatch") || joined.contains("SignatureDoesNotMatch") {
+            return .signatureMismatch(detail)
+        }
+        if code.contains("InvalidAccessKeyId") || code.contains("AccessKeyId.NotFound") {
+            return .invalidAccessKey(detail)
+        }
+        if code.contains("Forbidden") || code.contains("NoPermission") || code.hasPrefix("NoPermission")
+            || code.contains("RAM") || status == 403 {
+            return .noPermission(detail)
+        }
+        return .gatewayError(code: code.isEmpty ? "HTTP \(status)" : code, message: detail)
+    }
+
+    // MARK: - 控制台网关（Bearer）
+
+    /// `GenerateCLIAccessToken` 所在的 OpenAPI 域名。
+    public static func openAPIHost(region: String) -> String {
+        region.trimmed == "ap-southeast-1"
+            ? "modelstudio.ap-southeast-1.aliyuncs.com"
+            : "modelstudio.cn-beijing.aliyuncs.com"
+    }
+
+    /// 控制台网关的站点路由；未知 region 回落到 cn-beijing 那一档（保留 site）。
+    public static func gatewayRoute(region: String, site: String) -> AliyunConsoleGatewayRoute {
+        let isIntlSite = site.trimmed == "international"
+        switch region.trimmed {
+        case "ap-southeast-1":
+            return AliyunConsoleGatewayRoute(
+                host: isIntlSite ? "bailian-singapore-cs.alibabacloud.com" : "modelstudio-cs.console.aliyun.com",
+                action: "IntlBroadScopeAspnGateway"
+            )
+        default:
+            return AliyunConsoleGatewayRoute(
+                host: isIntlSite ? "bailian-cs.console.alibabacloud.com" : "bailian-cs.console.aliyun.com",
+                action: "BroadScopeAspnGateway"
             )
         }
+    }
+
+    /// 网关请求体里的 `params` JSON。
+    public static func gatewayParamsJSON(api: String, switchAgent: Int?) -> String {
+        var cornerstone: [String: Any] = [
+            "protocol": "V2",
+            "console": "ONE_CONSOLE",
+            "productCode": "p_efm",
+            "switchUserType": 3,
+            "consoleSite": "BAILIAN_ALIYUN"
+        ]
+        if let switchAgent { cornerstone["switchAgent"] = switchAgent }
+
+        let payload: [String: Any] = [
+            "Api": api,
+            "V": "1.0",
+            "Data": ["cornerstoneParam": cornerstone]
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload),
+              let text = String(data: data, encoding: .utf8) else {
+            return "{}"
+        }
+        return text
+    }
+
+    /// 以 Bearer 令牌调控制台网关查 Token Plan 用量。
+    func queryTokenPlan(
+        token: String,
+        credentials: AliyunCredentials,
+        channel: AliyunChannel
+    ) async throws -> AliyunQuotaResult {
+        guard !token.isEmpty else { throw AliyunChannelError.notLogined }
+
+        let route = Self.gatewayRoute(region: credentials.consoleRegion, site: credentials.consoleSite)
+        let api = Self.tokenPlanUsageAPI
+        let urlString = "https://\(route.host)/cli/api.json?action=\(route.action)"
+            + "&product=sfm_bailian&api=\(AliyunSigner.percentEncode(api))"
+        guard let url = URL(string: urlString) else { throw URLError(.badURL) }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 15
+        request.setValue("*/*", forHTTPHeaderField: "Accept")
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.httpBody = Self.formBody([
+            "params": Self.gatewayParamsJSON(api: api, switchAgent: credentials.switchAgentOrNil),
+            "region": credentials.consoleRegion.trimmed
+        ])
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch {
+            throw AliyunChannelError.network(error.localizedDescription)
+        }
+
+        if let http = response as? HTTPURLResponse, http.statusCode == 401 || http.statusCode == 403 {
+            throw AliyunChannelError.notLogined
+        }
+
+        let label = isZh
+            ? "\(channel.displayName)（\(credentials.consoleRegion.trimmed)）"
+            : "\(channel.displayName) (\(credentials.consoleRegion.trimmed))"
+        return try Self.parseTokenPlanResponse(data, accountLabel: label, channel: channel)
+    }
+
+    /// `application/x-www-form-urlencoded` 请求体。
+    ///
+    /// 刻意不用 `URLComponents.percentEncodedQuery` —— 它的 query 允许集不转义 `& + =`，
+    /// 一旦 params JSON 里出现这些字符就会把表单体拆坏。
+    static func formBody(_ fields: [String: String]) -> Data {
+        fields
+            .sorted { $0.key < $1.key }
+            .map { "\(AliyunSigner.percentEncode($0.key))=\(AliyunSigner.percentEncode($0.value))" }
+            .joined(separator: "&")
+            .data(using: .utf8) ?? Data()
+    }
+
+    // MARK: - 通道 3：官方 CLI
+
+    public func fetchViaCLI() async throws -> AliyunQuotaResult {
+        guard let blBinary = Self.locateBLBinary() else { throw AliyunChannelError.cliNotFound }
 
         return try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
@@ -190,58 +417,59 @@ public final class AliyunBailianService: @unchecked Sendable {
                     process.waitUntilExit()
 
                     let data = pipe.fileHandleForReading.readDataToEndOfFile()
-
                     let isZh = LocalizationManager.shared.effectiveLanguage == "zh"
-                    if let res = try? self.parseTokenPlanJSON(data, accountLabel: isZh ? "百炼 CLI (cn-beijing)" : "Bailian CLI (cn-beijing)") {
-                        continuation.resume(returning: res)
-                        return
+                    let label = isZh ? "百炼 CLI (cn-beijing)" : "Bailian CLI (cn-beijing)"
+                    do {
+                        let result = try Self.parseTokenPlanResponse(data, accountLabel: label, channel: .cli)
+                        continuation.resume(returning: result)
+                    } catch {
+                        let raw = String(data: data, encoding: .utf8)?.prefix(200) ?? ""
+                        continuation.resume(throwing: (error as? AliyunChannelError)
+                            ?? AliyunChannelError.cliFailed(String(raw)))
                     }
-
-                    if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                       let errorObj = json["error"] as? [String: Any],
-                       let msg = errorObj["message"] as? String {
-                        let hint = errorObj["hint"] as? String ?? (isZh ? "请运行 bl auth login --console 登录" : "Please run bl auth login --console to login")
-                        continuation.resume(throwing: NSError(
-                            domain: "AliyunBailianService",
-                            code: 401,
-                            userInfo: [NSLocalizedDescriptionKey: "\(msg) (\(hint))"]
-                        ))
-                        return
-                    }
-
-                    let raw = String(data: data, encoding: .utf8) ?? ""
-                    continuation.resume(throwing: NSError(
-                        domain: "AliyunBailianService",
-                        code: -1,
-                        userInfo: [NSLocalizedDescriptionKey: isZh ? "CLI 返回格式不符合预期: \(raw.prefix(200))" : "CLI returned unexpected format: \(raw.prefix(200))"]
-                    ))
                 } catch {
-                    continuation.resume(throwing: error)
+                    continuation.resume(throwing: AliyunChannelError.cliFailed(error.localizedDescription))
                 }
             }
         }
     }
 
-    /// Fetch Token Plan quota via Bailian Console Web API
-    public func fetchViaConsole(cookie: String) async throws -> (fiveHour: TokenWindow?, weekly: TokenWindow?, account: String?) {
-        guard let url = URL(string: "https://bailian-cs.console.aliyun.com/data/api.json?action=BroadScopeAspnGateway&product=sfm_bailian&api=zeldaHttp.apikeyMgr.%2Ftokenplan%2Fpersonal%2Fapi%2Fv2%2Fusage&_v=undefined") else {
-            throw URLError(.badURL)
+    static func locateBLBinary() -> String? {
+        let candidates = ["/opt/homebrew/bin/bl", "/usr/local/bin/bl", "/usr/bin/bl"]
+        for candidate in candidates where FileManager.default.isExecutableFile(atPath: candidate) {
+            return candidate
         }
+        let envPath = ProcessInfo.processInfo.environment["PATH"] ?? ""
+        for dir in envPath.split(separator: ":") {
+            let candidate = URL(fileURLWithPath: String(dir)).appendingPathComponent("bl").path
+            if FileManager.default.isExecutableFile(atPath: candidate) { return candidate }
+        }
+        return nil
+    }
+
+    // MARK: - 通道 4：控制台 Cookie（兜底）
+
+    func fetchViaCookie(_ credentials: AliyunCredentials) async throws -> AliyunQuotaResult {
+        let api = Self.tokenPlanUsageAPI
+        let urlString = "https://bailian-cs.console.aliyun.com/data/api.json?action=BroadScopeAspnGateway"
+            + "&product=sfm_bailian&api=\(AliyunSigner.percentEncode(api))&_v=undefined"
+        guard let url = URL(string: urlString) else { throw URLError(.badURL) }
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
+        request.timeoutInterval = 10
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json, text/plain, */*", forHTTPHeaderField: "Accept")
-        request.setValue(cookie, forHTTPHeaderField: "Cookie")
+        request.setValue(credentials.cookie.trimmed, forHTTPHeaderField: "Cookie")
         request.setValue("https://bailian.console.aliyun.com", forHTTPHeaderField: "Origin")
         request.setValue("https://bailian.console.aliyun.com/cn-beijing?tab=plan", forHTTPHeaderField: "Referer")
-        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36", forHTTPHeaderField: "User-Agent")
+        request.setValue(
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
+            forHTTPHeaderField: "User-Agent")
         request.setValue("XMLHttpRequest", forHTTPHeaderField: "X-Requested-With")
-        request.timeoutInterval = 10
 
-        let traceId = UUID().uuidString.lowercased()
-        let cornerstoneParams: [String: Any] = [
-            "feTraceId": traceId,
+        var cornerstone: [String: Any] = [
+            "feTraceId": UUID().uuidString.lowercased(),
             "feURL": "https://bailian.console.aliyun.com/cn-beijing?tab=plan#/efm/subscription/token-plan",
             "protocol": "V2",
             "console": "ONE_CONSOLE",
@@ -253,99 +481,57 @@ public final class AliyunBailianService: @unchecked Sendable {
             "userPrincipalName": "",
             "xsp_lang": "zh-CN"
         ]
+        if let switchAgent = credentials.switchAgentOrNil { cornerstone["switchAgent"] = switchAgent }
 
-        let paramsJSON = (try? JSONSerialization.data(withJSONObject: cornerstoneParams)) ?? Data()
-        let paramsString = String(data: paramsJSON, encoding: .utf8) ?? "{}"
+        let paramsJSON = (try? JSONSerialization.data(withJSONObject: cornerstone))
+            .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+        request.httpBody = Self.formBody(["params": paramsJSON, "region": "cn-beijing"])
 
-        var components = URLComponents()
-        components.queryItems = [
-            URLQueryItem(name: "params", value: paramsString),
-            URLQueryItem(name: "region", value: "cn-beijing")
-        ]
-        request.httpBody = components.percentEncodedQuery?.data(using: .utf8)
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let httpResp = response as? HTTPURLResponse else {
-            throw URLError(.badServerResponse)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch {
+            throw AliyunChannelError.network(error.localizedDescription)
         }
 
-        let isZh = LocalizationManager.shared.effectiveLanguage == "zh"
-        if httpResp.statusCode == 401 || httpResp.statusCode == 403 {
-            throw NSError(domain: "AliyunBailianService", code: 401, userInfo: [NSLocalizedDescriptionKey: isZh ? "控制台 Cookie 已失效，请重新登录授权" : "Console Cookie expired. Please log in and authorize again"])
+        if let http = response as? HTTPURLResponse, http.statusCode == 401 || http.statusCode == 403 {
+            throw AliyunChannelError.cookieExpired
         }
 
-        return try parseTokenPlanJSON(data, accountLabel: isZh ? "控制台网页授权" : "Console Web Auth")
+        let label = isZh ? "控制台网页授权" : "Console Web Auth"
+        return try Self.parseTokenPlanResponse(data, accountLabel: label, channel: .cookie)
     }
 
-    /// Parse Bailian 7-day and 5-hour Token Plan JSON response
-    public func parseTokenPlanJSON(_ data: Data, accountLabel: String) throws -> (fiveHour: TokenWindow?, weekly: TokenWindow?, account: String?) {
-        let isZh = LocalizationManager.shared.effectiveLanguage == "zh"
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw NSError(domain: "AliyunBailianService", code: -1, userInfo: [NSLocalizedDescriptionKey: isZh ? "无法解析百炼配额响应数据" : "Unable to parse Bailian quota response data"])
-        }
+    // MARK: - 令牌签发的串行化与节流
 
-        if let errorObj = json["error"] as? [String: Any] {
-            let msg = errorObj["message"] as? String ?? (isZh ? "未知错误" : "Unknown error")
-            let hint = errorObj["hint"] as? String ?? (isZh ? "请运行 bl auth login --console 登录" : "Please run bl auth login --console to login")
-            throw NSError(domain: "AliyunBailianService", code: 401, userInfo: [NSLocalizedDescriptionKey: "\(msg) (\(hint))"])
-        }
+    /// 串行化令牌签发，并对连续失败做节流。
+    private actor TokenCoordinator {
+        private var cachedToken: String?
+        private var lastFailure: (date: Date, error: Error)?
+        private static let failureCooldown: TimeInterval = 30
 
-        var payload = json
-        if let dataObj = json["data"] as? [String: Any] {
-            payload = dataObj
-        }
+        func issue(
+            using credentials: AliyunCredentials,
+            force: Bool = false,
+            _ generate: @Sendable () async throws -> String
+        ) async throws -> String {
+            if !force, let cachedToken, !cachedToken.isEmpty { return cachedToken }
 
-        let per1WeekPctVal = (payload["per1WeekPercentage"] as? NSNumber)?.doubleValue
-        let per1WeekResetMs = (payload["per1WeekResetTime"] as? NSNumber)?.doubleValue
-        let per5HourPctVal = (payload["per5HourPercentage"] as? NSNumber)?.doubleValue
-        let per5HourResetMs = (payload["per5HourResetTime"] as? NSNumber)?.doubleValue
-
-        guard per1WeekPctVal != nil || per5HourPctVal != nil else {
-            throw NSError(domain: "AliyunBailianService", code: -2, userInfo: [NSLocalizedDescriptionKey: isZh ? "返回数据中未包含 7天或5小时配额字段" : "Response data missing 7-day or 5-hour quota fields"])
-        }
-
-        var weeklyWindow: TokenWindow? = nil
-        if let weekPct = per1WeekPctVal {
-            let usedPct = min(max(weekPct * 100.0, 0.0), 100.0)
-            let resetDate: Date
-            if let ms = per1WeekResetMs, ms > 0 {
-                resetDate = Date(timeIntervalSince1970: ms / 1000.0)
-            } else {
-                resetDate = Date().addingTimeInterval(7 * 86400)
+            // AK 填错时不要每轮刷新都去打 OpenAPI，30 秒内直接复用上次错误
+            if let lastFailure, Date().timeIntervalSince(lastFailure.date) < Self.failureCooldown {
+                throw lastFailure.error
             }
-            let startDate = resetDate.addingTimeInterval(-7 * 86400)
 
-            weeklyWindow = TokenWindow(
-                title: "7天周期额度",
-                usedPercentage: usedPct,
-                startTime: startDate,
-                endTime: resetDate,
-                unit: "%",
-                isIdle: usedPct == 0.0
-            )
-        }
-
-        var fiveHourWindow: TokenWindow? = nil
-        if let fivePct = per5HourPctVal {
-            let usedPct = min(max(fivePct * 100.0, 0.0), 100.0)
-            let resetDate: Date
-            if let ms = per5HourResetMs, ms > 0 {
-                resetDate = Date(timeIntervalSince1970: ms / 1000.0)
-            } else {
-                resetDate = Date().addingTimeInterval(5 * 3600)
+            do {
+                let token = try await generate()
+                cachedToken = token
+                lastFailure = nil
+                return token
+            } catch {
+                lastFailure = (Date(), error)
+                throw error
             }
-            let startDate = resetDate.addingTimeInterval(-5 * 3600)
-
-            fiveHourWindow = TokenWindow(
-                title: "5小时额度",
-                usedPercentage: usedPct,
-                startTime: startDate,
-                endTime: resetDate,
-                unit: "%",
-                isIdle: usedPct == 0.0
-            )
         }
-
-        return (fiveHourWindow, weeklyWindow, accountLabel)
     }
 }

@@ -260,6 +260,9 @@ public struct ProviderQuota: Identifiable, Codable {
     public var accountInfo: String?
     public var fiveHourWindow: TokenWindow?
     public var weeklyWindow: TokenWindow?
+    /// 第三个槽位：与时间窗口额度并存的货币余额（目前用于阿里云百炼的账户现金余额）。
+    /// 只用两个槽位的厂商保持 nil，卡片不会渲染这一行。
+    public var balanceWindow: TokenWindow?
     public var lastUpdated: Date?
     public var errorMessage: String?
     public var isLoading: Bool
@@ -271,6 +274,7 @@ public struct ProviderQuota: Identifiable, Codable {
         accountInfo: String? = nil,
         fiveHourWindow: TokenWindow? = nil,
         weeklyWindow: TokenWindow? = nil,
+        balanceWindow: TokenWindow? = nil,
         lastUpdated: Date? = nil,
         errorMessage: String? = nil,
         isLoading: Bool = false
@@ -281,6 +285,7 @@ public struct ProviderQuota: Identifiable, Codable {
         self.accountInfo = accountInfo
         self.fiveHourWindow = fiveHourWindow
         self.weeklyWindow = weeklyWindow
+        self.balanceWindow = balanceWindow
         self.lastUpdated = lastUpdated
         self.errorMessage = errorMessage
         self.isLoading = isLoading
@@ -550,9 +555,24 @@ public struct AppSettings: Codable {
 
     public var glmApiKey: String
     public var glmEndpoint: String
+    /// 历史字段：从未参与额度查询链路（百炼兼容 OpenAI 端点只能对话），
+    /// 仅为旧配置反序列化兼容保留，UI 已移除。
     public var aliyunApiKey: String
+    /// 历史字段，同上。
     public var aliyunEndpoint: String
     public var aliyunCookie: String
+
+    // MARK: 阿里云百炼 AK/SK 通道（首选，不受控制台 SSO 多设备互踢限制）
+    // AccessKey Secret 与控制台 token 不落在这里 —— 见 SecretStore（Keychain / 凭据管理器）。
+    public var aliyunAccessKeyId: String
+    public var aliyunConsoleRegion: String
+    public var aliyunConsoleSite: String
+    /// 企业代操作 UID；0 表示未设置。阿里云 UID 可能是 16 位，故用 Int（64 位）。
+    public var aliyunConsoleSwitchAgent: Int
+    /// 是否复用本机 ~/.bailian/config.json 里已有的控制台凭证（只读，不写回）。
+    public var aliyunReuseCLIConfig: Bool
+    /// 阿里云账户现金余额提醒阈值，类型与默认值对齐 deepseek / kimi / openRouter。
+    public var aliyunBalanceAlertThreshold: Double
 
     public var openAIApiKey: String
     public var openAIEndpoint: String
@@ -614,6 +634,12 @@ public struct AppSettings: Codable {
         case aliyunApiKey
         case aliyunEndpoint
         case aliyunCookie
+        case aliyunAccessKeyId
+        case aliyunConsoleRegion
+        case aliyunConsoleSite
+        case aliyunConsoleSwitchAgent
+        case aliyunReuseCLIConfig
+        case aliyunBalanceAlertThreshold
 
         case openAIApiKey
         case openAIEndpoint
@@ -670,6 +696,12 @@ public struct AppSettings: Codable {
         aliyunApiKey: String = "",
         aliyunEndpoint: String = "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
         aliyunCookie: String = "",
+        aliyunAccessKeyId: String = "",
+        aliyunConsoleRegion: String = "cn-beijing",
+        aliyunConsoleSite: String = "domestic",
+        aliyunConsoleSwitchAgent: Int = 0,
+        aliyunReuseCLIConfig: Bool = true,
+        aliyunBalanceAlertThreshold: Double = 10,
         openAIApiKey: String = "",
         openAIEndpoint: String = "https://api.openai.com/v1",
         openAIOrgId: String = "",
@@ -717,6 +749,12 @@ public struct AppSettings: Codable {
         self.aliyunApiKey = aliyunApiKey
         self.aliyunEndpoint = aliyunEndpoint
         self.aliyunCookie = aliyunCookie
+        self.aliyunAccessKeyId = aliyunAccessKeyId
+        self.aliyunConsoleRegion = aliyunConsoleRegion
+        self.aliyunConsoleSite = aliyunConsoleSite
+        self.aliyunConsoleSwitchAgent = aliyunConsoleSwitchAgent
+        self.aliyunReuseCLIConfig = aliyunReuseCLIConfig
+        self.aliyunBalanceAlertThreshold = aliyunBalanceAlertThreshold
         self.openAIApiKey = openAIApiKey
         self.openAIEndpoint = openAIEndpoint
         self.openAIOrgId = openAIOrgId
@@ -768,6 +806,12 @@ public struct AppSettings: Codable {
         self.aliyunApiKey = try container.decodeIfPresent(String.self, forKey: .aliyunApiKey) ?? ""
         self.aliyunEndpoint = try container.decodeIfPresent(String.self, forKey: .aliyunEndpoint) ?? "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
         self.aliyunCookie = try container.decodeIfPresent(String.self, forKey: .aliyunCookie) ?? ""
+        self.aliyunAccessKeyId = try container.decodeIfPresent(String.self, forKey: .aliyunAccessKeyId) ?? ""
+        self.aliyunConsoleRegion = try container.decodeIfPresent(String.self, forKey: .aliyunConsoleRegion) ?? "cn-beijing"
+        self.aliyunConsoleSite = try container.decodeIfPresent(String.self, forKey: .aliyunConsoleSite) ?? "domestic"
+        self.aliyunConsoleSwitchAgent = try container.decodeIfPresent(Int.self, forKey: .aliyunConsoleSwitchAgent) ?? 0
+        self.aliyunReuseCLIConfig = try container.decodeIfPresent(Bool.self, forKey: .aliyunReuseCLIConfig) ?? true
+        self.aliyunBalanceAlertThreshold = try container.decodeIfPresent(Double.self, forKey: .aliyunBalanceAlertThreshold) ?? 10
 
         self.openAIApiKey = try container.decodeIfPresent(String.self, forKey: .openAIApiKey) ?? ""
         self.openAIEndpoint = try container.decodeIfPresent(String.self, forKey: .openAIEndpoint) ?? "https://api.openai.com/v1"

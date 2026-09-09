@@ -39,7 +39,7 @@ As AI-assisted programming tools like Claude Code, Cursor, and Continue gain wid
   - Pick any enabled provider in General settings and its remaining quota is shown right next to the menu bar icon as bare values — e.g. `34%/67%` (5-hour / weekly left) or `45.09` (account balance). Provider name and reset countdown live in the hover tooltip.
 - 🌐 **Extensive AI Provider Ecosystem**:
   - **Global**: OpenAI (TPM/RPM rate limits), Anthropic (Claude Code 5-hour rolling window & weekly quota), Google Gemini / Google One (AI Studio / OAuth / Antigravity Credential Manager).
-  - **Domestic**: DeepSeek, Volcengine Ark, Moonshot KIMI, Zhipu GLM, Aliyun Bailian (Token Plan).
+  - **Domestic**: DeepSeek, Volcengine Ark, Moonshot KIMI, Zhipu GLM, Aliyun Bailian (Token Plan quota + account balance, with AccessKey support so several machines can monitor at once).
   - **Custom Endpoints**: Supports custom OpenAI Chat, OpenAI Response, and Anthropic protocols (OneAPI, NewAPI, SiliconFlow, MiniMax, StepFun, etc.).
 - 🌍 **Dynamic Bilingual Interface (i18n)**:
   - Instant toggle between **English** and **简体中文** without application restarts.

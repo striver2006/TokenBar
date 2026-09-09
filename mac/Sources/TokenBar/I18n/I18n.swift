@@ -192,6 +192,33 @@ public enum I18nKey: String {
     case aliyunQuotaNoticeTitle
     case aliyunQuotaNoticeDesc
     case aliyunRecommendedAuthTitle
+
+    // 方式一：OpenAPI AccessKey（推荐，多设备并发）
+    case aliyunMethodAKTitle
+    case aliyunMethodAKDesc
+    case btnAliyunOpenRAMConsole
+    case aliyunRAMHowToTitle
+    case aliyunRAMHowToSteps
+    case labelAliyunAccessKeyId
+    case placeholderAliyunAccessKeyId
+    case labelAliyunAccessKeySecret
+    case placeholderAliyunAccessKeySecret
+    case labelAliyunConsoleRegion
+    case labelAliyunConsoleSite
+    case aliyunAdvancedTitle
+    case labelAliyunSwitchAgent
+    case hintAliyunSwitchAgent
+    case toggleAliyunReuseCLIConfig
+    case hintAliyunReuseCLIConfig
+    case btnAliyunSaveAndTestAK
+    case labelAliyunBalanceThreshold
+    case alertAliyunAKSaved
+    case alertAliyunSecretStoreFailed
+    // 方式二 / 方式三 的降级标题
+    case aliyunMethodCLITitle
+    case aliyunMethodCLIDesc
+    case aliyunMethodCookieTitle
+    case aliyunMethodCookieDesc
     case btnAliyunTerminalCLI
     case aliyunMethodWebLogin
     case btnAliyunWebLogin
@@ -627,6 +654,55 @@ public final class LocalizationManager: ObservableObject {
             return isZh ? "阿里云百炼的 OpenAI 兼容端点（如 token-plan.../compatible-mode/v1）仅用于模型对话推理，并不提供配额查询接口。TokenBar 支持通过百炼官方 CLI (`bl`) 或控制台网页登录会话自动获取真实的 7 天周期额度 与 5 小时额度。" : "Aliyun Bailian's OpenAI-compatible endpoint is for model inference only and does not support quota lookup. TokenBar retrieves real 7-day and 5-hour quotas via the official CLI (`bl`) or console web login."
         case .aliyunRecommendedAuthTitle:
             return isZh ? "推荐授权方式" : "Recommended Authorization"
+
+        case .aliyunMethodAKTitle:
+            return isZh ? "方式一：OpenAPI AccessKey（推荐 · 多台设备可同时在线）" : "Option 1: OpenAPI AccessKey (recommended - several machines at once)"
+        case .aliyunMethodAKDesc:
+            return isZh ? "AccessKey 是服务端凭证，不受控制台单点登录的多设备互踢影响。TokenBar 用它自动换取控制台令牌；令牌被其他设备顶掉时会静默续期，无需手工操作。密钥保存在系统钥匙串，不写入配置文件。" : "An AccessKey is a server-side credential, so it is not affected by console single sign-on kicking other devices offline. TokenBar exchanges it for a console token and renews that token silently whenever another device takes over. The secret lives in the system keychain, never in a config file."
+        case .btnAliyunOpenRAMConsole:
+            return isZh ? "前往 RAM 控制台创建" : "Create one in the RAM console"
+        case .aliyunRAMHowToTitle:
+            return isZh ? "如何创建专用 AccessKey？" : "How do I create a dedicated AccessKey?"
+        case .aliyunRAMHowToSteps:
+            return isZh ? "1. 用主账号登录 RAM 控制台，创建用户，登录名例如 tokenbar-monitor\n2. 访问方式只勾选「使用永久 AccessKey 访问」，不要勾控制台登录\n3. 创建后立即复制 AccessKey ID 与 Secret（Secret 只显示一次）\n4. 授权：系统策略里搜 Bailian，优先选只读策略；要显示账户余额再加财务只读 bss:DescribeAcccount\n5. 回百炼控制台，再给该用户授予对应业务空间的只读权限（RAM 权限与百炼空间权限是两套体系，都要授）\n6. 把 ID / Secret 粘贴到下方，点「保存并测试」" : "1. Sign in to the RAM console as the main account and create a user, e.g. tokenbar-monitor\n2. Under access mode tick only permanent AccessKey; leave console sign-in off\n3. Copy the AccessKey ID and Secret right away - the Secret is shown only once\n4. Grant permissions: search Bailian in the system policies and prefer a read-only one; add the read-only billing action bss:DescribeAcccount if you also want the account balance\n5. Back in the Bailian console, also grant that user read access to the workspace - RAM permissions and Bailian workspace permissions are two separate systems\n6. Paste the ID / Secret below and press Save and test"
+        case .labelAliyunAccessKeyId:
+            return "AccessKey ID"
+        case .placeholderAliyunAccessKeyId:
+            return "LTAI5t..."
+        case .labelAliyunAccessKeySecret:
+            return "AccessKey Secret"
+        case .placeholderAliyunAccessKeySecret:
+            return isZh ? "只在创建时显示一次" : "Shown only once, when created"
+        case .labelAliyunConsoleRegion:
+            return isZh ? "控制台区域" : "Console region"
+        case .labelAliyunConsoleSite:
+            return isZh ? "控制台站点" : "Console site"
+        case .aliyunAdvancedTitle:
+            return isZh ? "高级选项" : "Advanced"
+        case .labelAliyunSwitchAgent:
+            return isZh ? "代操作 UID" : "Switch-agent UID"
+        case .hintAliyunSwitchAgent:
+            return isZh ? "仅企业代操作 / 子账号代管场景需要，留空即可。本机若已登录百炼 CLI，会自动带入。" : "Only needed for enterprise delegated access. Leave it blank otherwise - it is filled in automatically if the Bailian CLI is signed in on this machine."
+        case .toggleAliyunReuseCLIConfig:
+            return isZh ? "复用本机百炼 CLI 的登录凭证" : "Reuse credentials from the local Bailian CLI"
+        case .hintAliyunReuseCLIConfig:
+            return isZh ? "只读取 ~/.bailian/config.json，绝不写回。开启后即使没填 AccessKey 也能直接看到额度。" : "Reads ~/.bailian/config.json and never writes to it. With this on, quotas show up even before you add an AccessKey."
+        case .btnAliyunSaveAndTestAK:
+            return isZh ? "保存并测试 AccessKey 通道" : "Save and test the AccessKey channel"
+        case .labelAliyunBalanceThreshold:
+            return isZh ? "账户余额提醒阈值" : "Balance alert threshold"
+        case .alertAliyunAKSaved:
+            return isZh ? "AccessKey 已保存到系统钥匙串。" : "The AccessKey has been saved to the system keychain."
+        case .alertAliyunSecretStoreFailed:
+            return isZh ? "无法写入系统钥匙串，AccessKey Secret 未能保存。TokenBar 不会把它降级存成明文 —— 请在「钥匙串访问」中允许 TokenBar 后重试。" : "Could not write to the system keychain, so the AccessKey Secret was not saved. TokenBar will not fall back to plain text - allow TokenBar in Keychain Access and try again."
+        case .aliyunMethodCLITitle:
+            return isZh ? "方式二：百炼 CLI（备用 · 仅单机）" : "Option 2: Bailian CLI (backup - single machine)"
+        case .aliyunMethodCLIDesc:
+            return isZh ? "需先安装 bl 并用浏览器登录。同一账号在第二台设备登录会把第一台顶下线，不适合多机并发。" : "Requires bl to be installed and signed in through a browser. Signing in on a second machine kicks the first one offline, so this does not suit several machines at once."
+        case .aliyunMethodCookieTitle:
+            return isZh ? "方式三：控制台 Cookie（兜底）" : "Option 3: Console cookie (last resort)"
+        case .aliyunMethodCookieDesc:
+            return isZh ? "Cookie 同样会被其他设备的登录顶掉，且有效期较短，仅作为前两种方式都不可用时的兜底。" : "The cookie is also invalidated when another device signs in, and it expires quickly. Use it only when the first two options are unavailable."
         case .btnAliyunTerminalCLI:
             return isZh ? "在终端登录百炼 CLI (推荐)" : "Login Bailian CLI in Terminal (Recommended)"
         case .aliyunMethodWebLogin:
