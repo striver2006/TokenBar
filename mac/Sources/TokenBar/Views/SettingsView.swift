@@ -1,6 +1,16 @@
 import SwiftUI
 
 @MainActor
+/// AccessKey Secret 输入框的读取状态。
+///
+/// `.unavailable` 存在的意义：此时输入框为空**只代表这一轮没读到**，不代表钥匙串里
+/// 没有。把它当成「用户想清空」去执行删除，就会抹掉真实存在的账号级长期凭证。
+enum SecretFieldState {
+    case loading
+    case ready
+    case unavailable
+}
+
 public struct SettingsView: View {
     @ObservedObject var refreshManager: RefreshManager
     @ObservedObject private var i18n = LocalizationManager.shared
@@ -65,6 +75,11 @@ public struct SettingsView: View {
     @State private var aliyunAKIdInput: String = ""
     @State private var aliyunAKSecretInput: String = ""
     @State private var isAliyunAKSecretVisible: Bool = false
+    /// 钥匙串读取状态。init 里 await 不了，所以初值必然是 .loading，由 .task 推进。
+    /// `.unavailable` 是关键态：此时输入框内容**不可信**，禁止据此推断「用户想删」。
+    @State private var aliyunSecretState: SecretFieldState = .loading
+    /// 保存按钮的在途标记：写钥匙串现在是 async，不挡住会重入
+    @State private var isSavingAliyunAK: Bool = false
     @State private var aliyunRegionInput: String = "cn-beijing"
     @State private var aliyunSiteInput: String = "domestic"
     @State private var aliyunSwitchAgentInput: String = ""
@@ -124,9 +139,10 @@ public struct SettingsView: View {
         _aliyunEndpointInput = State(initialValue: refreshManager.settings.aliyunEndpoint)
         _aliyunCookieInput = State(initialValue: refreshManager.settings.aliyunCookie)
         _aliyunAKIdInput = State(initialValue: refreshManager.settings.aliyunAccessKeyId)
-        // Secret 只从钥匙串读，读不到就留空（不会退回明文）
-        _aliyunAKSecretInput = State(
-            initialValue: KeychainSecretStore.shared.get(.aliyunAccessKeySecret) ?? "")
+        // Secret 只从钥匙串读，而钥匙串必须在后台线程读（SecItemCopyMatching 会阻塞
+        // 主线程，弹授权框时更是无限期）。init 里 await 不了，所以这里只留空 + 标 .loading，
+        // 真值由 body 的 .task 异步补上。绝不退回明文。
+        _aliyunAKSecretInput = State(initialValue: "")
         _aliyunRegionInput = State(initialValue: refreshManager.settings.aliyunConsoleRegion)
         _aliyunSiteInput = State(initialValue: refreshManager.settings.aliyunConsoleSite)
         _aliyunSwitchAgentInput = State(
@@ -205,6 +221,18 @@ public struct SettingsView: View {
             syncFromSettings()
             MenuBarController.shared.updateSettingsTitle(tab: selectedTab)
         }
+        .task {
+            // 钥匙串读取放 .task 而不是 onAppear 里再开 Task：随 view 生命周期自动取消，
+            // 不会在窗口已经关掉后回来写 @State。SwiftUI 保证 .onAppear 先于 .task 体执行，
+            // 所以 syncFromSettings() 一定已经把明文字段填好了，两者之间没有竞争。
+            //
+            // 前提：MenuBarController.openSettings 每次都重建 NSHostingView
+            // （MenuBarController.swift:459/473），是全新 view identity，所以这个 .task
+            // 每次打开设置窗口都会重跑。若将来改成复用 hosting view 只做显隐，无 id: 的
+            // .task 只在首次插入时触发一次，第二次打开就读不到最新的 Secret —— 那时必须
+            // 换成 .task(id:) 或回到 .onAppear + Task。
+            await loadAliyunSecretFromKeychain()
+        }
         .onChange(of: selectedTab) { newTab in
             MenuBarController.shared.updateSettingsTitle(tab: newTab)
         }
@@ -275,7 +303,7 @@ public struct SettingsView: View {
         aliyunEndpointInput = refreshManager.settings.aliyunEndpoint
         aliyunCookieInput = refreshManager.settings.aliyunCookie
         aliyunAKIdInput = refreshManager.settings.aliyunAccessKeyId
-        aliyunAKSecretInput = KeychainSecretStore.shared.get(.aliyunAccessKeySecret) ?? ""
+        // Secret 不在这里读 —— 它必须走后台线程，见 loadAliyunSecretFromKeychain()
         aliyunRegionInput = refreshManager.settings.aliyunConsoleRegion
         aliyunSiteInput = refreshManager.settings.aliyunConsoleSite
         aliyunSwitchAgentInput = refreshManager.settings.aliyunConsoleSwitchAgent > 0
@@ -283,6 +311,33 @@ public struct SettingsView: View {
         aliyunReuseCLIInput = refreshManager.settings.aliyunReuseCLIConfig
         aliyunBalanceThresholdInput = String(
             format: "%g", refreshManager.settings.aliyunBalanceAlertThreshold)
+    }
+
+    /// 从钥匙串加载 AccessKey Secret。只在后台线程读，**读不到时不清空输入框**。
+    ///
+    /// 「读不到就清空」看着无害，实则是数据丢失的起点：清空 → 用户点保存 →
+    /// 走 delete 分支 → 钥匙串里真实存在的 Secret 被抹掉。所以 `.unavailable`
+    /// 下只改状态、不动内容，并由 saveAliyunAccessKeyAndTest() 跳过删除。
+    private func loadAliyunSecretFromKeychain() async {
+        aliyunSecretState = .loading
+        let before = aliyunAKSecretInput   // 挂起前快照，防止盖掉用户这期间的输入
+
+        let result = await KeychainSecretStore.shared.lookupAsync(.aliyunAccessKeySecret)
+
+        // 正常路径下输入框在 loading 期间是 disabled 的，这里是双保险
+        let untouched = (aliyunAKSecretInput == before)
+
+        switch result {
+        case .found(let secret):
+            if untouched { aliyunAKSecretInput = secret }
+            aliyunSecretState = .ready
+        case .absent:
+            if untouched { aliyunAKSecretInput = "" }
+            aliyunSecretState = .ready
+        case .unavailable:
+            aliyunSecretState = .unavailable
+            Log.lifecycle.error("设置页读取 AccessKey Secret 失败（超时或钥匙串不可用），已进入保护模式：不清空、不删除")
+        }
     }
 
     /// 阈值显示：整数值省略小数位
@@ -1566,12 +1621,41 @@ public struct SettingsView: View {
                         SecureField(I18n(.placeholderAliyunAccessKeySecret), text: $aliyunAKSecretInput)
                             .textFieldStyle(.roundedBorder)
                     }
+                    if aliyunSecretState == .loading {
+                        ProgressView()
+                            .scaleEffect(0.5)
+                            .frame(width: 16, height: 16)
+                    }
                     Button {
                         isAliyunAKSecretVisible.toggle()
                     } label: {
                         Image(systemName: isAliyunAKSecretVisible ? "eye.slash" : "eye")
                     }
                     .buttonStyle(.borderless)
+                }
+                // 读取期间禁止编辑：这几百毫秒里输入的内容会被读回来的值盖掉，
+                // 与其打补丁不如不让用户白打字。最坏 5 秒（lookupAsync 超时）。
+                .disabled(aliyunSecretState == .loading)
+
+                if aliyunSecretState == .loading {
+                    Text(I18n(.hintAliyunSecretLoading))
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                } else if aliyunSecretState == .unavailable {
+                    HStack(alignment: .top, spacing: 4) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 10))
+                            .foregroundColor(.orange)
+                        Text(I18n(.warnAliyunSecretUnreadable))
+                            .font(.system(size: 10))
+                            .foregroundColor(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button(I18n(.btnRetryReadKeychain)) {
+                            Task { await loadAliyunSecretFromKeychain() }
+                        }
+                        .buttonStyle(.link)
+                        .font(.system(size: 10))
+                    }
                 }
             }
 
@@ -1632,11 +1716,18 @@ public struct SettingsView: View {
                 saveAliyunAccessKeyAndTest()
             } label: {
                 HStack {
-                    Image(systemName: "checkmark.shield")
+                    if isSavingAliyunAK {
+                        ProgressView().scaleEffect(0.5).frame(width: 12, height: 12)
+                    } else {
+                        Image(systemName: "checkmark.shield")
+                    }
                     Text(I18n(.btnAliyunSaveAndTestAK))
                 }
             }
             .buttonStyle(.borderedProminent)
+            // loading 期间禁用是必须的：此时输入框内容还没被钥匙串的值覆盖，
+            // 拿它去保存等于用一个半成品状态做写/删决策。
+            .disabled(aliyunSecretState == .loading || isSavingAliyunAK)
         }
         .padding(12)
         .background(Color.accentColor.opacity(0.06))
@@ -1645,39 +1736,71 @@ public struct SettingsView: View {
 
     /// 保存 AccessKey 并立即验证。
     ///
-    /// Secret 只写钥匙串 —— 写不进去就如实报错并中止，绝不降级成明文存进 AppSettings。
+    /// 三条不可退让的语义：
+    /// 1. Secret **只**写钥匙串 —— 写不进去就如实报错并中止，绝不降级成明文存进
+    ///    AppSettings；连 akId 等明文字段也一并不写，避免「id 更新了、secret 还是老的」错配。
+    /// 2. 钥匙串**读不到**时不执行删除 —— 输入框为空只代表「这一轮没读到」，不代表
+    ///    「用户想清空」，照删会抹掉真实存在的账号级长期凭证。数据丢失 > UI 卡顿。
+    /// 3. 删除失败同样中止 —— 否则 akId 更新了而旧 secret 还留在钥匙串里，
+    ///    刷新会拿着用户以为已经删掉的凭证继续跑。
     private func saveAliyunAccessKeyAndTest() {
+        // 按钮已 disabled，这里是防重入 / 防将来有人绕过 UI 调用的双保险
+        guard aliyunSecretState != .loading, !isSavingAliyunAK else { return }
+
         let akId = aliyunAKIdInput.trimmingCharacters(in: .whitespacesAndNewlines)
-        let akSecret = aliyunAKSecretInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        let action = SecretSaveAction.resolve(
+            input: aliyunAKSecretInput,
+            storeReadable: aliyunSecretState != .unavailable
+        )
 
-        if !akSecret.isEmpty {
-            guard KeychainSecretStore.shared.set(akSecret, for: .aliyunAccessKeySecret) else {
-                statusAlertMessage = I18n(.alertAliyunSecretStoreFailed)
-                showStatusAlert = true
-                return
-            }
-        } else {
-            KeychainSecretStore.shared.delete(.aliyunAccessKeySecret)
-        }
-
-        refreshManager.settings.aliyunAccessKeyId = akId
-        refreshManager.settings.aliyunConsoleRegion = aliyunRegionInput
-        refreshManager.settings.aliyunConsoleSite = aliyunSiteInput
-        refreshManager.settings.aliyunConsoleSwitchAgent =
-            Int(aliyunSwitchAgentInput.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
-        refreshManager.settings.aliyunReuseCLIConfig = aliyunReuseCLIInput
-        refreshManager.settings.aliyunBalanceAlertThreshold =
-            Double(aliyunBalanceThresholdInput.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 10
-        refreshManager.saveSettings()
-
+        isSavingAliyunAK = true
+        // struct 是 @MainActor，Task 继承同一隔离域，await 之后写 @State 安全
         Task {
+            defer { isSavingAliyunAK = false }
+
+            var noticePrefix = ""
+            switch action {
+            case .write(let secret):
+                guard await KeychainSecretStore.shared.setAsync(secret, for: .aliyunAccessKeySecret) else {
+                    statusAlertMessage = I18n(.alertAliyunSecretStoreFailed)
+                    showStatusAlert = true
+                    return                                    // ← 语义 1：明文字段一并不写
+                }
+                aliyunSecretState = .ready                     // 刚写成功，说明钥匙串通了
+
+            case .delete:
+                guard await KeychainSecretStore.shared.deleteAsync(.aliyunAccessKeySecret) else {
+                    statusAlertMessage = I18n(.alertAliyunSecretDeleteFailed)
+                    showStatusAlert = true
+                    return                                    // ← 语义 3
+                }
+
+            case .keepExisting:
+                // ← 语义 2：读不到 + 输入框空，绝不删。其余明文设置照常保存，
+                //   提示拼进最终 alert，避免和刷新结果抢同一个 alert 槽位。
+                noticePrefix = I18n(.alertAliyunSecretKeptUnreadable) + "\n\n"
+                Log.lifecycle.notice("设置页保存：钥匙串读不到且输入框为空，已跳过删除以保护现有 Secret")
+            }
+
+            refreshManager.settings.aliyunAccessKeyId = akId
+            refreshManager.settings.aliyunConsoleRegion = aliyunRegionInput
+            refreshManager.settings.aliyunConsoleSite = aliyunSiteInput
+            refreshManager.settings.aliyunConsoleSwitchAgent =
+                Int(aliyunSwitchAgentInput.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+            refreshManager.settings.aliyunReuseCLIConfig = aliyunReuseCLIInput
+            refreshManager.settings.aliyunBalanceAlertThreshold =
+                Double(aliyunBalanceThresholdInput.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 10
+            refreshManager.saveSettings()
+
             await refreshManager.refreshAliyun()
             let quota = refreshManager.quotas[.aliyunBailian]
             if quota?.isAuthorized == true {
                 let channel = quota?.accountInfo ?? ""
-                statusAlertMessage = "\(I18n(.alertAliyunSuccess))\(channel.isEmpty ? "" : "\n\(channel)")"
+                statusAlertMessage =
+                    noticePrefix + "\(I18n(.alertAliyunSuccess))\(channel.isEmpty ? "" : "\n\(channel)")"
             } else {
-                statusAlertMessage = "\(I18n(.alertAliyunFailed))\(quota?.errorMessage ?? "")"
+                statusAlertMessage =
+                    noticePrefix + "\(I18n(.alertAliyunFailed))\(quota?.errorMessage ?? "")"
             }
             showStatusAlert = true
         }

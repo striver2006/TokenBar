@@ -194,9 +194,14 @@ extension AliyunBailianService {
     /// - 借用它的控制台令牌，省掉一次多余的签发；
     /// - 借用它的 AK/SK（`bl auth login --open-api` 存的），让老用户零配置即可自愈。
     /// 借来的凭证只在内存里用，绝不写回 `~/.bailian/config.json`。
+    /// - Parameter secretStore: **必须**传入已经在后台读好的内存快照
+    ///   （`KeychainSecretStore.prefetch(_:)` 的返回值）。刻意不给默认值：
+    ///   直接传 `KeychainSecretStore.shared` 会让这个同步函数在调用线程上阻塞等
+    ///   securityd，在 MainActor 上就是全局刷新停摆（commit 6f332a3）。
+    ///   默认值会把最危险的选项做成打字最少的选项。
     public static func resolveCredentials(
         settings: AppSettings,
-        secretStore: SecretStoring = KeychainSecretStore.shared,
+        secretStore: SecretStoring,
         cliConfig: BailianCLIConfig? = nil
     ) -> AliyunCredentials {
         let reusable = settings.aliyunReuseCLIConfig

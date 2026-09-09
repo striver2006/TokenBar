@@ -94,10 +94,24 @@ macOS 客户端采用纯 Swift 打造，支持 macOS 13 (Ventura) 及以上系�
    "不活动超时"——代理环境下 TCP 停在 ESTABLISHED、响应慢速滴流时它可能永不触发。
    `HTTPClient` 统一 12s 请求 / 30s 端到端上限，并禁用 URLCache（靠响应头取额度的厂商
    命中缓存会连响应头一起回放旧值）。
-2. **钥匙串访问必须在后台线程**（`KeychainSecretStore.prefetch`）。`SecItemCopyMatching`
-   是同步阻塞调用，经 mach IPC 等 securityd；签名变化触发的授权框、钥匙串锁定、securityd
-   繁忙都会让它久等。一旦发生在 MainActor 上，主线程冻结会让**所有** provider 的刷新任务
-   一起停摆（它们全都跑在 MainActor 上），连超时哨兵恢复执行都排不上队。
+2. **钥匙串访问必须在后台线程，且读取结果必须三态**。
+   `SecItemCopyMatching` 是同步阻塞调用，经 mach IPC 等 securityd；签名变化触发的授权框、
+   钥匙串锁定、securityd 繁忙都会让它久等。一旦发生在 MainActor 上，主线程冻结会让**所有**
+   provider 的刷新任务一起停摆（它们全都跑在 MainActor 上），连超时哨兵恢复执行都排不上队。
+   同步的 `set` / `delete` / `lookup` 带 `assertOffMain` 断言，DEBUG 下会把误用直接炸出来；
+   异步入口是 `lookupAsync` / `setAsync` / `deleteAsync` / `prefetch`（Windows 端对应
+   `LookupAsync` / `SetAsync` / `DeleteAsync` / `PrefetchAsync`）。
+
+   **三态（`SecretLookup`: `found` / `absent` / `unavailable`）不是洁癖，是防数据丢失。**
+   `String?` 表达不了「确定没有」和「读不到」的差别，而**有写权限的调用方**把两者混为一谈
+   就是删掉用户凭证：读取失败 → 输入框留空 → 用户点保存 → 走 delete 分支 → 钥匙串里真实
+   存在的账号级长期凭证被抹掉。刷新链路可以容忍「读不到」（降级成未授权，下一轮自愈），
+   所以它用 `prefetch`；设置页不行，它必须用 `lookupAsync` 并在 `.unavailable` 下
+   **跳过删除**。这条判断抽在 `SecretSaveAction.resolve(input:storeReadable:)` 里，
+   有专门的单测守着。
+
+   同理，`resolveCredentials` / `ResolveCredentials` 的 `secretStore` 参数**没有默认值也
+   不回退**，必须显式传入预取好的内存快照——默认值会把最危险的选项做成打字最少的选项。
 3. **`Process` 子进程要先读 pipe 再 `waitUntilExit`**，并配超时 kill 与
    `standardInput = FileHandle.nullDevice`。反序会在输出超过 64KB pipe 缓冲区时形成
    父子互等死锁；`withTimeout` 救不了子进程（不响应 Task 取消），必须自己兜。

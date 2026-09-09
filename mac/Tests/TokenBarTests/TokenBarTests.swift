@@ -482,6 +482,89 @@ final class TokenBarTests: XCTestCase {
         XCTAssertEqual(status?.isStale, false)
     }
 
+    // MARK: - 凭证三态读取与保存决策（防数据丢失）
+
+    /// 「读不到」绝不能被当成「确定没有」—— 混淆这两者就是删掉用户凭证
+    func testSecretLookupDistinguishesAbsentFromUnavailable() {
+        let store = InMemorySecretStore()
+        XCTAssertEqual(store.lookup(.aliyunAccessKeySecret), .absent)
+
+        store.set("SECRET", for: .aliyunAccessKeySecret)
+        XCTAssertEqual(store.lookup(.aliyunAccessKeySecret), .found("SECRET"))
+
+        store.isUnavailable = true
+        XCTAssertEqual(store.lookup(.aliyunAccessKeySecret), .unavailable)
+        XCTAssertNotEqual(store.lookup(.aliyunAccessKeySecret), .absent)
+
+        store.isUnavailable = false
+        store.delete(.aliyunAccessKeySecret)
+        XCTAssertEqual(store.lookup(.aliyunAccessKeySecret), .absent)
+    }
+
+    /// lookup 必须是 protocol 的要求而非纯 extension 默认实现，否则通过
+    /// existential 调用会命中默认实现，isUnavailable 静默失效
+    func testSecretLookupDispatchesThroughProtocolWitness() {
+        let concrete = InMemorySecretStore()
+        concrete.isUnavailable = true
+        let erased: SecretStoring = concrete
+        XCTAssertEqual(erased.lookup(.aliyunAccessKeySecret), .unavailable)
+    }
+
+    /// 只实现三个同步方法的 store，其默认 lookup 永远不会凭空报 .unavailable
+    func testSecretLookupDefaultImplementationIsConservative() {
+        final class MinimalStore: SecretStoring {
+            var value: String?
+            @discardableResult func set(_ v: String, for key: SecretKey) -> Bool { value = v; return true }
+            func get(_ key: SecretKey) -> String? { value }
+            @discardableResult func delete(_ key: SecretKey) -> Bool { value = nil; return true }
+        }
+        let s = MinimalStore()
+        XCTAssertEqual(s.lookup(.aliyunAccessKeySecret), .absent)
+        s.value = "V"
+        XCTAssertEqual(s.lookup(.aliyunAccessKeySecret), .found("V"))
+        s.value = ""
+        XCTAssertEqual(s.lookup(.aliyunAccessKeySecret), .absent)
+    }
+
+    /// 读取失败时空输入框绝不能触发删除。
+    /// 这条断言挂了就意味着用户的阿里云 AccessKey Secret 会在一次钥匙串读取超时后被抹掉。
+    func testSecretSaveActionNeverDeletesWhenStoreUnreadable() {
+        XCTAssertEqual(SecretSaveAction.resolve(input: "", storeReadable: false), .keepExisting)
+        XCTAssertEqual(SecretSaveAction.resolve(input: "   ", storeReadable: false), .keepExisting)
+        XCTAssertEqual(SecretSaveAction.resolve(input: "\n\t", storeReadable: false), .keepExisting)
+    }
+
+    func testSecretSaveActionNormalPaths() {
+        XCTAssertEqual(SecretSaveAction.resolve(input: "", storeReadable: true), .delete)
+        XCTAssertEqual(SecretSaveAction.resolve(input: "  ", storeReadable: true), .delete)
+        XCTAssertEqual(SecretSaveAction.resolve(input: " AK_SECRET ", storeReadable: true),
+                       .write("AK_SECRET"))
+        // 读不到但用户手动输入了新值 —— 照写，写失败再由调用方中止
+        XCTAssertEqual(SecretSaveAction.resolve(input: "NEW", storeReadable: false), .write("NEW"))
+    }
+
+    func testSecretLookupAccessors() {
+        XCTAssertEqual(SecretLookup.found("X").value, "X")
+        XCTAssertNil(SecretLookup.absent.value)
+        XCTAssertNil(SecretLookup.unavailable.value)
+        XCTAssertTrue(SecretLookup.found("X").isTrustworthy)
+        XCTAssertTrue(SecretLookup.absent.isTrustworthy)
+        XCTAssertFalse(SecretLookup.unavailable.isTrustworthy)   // 唯一不可信态
+    }
+
+    /// 超时分支与完成分支并发抢 resume，只能有一个生效 ——
+    /// CheckedContinuation 二次 resume 会直接 crash。
+    /// runOnKeychainQueue 与 prefetch 都押在这个类型上。
+    func testResumeOnceOnlyFirstWins() async {
+        let value: Int = await withCheckedContinuation { cont in
+            let gate = ResumeOnce<Int>(cont)
+            DispatchQueue.concurrentPerform(iterations: 16) { i in
+                gate.resume(i == 0 ? 1 : 2)
+            }
+        }
+        XCTAssertTrue(value == 1 || value == 2)
+    }
+
     private func makeSettings(
         enabled: Bool = true,
         key: String = "aliyun",

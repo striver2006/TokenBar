@@ -219,6 +219,11 @@ public enum I18nKey: String {
     case labelAliyunBalanceThreshold
     case alertAliyunAKSaved
     case alertAliyunSecretStoreFailed
+    case alertAliyunSecretDeleteFailed
+    case alertAliyunSecretKeptUnreadable
+    case hintAliyunSecretLoading
+    case warnAliyunSecretUnreadable
+    case btnRetryReadKeychain
     // 方式二 / 方式三 的降级标题
     case aliyunMethodCLITitle
     case aliyunMethodCLIDesc
@@ -710,6 +715,16 @@ public final class LocalizationManager: ObservableObject {
             return isZh ? "AccessKey 已保存到系统钥匙串。" : "The AccessKey has been saved to the system keychain."
         case .alertAliyunSecretStoreFailed:
             return isZh ? "无法写入系统钥匙串，AccessKey Secret 未能保存。TokenBar 不会把它降级存成明文 —— 请在「钥匙串访问」中允许 TokenBar 后重试。" : "Could not write to the system keychain, so the AccessKey Secret was not saved. TokenBar will not fall back to plain text - allow TokenBar in Keychain Access and try again."
+        case .alertAliyunSecretDeleteFailed:
+            return isZh ? "无法从系统钥匙串删除 AccessKey Secret，本次未保存任何设置 —— 否则设置与实际凭证会不一致。请在「钥匙串访问」中允许 TokenBar 后重试。" : "Could not delete the AccessKey Secret from the system keychain, so nothing was saved - otherwise your settings and the stored credential would disagree. Allow TokenBar in Keychain Access and try again."
+        case .alertAliyunSecretKeptUnreadable:
+            return isZh ? "读取不到系统钥匙串，已保留原有的 AccessKey Secret 不做改动（其余设置已保存）。若确实要清除 Secret，请先让钥匙串恢复可读再操作。" : "The system keychain could not be read, so the stored AccessKey Secret was left untouched. Your other settings were saved. To actually clear the Secret, restore keychain access first."
+        case .hintAliyunSecretLoading:
+            return isZh ? "正在从系统钥匙串读取…" : "Reading from the system keychain..."
+        case .warnAliyunSecretUnreadable:
+            return isZh ? "读取系统钥匙串失败（超时或未授权）。输入框为空并不表示钥匙串里没有 Secret，保存时不会删除已存的 Secret。请在「钥匙串访问」中允许 TokenBar 后重试读取。" : "Could not read the system keychain (timed out or not authorized). An empty field here does not mean the keychain is empty, and saving will not delete the stored Secret. Allow TokenBar in Keychain Access, then retry."
+        case .btnRetryReadKeychain:
+            return isZh ? "重试读取" : "Retry"
         case .aliyunMethodCLITitle:
             return isZh ? "方式二：百炼 CLI（备用 · 仅单机）" : "Option 2: Bailian CLI (backup - single machine)"
         case .aliyunMethodCLIDesc:
