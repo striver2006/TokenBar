@@ -282,6 +282,7 @@ namespace TokenBar.Models
         public TokenWindow? SecondaryWindow { get; set; }
         public string? ErrorMessage { get; set; }
         public bool IsLoading { get; set; }
+        public DateTime? LastUpdated { get; set; }
     }
 
     public class DomesticProviderPreset

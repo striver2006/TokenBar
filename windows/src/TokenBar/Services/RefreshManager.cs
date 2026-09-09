@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -18,11 +19,17 @@ namespace TokenBar.Services
 
         public AppSettings Settings { get; private set; } = new();
         public Dictionary<ProviderType, ProviderQuota> Quotas { get; } = new();
-        public Dictionary<Guid, CustomProviderQuota> CustomQuotas { get; } = new();
-        public bool IsRefreshing { get; private set; }
+        public ConcurrentDictionary<Guid, CustomProviderQuota> CustomQuotas { get; } = new();
+        public bool IsRefreshing => Volatile.Read(ref _refreshing) == 1;
         public DateTime? LastRefreshDate { get; private set; }
 
+        // 0 = 空闲，1 = 刷新中。定时器回调在线程池线程、手动刷新在 UI 线程，
+        // 无锁的 check-then-set 会让两者同时通过检查并发跑两轮全量刷新。
+        private int _refreshing;
+
         private Timer? _timer;
+        // 当前定时器生效的间隔，用于判断设置变更是否真的需要重建定时器
+        private int? _activeIntervalMinutes;
         private readonly string _configFilePath;
 
         // 余额窗口的展示辅助状态（较上次差值 + 低余额提醒状态机），进程内有效
@@ -115,7 +122,12 @@ namespace TokenBar.Services
                 var json = JsonSerializer.Serialize(Settings, new JsonSerializerOptions { WriteIndented = true });
                 File.WriteAllText(_configFilePath, json);
                 LocalizationManager.Instance.CurrentLanguage = Settings.Language;
-                StartTimer();
+                // 只有间隔真的变了才重建定时器：设置页里切厂商开关、改语言等都会走到这里，
+                // 每次都 Dispose 重建会把计时相位打回零，间隔较长时可能永远刷不到。
+                if (_activeIntervalMinutes != Settings.RefreshIntervalMinutes)
+                {
+                    StartTimer();
+                }
             }
             catch { }
         }
@@ -124,7 +136,26 @@ namespace TokenBar.Services
         {
             _timer?.Dispose();
             var interval = Math.Max(1, Settings.RefreshIntervalMinutes);
-            _timer = new Timer(async _ => await RefreshAllAsync(), null, TimeSpan.FromMinutes(interval), TimeSpan.FromMinutes(interval));
+            _timer = new Timer(TimerTickAsync, null, TimeSpan.FromMinutes(interval), TimeSpan.FromMinutes(interval));
+            _activeIntervalMinutes = Settings.RefreshIntervalMinutes;
+        }
+
+        // TimerCallback 返回 void，异常一旦逃出这个 async void 方法就会终止进程，
+        // 因此这里必须吞掉所有异常（各厂商方法内部已各自记录错误信息）。
+        private async void TimerTickAsync(object? state)
+        {
+            try
+            {
+                await RefreshAllAsync();
+            }
+            catch { }
+        }
+
+        /// <summary>数据过期时才刷新，用于系统唤醒这类"可能已经错过若干个周期"的补刷场景</summary>
+        public async Task RefreshIfStaleAsync(TimeSpan olderThan)
+        {
+            if (LastRefreshDate is DateTime last && DateTime.Now - last < olderThan) return;
+            await RefreshAllAsync();
         }
 
         private void NotifyQuotasUpdated()
@@ -142,9 +173,12 @@ namespace TokenBar.Services
 
         public async Task RefreshAllAsync()
         {
-            if (IsRefreshing) return;
-            IsRefreshing = true;
+            // 原子地抢占闸门，避免定时器（线程池）与手动刷新（UI 线程）同时进入
+            if (Interlocked.CompareExchange(ref _refreshing, 1, 0) != 0) return;
             NotifyQuotasUpdated();
+
+            // 各刷新方法只在成功拿到数据时才推进自己的 LastUpdated，据此判断本轮是否有实际收获
+            var updatedBefore = LatestQuotaUpdate();
 
             try
             {
@@ -166,13 +200,34 @@ namespace TokenBar.Services
                 }
 
                 await Task.WhenAll(tasks);
-                LastRefreshDate = DateTime.Now;
+
+                // 全部厂商都失败时不推进时间戳，避免界面显示"刚刚更新"却是一屏旧数据
+                var after = LatestQuotaUpdate();
+                if (after.HasValue && after != updatedBefore)
+                {
+                    LastRefreshDate = after;
+                }
             }
             finally
             {
-                IsRefreshing = false;
+                Volatile.Write(ref _refreshing, 0);
                 NotifyQuotasUpdated();
             }
+        }
+
+        /// <summary>所有厂商中最近一次成功更新的时间</summary>
+        private DateTime? LatestQuotaUpdate()
+        {
+            DateTime? latest = null;
+            foreach (var q in Quotas.Values)
+            {
+                if (q.LastUpdated is DateTime d && (latest is null || d > latest)) latest = d;
+            }
+            foreach (var q in CustomQuotas.Values)
+            {
+                if (q.LastUpdated is DateTime d && (latest is null || d > latest)) latest = d;
+            }
+            return latest;
         }
 
         public async Task RefreshOpenAIAsync()
@@ -298,7 +353,11 @@ namespace TokenBar.Services
                 quota.ErrorMessage ??= LocalizationManager.Instance.IsChinese ? "未配置 Anthropic API Key 或 Claude Code 网页/本地授权" : "Anthropic API Key or Claude Code authorization not configured";
             }
 
-            quota.LastUpdated = DateTime.Now;
+            // 与其他厂商对齐：只有真的拿到数据才算一次成功更新
+            if (foundAuth)
+            {
+                quota.LastUpdated = DateTime.Now;
+            }
             quota.IsLoading = false;
             NotifyQuotasUpdated();
         }
@@ -650,16 +709,12 @@ namespace TokenBar.Services
 
         public async Task RefreshCustomProviderAsync(CustomProviderConfig config)
         {
-            if (!CustomQuotas.TryGetValue(config.Id, out var q))
+            var q = CustomQuotas.GetOrAdd(config.Id, _ => new CustomProviderQuota
             {
-                q = new CustomProviderQuota
-                {
-                    ConfigId = config.Id,
-                    Name = config.Name,
-                    Protocol = config.Protocol
-                };
-                CustomQuotas[config.Id] = q;
-            }
+                ConfigId = config.Id,
+                Name = config.Name,
+                Protocol = config.Protocol
+            });
 
             q.IsLoading = true;
             q.ErrorMessage = null;
@@ -681,6 +736,7 @@ namespace TokenBar.Services
                 q.SecondaryWindow = secondary;
                 q.AccountInfo = account;
                 q.IsAuthorized = true;
+                q.LastUpdated = DateTime.Now;
 
                 // 余额窗口可能在主槽位（纯余额厂商）或副槽位（MiMo 等订阅+余额双通道厂商）
                 var balanceWin = primary?.Kind == TokenWindowKind.Balance ? primary
@@ -812,7 +868,7 @@ namespace TokenBar.Services
         public void RemoveCustomProvider(Guid id)
         {
             Settings.CustomProviders.RemoveAll(c => c.Id == id);
-            CustomQuotas.Remove(id);
+            CustomQuotas.TryRemove(id, out _);
             lock (_balanceLock)
             {
                 _lastBalance.Remove($"custom:{id}");
