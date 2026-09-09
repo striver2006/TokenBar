@@ -105,6 +105,10 @@ Windows 客户端采用轻量现代的 **.NET 8 WPF** 架构，利用 Windows �
 5. **凭据安全与系统集成 (`GeminiService` / `Advapi32`)**：
    - 原生 P/Invoke 调用 Windows 凭据管理器 (`advapi32.dll` `CredReadW`)，安全提取 Antigravity CLI (`agy`) 及 Antigravity IDE 托管的 Google One PRO 凭证（目标名 `gemini:antigravity`）。
    - 使用凭证中的 refresh_token 自动续期访问令牌（内存缓存约 1 小时有效期），调用 Google Code Assist 配额接口获取与 Antigravity 官方用量面板一致的真实数据；自动请求 Google UserInfo 接口解析用户邮箱，实现与 macOS 凭证管理完全同构。
+6. **应用生命周期与单实例 (`App`)**：
+   - `OnStartup` 通过命名 Mutex（`Local\TokenBar.SingleInstance.Mutex`）实现单实例保护，避免双托盘图标与重复额度 API 请求。
+   - 第二实例启动时经命名 `EventWaitHandle` 通知首实例弹出额度浮窗后自行退出，对齐 macOS「重复启动即激活已有实例」的行为。
+   - 首实例正常退出时释放 Mutex；异常崩溃由内核对象随进程销毁兜底，不会造成永久锁死。
 
 ---
 

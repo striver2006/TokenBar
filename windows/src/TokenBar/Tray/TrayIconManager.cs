@@ -271,6 +271,28 @@ namespace TokenBar.Tray
             }
         }
 
+        /// <summary>第二实例启动时激活首实例:显示浮窗(已显示则仅置前),不切换。</summary>
+        public void ShowPopover()
+        {
+            if (_popoverWindow == null || !_popoverWindow.IsLoaded)
+            {
+                _popoverWindow = new PopoverWindow();
+            }
+
+            // 与 TogglePopover 相同的“钉住”语义:停掉悬停自动隐藏
+            _hoverPopoverShown = false;
+            _hoverTimer?.Stop();
+
+            if (_popoverWindow.IsVisible)
+            {
+                _popoverWindow.Activate();
+            }
+            else
+            {
+                _popoverWindow.ShowNearTray();
+            }
+        }
+
         public void OpenSettings(SettingsTab tab = SettingsTab.General)
         {
             if (_settingsWindow == null || !_settingsWindow.IsLoaded)
