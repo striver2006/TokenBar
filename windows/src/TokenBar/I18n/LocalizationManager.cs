@@ -171,6 +171,24 @@ namespace TokenBar.I18n
         public string NoCustomProviders => IsChinese ? "暂未添加任何国内或自定义厂商" : "No custom providers added yet";
         public string NoCustomProvidersHint => IsChinese ? "点击上方「＋ 添加新厂商」可添加硅基流动、MiniMax、腾讯混元等自定义端点。" : "Click '+ Add Provider' above to add SiliconFlow, MiniMax, etc.";
         public string AlertNotice => IsChinese ? "提示" : "Notice";
+
+        // AccessKey Secret 读写状态（与 mac 端 I18n.swift 同名 key 保持文案一致）
+        public string AlertAliyunSecretStoreFailed => IsChinese
+            ? "无法写入 Windows 凭据管理器，AccessKey Secret 未能保存。TokenBar 不会把它降级存成明文 —— 请检查凭据管理器是否可用后重试。"
+            : "Could not write to Windows Credential Manager, so the AccessKey Secret was not saved. TokenBar will not fall back to plain text - check that Credential Manager is available and try again.";
+        public string AlertAliyunSecretDeleteFailed => IsChinese
+            ? "无法从 Windows 凭据管理器删除 AccessKey Secret，本次未保存任何设置 —— 否则设置与实际凭证会不一致。请检查凭据管理器是否可用后重试。"
+            : "Could not delete the AccessKey Secret from Windows Credential Manager, so nothing was saved - otherwise your settings and the stored credential would disagree. Check that Credential Manager is available and try again.";
+        public string AlertAliyunSecretKeptUnreadable => IsChinese
+            ? "读取不到 Windows 凭据管理器，已保留原有的 AccessKey Secret 不做改动（其余设置已保存）。若确实要清除 Secret，请先让凭据管理器恢复可读再操作。"
+            : "Windows Credential Manager could not be read, so the stored AccessKey Secret was left untouched. Your other settings were saved. To actually clear the Secret, restore access first.";
+        public string HintAliyunSecretLoading => IsChinese
+            ? "正在从 Windows 凭据管理器读取…"
+            : "Reading from Windows Credential Manager...";
+        public string WarnAliyunSecretUnreadable => IsChinese
+            ? "读取 Windows 凭据管理器失败。输入框为空并不表示凭据管理器里没有 Secret，保存时不会删除已存的 Secret。"
+            : "Could not read Windows Credential Manager. An empty field here does not mean the credential is missing, and saving will not delete the stored Secret.";
+        public string BtnRetryReadCredential => IsChinese ? "重试读取" : "Retry";
         public string AlertOk => IsChinese ? "好的" : "OK";
 
         // Secondary Labels

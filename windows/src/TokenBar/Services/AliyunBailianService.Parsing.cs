@@ -228,12 +228,17 @@ namespace TokenBar.Services
         /// 本机若已 bl auth login，在允许复用的前提下借用其令牌与 AK/SK；
         /// 借来的凭证只在内存里用，绝不写回 %USERPROFILE%\.bailian\config.json。
         /// </summary>
+        /// <param name="secretStore">
+        /// **必须**传入已经在后台读好的内存快照（CredentialSecretStore.PrefetchAsync 的返回值）。
+        /// 刻意不再回退到 CredentialSecretStore.Instance：那会让这个同步函数在调用线程上
+        /// 阻塞等凭据管理器，把最危险的选项做成打字最少的选项。与 mac 端 resolveCredentials 一致。
+        /// </param>
         public static AliyunCredentials ResolveCredentials(
             AppSettings settings,
-            ISecretStore? secretStore = null,
+            ISecretStore secretStore,
             BailianCliConfig? cliConfig = null)
         {
-            var store = secretStore ?? CredentialSecretStore.Instance;
+            var store = secretStore;
             var reusable = settings.AliyunReuseCliConfig
                 ? (cliConfig ?? BailianCliConfig.LoadFromDisk())
                 : null;

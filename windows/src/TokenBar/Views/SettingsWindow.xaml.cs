@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -32,6 +33,15 @@ namespace TokenBar.Views
         private Guid? _editingCustomId;
         private SettingsTab _currentTab = SettingsTab.OpenAI;
 
+        /// <summary>
+        /// AccessKey Secret 的读取状态。Unavailable 是关键态：此时 PwdAliyunAkSecret
+        /// 为空**只代表这一轮没读到**，不代表凭据管理器里没有。把它当成「用户想清空」
+        /// 去执行删除，就会抹掉真实存在的账号级长期凭证。
+        /// </summary>
+        private SecretLookupKind _aliyunSecretState = SecretLookupKind.Unavailable;
+        /// <summary>保存按钮的在途标记：写凭据现在是 async，不挡住会重入</summary>
+        private bool _isSavingAliyunAk;
+
         public SettingsWindow(SettingsTab initialTab = SettingsTab.OpenAI)
         {
             InitializeComponent();
@@ -44,6 +54,10 @@ namespace TokenBar.Views
             LocalizationManager.Instance.PropertyChanged += (s, e) => Dispatcher.Invoke(UpdateLocalization);
             RefreshManager.Instance.OnQuotasUpdated += () => Dispatcher.Invoke(UpdateStatuses);
             UpdateStatuses();
+
+            // 凭据读取挂到 Loaded：构造函数不能 await，而同步的 Cred* P/Invoke 在
+            // UI 线程上会卡住窗口。对应 mac 端 SettingsView 的 .task 修饰符。
+            Loaded += async (_, _) => await LoadAliyunSecretAsync();
         }
 
         /// <summary>
@@ -440,9 +454,7 @@ namespace TokenBar.Views
             ChkAliyunEnabled.IsChecked = s.AliyunEnabled;
             TxtAliyunCookie.Text = s.AliyunCookie;
             TxtAliyunAkId.Text = s.AliyunAccessKeyId;
-            // Secret 只从凭据管理器读，读不到就留空（不会退回明文）
-            PwdAliyunAkSecret.Password =
-                CredentialSecretStore.Instance.Get(SecretKey.AliyunAccessKeySecret) ?? string.Empty;
+            // Secret 不在这里读 —— 它必须走后台线程，见 LoadAliyunSecretAsync()
             SelectComboByTag(CmbAliyunRegion, s.AliyunConsoleRegion);
             SelectComboByTag(CmbAliyunSite, s.AliyunConsoleSite);
             TxtAliyunSwitchAgent.Text = s.AliyunConsoleSwitchAgent > 0
@@ -804,48 +816,135 @@ namespace TokenBar.Views
         }
 
         /// <summary>
+        /// 从凭据管理器加载 AccessKey Secret。只在后台线程读，**读不到时不清空输入框**。
+        ///
+        /// 「读不到就清空」看着无害，实则是数据丢失的起点：清空 → 用户点保存 →
+        /// 走 Delete 分支 → 凭据管理器里真实存在的 Secret 被抹掉。所以 Unavailable
+        /// 下只改状态、不动内容，并由 BtnTestAliyunAK_Click 跳过删除。
+        /// </summary>
+        private async Task LoadAliyunSecretAsync()
+        {
+            var i18n = LocalizationManager.Instance;
+
+            PwdAliyunAkSecret.IsEnabled = false;
+            BtnTestAliyunAK.IsEnabled = false;
+            PnlAliyunSecretWarning.Visibility = Visibility.Collapsed;
+            TxtAliyunSecretHint.Text = i18n.HintAliyunSecretLoading;
+            TxtAliyunSecretHint.Visibility = Visibility.Visible;
+
+            var before = PwdAliyunAkSecret.Password;
+            var result = await CredentialSecretStore.Instance.LookupAsync(SecretKey.AliyunAccessKeySecret);
+
+            // 正常路径下输入框在读取期间是禁用的，这里是双保险
+            var untouched = PwdAliyunAkSecret.Password == before;
+
+            _aliyunSecretState = result.Kind;
+            TxtAliyunSecretHint.Visibility = Visibility.Collapsed;
+            PwdAliyunAkSecret.IsEnabled = true;
+            BtnTestAliyunAK.IsEnabled = !_isSavingAliyunAk;
+
+            switch (result.Kind)
+            {
+                case SecretLookupKind.Found:
+                    if (untouched) PwdAliyunAkSecret.Password = result.Value ?? string.Empty;
+                    break;
+                case SecretLookupKind.Absent:
+                    if (untouched) PwdAliyunAkSecret.Password = string.Empty;
+                    break;
+                default:
+                    TxtAliyunSecretWarning.Text = i18n.WarnAliyunSecretUnreadable;
+                    BtnRetryReadCredential.Content = i18n.BtnRetryReadCredential;
+                    PnlAliyunSecretWarning.Visibility = Visibility.Visible;
+                    Log.Error("lifecycle", "设置页读取 AccessKey Secret 失败，已进入保护模式：不清空、不删除");
+                    break;
+            }
+        }
+
+        private async void BtnRetryReadCredential_Click(object sender, RoutedEventArgs e)
+        {
+            try { await LoadAliyunSecretAsync(); }
+            catch (Exception ex) { Log.Error("lifecycle", $"重试读取凭据失败: {ex.Message}"); }
+        }
+
+        /// <summary>
         /// 保存 AccessKey 并立即验证。
         ///
         /// Secret 只写凭据管理器 —— 写不进去就如实报错并中止，绝不降级成明文存进 settings.json。
         /// </summary>
         private async void BtnTestAliyunAK_Click(object sender, RoutedEventArgs e)
         {
-            var i18n = LocalizationManager.Instance;
-            var secret = PwdAliyunAkSecret.Password.Trim();
+            if (_isSavingAliyunAk) return;
 
-            if (!string.IsNullOrEmpty(secret))
+            var i18n = LocalizationManager.Instance;
+            var action = SecretSaveAction.Resolve(
+                PwdAliyunAkSecret.Password,
+                storeReadable: _aliyunSecretState != SecretLookupKind.Unavailable);
+
+            _isSavingAliyunAk = true;
+            BtnTestAliyunAK.IsEnabled = false;
+
+            try
             {
-                if (!CredentialSecretStore.Instance.Set(SecretKey.AliyunAccessKeySecret, secret))
+                var noticePrefix = string.Empty;
+
+                switch (action.Kind)
                 {
-                    MessageBox.Show(i18n.IsChinese
-                        ? "无法写入 Windows 凭据管理器，AccessKey Secret 未能保存。TokenBar 不会把它降级存成明文 —— 请检查凭据管理器是否可用后重试。"
-                        : "Could not write to Windows Credential Manager, so the AccessKey Secret was not saved. TokenBar will not fall back to plain text - check that Credential Manager is available and try again.",
+                    case SecretSaveActionKind.Write:
+                        // 语义 1：写不进去就如实报错并中止，其余明文字段一并不写，
+                        // 避免「id 更新了、secret 还是老的」错配。
+                        if (!await CredentialSecretStore.Instance.SetAsync(
+                                SecretKey.AliyunAccessKeySecret, action.Value!))
+                        {
+                            MessageBox.Show(i18n.AlertAliyunSecretStoreFailed,
+                                i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Warning);
+                            return;
+                        }
+                        _aliyunSecretState = SecretLookupKind.Found;   // 刚写成功，说明凭据管理器通了
+                        PnlAliyunSecretWarning.Visibility = Visibility.Collapsed;
+                        break;
+
+                    case SecretSaveActionKind.Delete:
+                        // 语义 3：删除失败同样中止 —— 否则 akId 更新了而旧 secret 还在，
+                        // 刷新会拿着用户以为已经删掉的凭证继续跑。
+                        if (!await CredentialSecretStore.Instance.DeleteAsync(SecretKey.AliyunAccessKeySecret))
+                        {
+                            MessageBox.Show(i18n.AlertAliyunSecretDeleteFailed,
+                                i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Warning);
+                            return;
+                        }
+                        break;
+
+                    default:
+                        // 语义 2：读不到 + 输入框空，绝不删。其余明文设置照常保存，
+                        // 提示拼进最终结果，避免和刷新结果抢同一个弹窗。
+                        noticePrefix = i18n.AlertAliyunSecretKeptUnreadable + "\n\n";
+                        Log.Notice("lifecycle", "设置页保存：凭据读不到且输入框为空，已跳过删除以保护现有 Secret");
+                        break;
+                }
+
+                SyncToSettings();
+                await RefreshManager.Instance.RefreshAliyunAsync();
+
+                var q = RefreshManager.Instance.Quotas[ProviderType.AliyunBailian];
+                if (q.IsAuthorized)
+                {
+                    var channel = string.IsNullOrEmpty(q.AccountInfo) ? string.Empty : "\n" + q.AccountInfo;
+                    MessageBox.Show(noticePrefix + (i18n.IsChinese
+                            ? "百炼额度读取成功！AccessKey 已保存到 Windows 凭据管理器。"
+                            : "Bailian quota retrieved. The AccessKey is stored in Windows Credential Manager.") + channel,
+                        i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Information);
+                }
+                else
+                {
+                    MessageBox.Show(noticePrefix + (i18n.IsChinese
+                            ? $"百炼连接失败: {q.ErrorMessage}" : $"Bailian connection failed: {q.ErrorMessage}"),
                         i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Warning);
-                    return;
                 }
             }
-            else
+            finally
             {
-                CredentialSecretStore.Instance.Delete(SecretKey.AliyunAccessKeySecret);
-            }
-
-            SyncToSettings();
-            await RefreshManager.Instance.RefreshAliyunAsync();
-
-            var q = RefreshManager.Instance.Quotas[ProviderType.AliyunBailian];
-            if (q.IsAuthorized)
-            {
-                var channel = string.IsNullOrEmpty(q.AccountInfo) ? string.Empty : "\n" + q.AccountInfo;
-                MessageBox.Show((i18n.IsChinese
-                        ? "百炼额度读取成功！AccessKey 已保存到 Windows 凭据管理器。"
-                        : "Bailian quota retrieved. The AccessKey is stored in Windows Credential Manager.") + channel,
-                    i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Information);
-            }
-            else
-            {
-                MessageBox.Show(i18n.IsChinese
-                        ? $"百炼连接失败: {q.ErrorMessage}" : $"Bailian connection failed: {q.ErrorMessage}",
-                    i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Warning);
+                _isSavingAliyunAk = false;
+                BtnTestAliyunAK.IsEnabled = true;
             }
         }
 

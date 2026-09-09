@@ -838,13 +838,18 @@ namespace TokenBar.Services
 
             try
             {
-                var credentials = AliyunBailianService.ResolveCredentials(Settings);
+                // 凭据在后台线程读。同步的 Cred* P/Invoke 卡住时会占满这个 provider
+                // 的时间预算，与 mac 端 KeychainSecretStore.prefetch 的用意一致。
+                var prefetched = await CredentialSecretStore.Instance.PrefetchAsync(
+                    SecretKey.AliyunAccessKeySecret, SecretKey.AliyunConsoleAccessToken);
+                var credentials = AliyunBailianService.ResolveCredentials(Settings, prefetched);
                 var res = await AliyunBailianService.Instance.FetchQuotaAsync(credentials);
 
-                // 新签发的控制台令牌落进凭据管理器，下次刷新直接复用，避免重复签发
+                // 新签发的控制台令牌落进凭据管理器，下次刷新直接复用，避免重复签发。
+                // 写入不阻塞刷新，交给后台。
                 if (!string.IsNullOrEmpty(res.RefreshedToken))
                 {
-                    CredentialSecretStore.Instance.Set(
+                    CredentialSecretStore.Instance.SetInBackground(
                         SecretKey.AliyunConsoleAccessToken, res.RefreshedToken!);
                 }
 

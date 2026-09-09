@@ -468,7 +468,18 @@
                                 <TextBox x:Name="TxtAliyunAkId" Margin="0,0,0,10" Padding="6"/>
 
                                 <TextBlock x:Name="TxtAliyunAkSecretLabel" TextWrapping="Wrap" Text="AccessKey Secret:" FontSize="11" Margin="0,0,0,4"/>
-                                <PasswordBox x:Name="PwdAliyunAkSecret" Margin="0,0,0,10" Padding="6"/>
+                                <PasswordBox x:Name="PwdAliyunAkSecret" Margin="0,0,0,4" Padding="6"/>
+                                <!-- 读取状态提示：Loading 时禁用输入框，Unavailable 时给出橙色警告 +
+                                     重试入口。空输入框在 Unavailable 下不代表「没有」，保存不会删除。 -->
+                                <TextBlock x:Name="TxtAliyunSecretHint" TextWrapping="Wrap" FontSize="10"
+                                           Foreground="#6B7280" Margin="0,0,0,6" Visibility="Collapsed"/>
+                                <StackPanel x:Name="PnlAliyunSecretWarning" Orientation="Horizontal"
+                                            Margin="0,0,0,6" Visibility="Collapsed">
+                                    <TextBlock x:Name="TxtAliyunSecretWarning" TextWrapping="Wrap" FontSize="10"
+                                               Foreground="#EA580C" MaxWidth="360"/>
+                                    <Button x:Name="BtnRetryReadCredential" Margin="6,0,0,0" Padding="6,2"
+                                            FontSize="10" Cursor="Hand" Click="BtnRetryReadCredential_Click"/>
+                                </StackPanel>
 
                                 <Grid Margin="0,0,0,10">
                                     <Grid.ColumnDefinitions>
