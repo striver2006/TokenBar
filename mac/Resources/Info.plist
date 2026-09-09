@@ -26,6 +26,8 @@
     <string>13.0</string>
     <key>LSUIElement</key>
     <true/>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>TokenBar 需要控制「终端」来运行百炼 CLI 登录命令 (bl auth login --console)。</string>
     <key>NSAppTransportSecurity</key>
     <dict>
         <key>NSAllowsArbitraryLoads</key>

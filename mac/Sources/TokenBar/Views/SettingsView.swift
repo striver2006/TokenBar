@@ -1489,9 +1489,13 @@ public struct SettingsView: View {
 
                 HStack(spacing: 12) {
                     Button {
-                        AliyunBailianService.openTerminalToLoginCLI()
-                        statusAlertMessage = I18n(.alertAliyunCLIOpened)
-                        showStatusAlert = true
+                        // 终端拉起结果由服务层回调（主线程），失败时给出可手动执行的提示
+                        AliyunBailianService.openTerminalToLoginCLI { success, message in
+                            statusAlertMessage = success
+                                ? I18n(.alertAliyunCLIOpened)
+                                : (message ?? I18n(.alertUnknownError))
+                            showStatusAlert = true
+                        }
                     } label: {
                         HStack {
                             Image(systemName: "terminal")

@@ -4,14 +4,92 @@ import AppKit
 public final class AliyunBailianService: @unchecked Sendable {
     public static let shared = AliyunBailianService()
 
-    /// Opens macOS Terminal to run `bl auth login --console`
-    public static func openTerminalToLoginCLI() {
-        let script = "tell application \"Terminal\" to do script \"bl auth login --console\""
-        var error: NSDictionary?
-        if let appleScript = NSAppleScript(source: script) {
-            appleScript.executeAndReturnError(&error)
+    /// 待在终端执行的百炼 CLI 登录命令
+    public static let cliLoginCommand = "bl auth login --console"
+
+    /// 在「终端」中运行 `bl auth login --console`。
+    ///
+    /// 旧实现直接用 NSAppleScript 向 Terminal 发送 `do script`，这需要 TCC「自动化」授权，
+    /// 而 Info.plist 缺少 NSAppleEventsUsageDescription 时系统会直接拒绝，错误又被忽略，
+    /// 表现为"只打开了一个空终端、命令没执行"。
+    /// 现改为写入一个临时 .command 脚本再用终端打开（无需任何授权），失败时才回退到 AppleScript。
+    /// completion 固定在主线程回调：成功为 (true, nil)，失败为 (false, 已本地化的错误说明)。
+    public static func openTerminalToLoginCLI(completion: @escaping (Bool, String?) -> Void = { _, _ in }) {
+        let isZh = LocalizationManager.shared.effectiveLanguage == "zh"
+        let banner = isZh ? "TokenBar：正在登录阿里云百炼 CLI…" : "TokenBar: signing in to Aliyun Bailian CLI…"
+        let missingHint = isZh
+            ? "未检测到百炼 CLI (bl)，请先安装：npm install -g @modelstudio/cli"
+            : "Bailian CLI (bl) not found. Install it first: npm install -g @modelstudio/cli"
+
+        let script = """
+        #!/bin/zsh
+        export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+        echo "\(banner)"
+        if ! command -v bl >/dev/null 2>&1; then
+          echo "\(missingHint)"
+          exit 1
+        fi
+        echo "$ \(cliLoginCommand)"
+        \(cliLoginCommand)
+        """
+
+        let scriptURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("TokenBar-bailian-login.command")
+
+        do {
+            try script.write(to: scriptURL, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
+        } catch {
+            runLoginViaAppleScript(completion: completion)
+            return
         }
-        NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app"))
+
+        let terminalURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Terminal")
+            ?? URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app")
+
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = true
+        NSWorkspace.shared.open([scriptURL], withApplicationAt: terminalURL, configuration: config) { _, error in
+            DispatchQueue.main.async {
+                if error == nil {
+                    completion(true, nil)
+                } else {
+                    runLoginViaAppleScript(completion: completion)
+                }
+            }
+        }
+    }
+
+    /// 回退方案：通过 AppleScript 驱动终端（首次会弹出「自动化」授权请求）。
+    private static func runLoginViaAppleScript(completion: @escaping (Bool, String?) -> Void) {
+        let run = {
+            let source = """
+            tell application "Terminal"
+                activate
+                do script "\(cliLoginCommand)"
+            end tell
+            """
+            var scriptError: NSDictionary?
+            NSAppleScript(source: source)?.executeAndReturnError(&scriptError)
+
+            if scriptError == nil {
+                completion(true, nil)
+                return
+            }
+
+            let isZh = LocalizationManager.shared.effectiveLanguage == "zh"
+            let detail = (scriptError?[NSAppleScript.errorMessage] as? String) ?? ""
+            let message = isZh
+                ? "无法自动打开终端\(detail.isEmpty ? "" : "（\(detail)）")。请手动在终端执行：\(cliLoginCommand)"
+                : "Could not open Terminal automatically\(detail.isEmpty ? "" : " (\(detail))"). Please run manually in Terminal: \(cliLoginCommand)"
+            completion(false, message)
+        }
+
+        if Thread.isMainThread {
+            run()
+        } else {
+            DispatchQueue.main.async(execute: run)
+        }
     }
 
     /// Fetch Aliyun Bailian Token Plan quota.
