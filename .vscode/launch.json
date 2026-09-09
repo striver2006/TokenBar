@@ -19,6 +19,26 @@
             "target": "TokenBar",
             "configuration": "release",
             "preLaunchTask": "swift: Build Release TokenBar"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:TokenBar}/mac",
+            "name": "Debug TokenBar (mac)",
+            "target": "TokenBar",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug TokenBar (mac)"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:TokenBar}/mac",
+            "name": "Release TokenBar (mac)",
+            "target": "TokenBar",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release TokenBar (mac)"
         }
     ]
 }
