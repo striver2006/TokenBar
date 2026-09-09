@@ -128,13 +128,43 @@ TokenBar 支持实时监控阿里云百炼的 **5 小时滚动滑动窗口** 与
 - **方式一：OpenAPI AccessKey（最推荐，Mac 与 Windows 可同时在线）**：
   - **原理**：阿里云 AccessKey (AK/SK) 是服务端调用凭证，**不受浏览器单点登录 (SSO) 的多设备互踢限制**。TokenBar 用它调用 `GenerateCLIAccessToken` 换取控制台令牌；令牌被其他设备顶掉时（网关返回 `NotLogined`）会自动重新签发并重试一次，全程无感、无需任何手工操作。
   - **不需要安装 `bl`** —— 这条链路完全内置在 TokenBar 里。
+  - **三层授权模型（务必先读）**：用 RAM 子账号的 AK/SK 查 Token Plan 额度，需要**三层权限同时具备，缺一不可**。三者分属不同体系、在不同控制台配置，只配其中一两层一定查不出数据：
+
+    | 层 | 配置位置 | 作用 | 缺失时的报错 |
+    | --- | --- | --- | --- |
+    | ① RAM 策略 | RAM 控制台 | 允许调用 `GenerateCLIAccessToken`（AK/SK 换控制台令牌） | HTTP 403 `NoPermission` |
+    | ② 业务空间成员 | 百炼控制台 | 让该子账号成为目标业务空间的成员 | `BailianGateway.Workspace.NotAuthorised` |
+    | ③ 空间内权限项 | 百炼控制台 | 空间里勾选「**智能体-操作**」 | `BailianGateway.AuthorityPolicies.NoPermission` |
+
+    照着报错就能判断当前卡在哪一层，从上往下逐层打通即可。
+
   - **操作步骤**：
     1. 用主账号登录 [RAM 控制台](https://ram.console.aliyun.com/users)，创建用户，登录名例如 `tokenbar-monitor`。
     2. 访问方式**只勾选「使用永久 AccessKey 访问」**，不要勾控制台登录。
     3. 创建后**立即复制** AccessKey ID 与 Secret（Secret 只显示一次）。
-    4. 给该用户授权：系统策略里搜 `Bailian`，优先选**只读**策略；若还想显示账户现金余额，再加财务只读权限 `bss:DescribeAcccount`（官方文档就是这个拼写，多一个 c）。
-    5. 回到[百炼控制台](https://bailian.console.aliyun.com/)，再给该用户授予对应业务空间的**只读**权限 —— 阿里云的 RAM 权限与百炼业务空间权限是**两套独立体系，两边都要授**。
-    6. 打开 TokenBar 设置 →「阿里云百炼」→「方式一：OpenAPI AccessKey」，填入 ID / Secret，选好控制台区域与站点，点「保存并测试 AccessKey 通道」。
+    4. **配置第 ① 层：RAM 授权。** 在该用户的「权限管理」里新增授权，二选一：
+       - **系统策略**：搜关键词 **`Bailian`**（不是 `ModelStudio`，百炼在 RAM 里挂的产品名是 Bailian），选中对应策略。
+       - **自定义策略**：若系统策略不合用，创建自定义策略时**务必切到「脚本编辑」标签页**手写 JSON —— `GenerateCLIAccessToken` 属于较新的 API 版本，「可视化配置」的动作下拉列表里**通常搜不到它**，但手写进策略照样生效（服务端鉴权与控制台的动作列表不是同一份数据源）：
+
+         ```json
+         {
+           "Version": "1",
+           "Statement": [
+             {
+               "Effect": "Allow",
+               "Action": "modelstudio:GenerateCLIAccessToken",
+               "Resource": "*"
+             }
+           ]
+         }
+         ```
+
+       - 若还想显示账户现金余额，再加财务只读权限 `bss:DescribeAcccount`（官方文档就是这个拼写，多一个 c）。
+       - ⚠️ 后续再调整权限时，请用「**新增授权**」而不是「修改授权」—— 后者会用新策略**覆盖**已有策略，容易把这一层悄悄弄丢，表现为原本已经通了的链路又退回 403。
+    5. **配置第 ② 层：加入业务空间。** 回到[百炼控制台](https://bailian.console.aliyun.com/)，进入「用户管理 / 成员管理」（不同版本叫法略有差异），把该 RAM 子账号**添加为目标业务空间的成员**。
+    6. **配置第 ③ 层：勾选空间内权限项。** 在该成员的权限编辑里勾上「**智能体-操作**」。
+       > 只给「只读」权限是**不够**的 —— 实测查询 Token Plan 用量的网关接口要求「智能体-操作」这一权限项，否则会返回 `BailianGateway.AuthorityPolicies.NoPermission`，并在 `errorMsg` 里点名缺失的权限（形如 `{"authorityPolicies":["智能体-操作"]}`）。可直接照着这个报错去勾对应项。
+    7. 打开 TokenBar 设置 →「阿里云百炼」→「方式一：OpenAPI AccessKey」，填入 ID / Secret，选好控制台区域与站点，点「保存并测试 AccessKey 通道」。
   - **密钥存放**：AccessKey Secret 与控制台令牌保存在 **macOS 钥匙串 / Windows 凭据管理器**，不写进配置文件。若安全存储不可用，TokenBar **不会**降级存成明文，而是提示你处理后重试。
   - **国际站用户**：控制台区域选 `ap-southeast-1`，站点选 `international`。
   - **两台设备可共用同一对 AK/SK，或各自使用独立子账号的 AK/SK，永久稳定并发监控，互不下线**。
@@ -155,7 +185,9 @@ TokenBar 支持实时监控阿里云百炼的 **5 小时滚动滑动窗口** 与
 | --- | --- |
 | 签名校验失败 / `SignatureDoesNotMatch` | AccessKey Secret 填错，**或本机系统时间不准** —— 签名带时间戳，容差约 15 分钟。先校时再重试。 |
 | `InvalidAccessKeyId` | AccessKey ID 不存在或已被禁用，去 RAM 控制台确认。 |
-| `Forbidden` / `NoPermission` / 含 `RAM` | 子用户没授权。注意 **RAM 权限与百炼业务空间权限是两套体系，两边都要授**；账户余额还需额外的 `bss:DescribeAcccount`。 |
+| HTTP 403 `NoPermission` / `Forbidden` / 含 `RAM` | 卡在**第 ① 层**：RAM 没授权。返回里的 `NoPermissionType: ImplicitDeny` 表示该子账号身上没有任何策略授予过 `modelstudio:GenerateCLIAccessToken`。按 3.5 节步骤 4 配置；若原本已通又退回 403，多半是后续「修改授权」把这条策略覆盖掉了。账户余额还需额外的 `bss:DescribeAcccount`。 |
+| `BailianGateway.Workspace.NotAuthorised` | 卡在**第 ② 层**：RAM 已通（能换到控制台令牌），但该子账号还不是目标业务空间的成员。按 3.5 节步骤 5 把它加进业务空间。 |
+| `BailianGateway.AuthorityPolicies.NoPermission` | 卡在**第 ③ 层**：已是空间成员，但空间内权限项不足。看 `errorMsg` 里点名的权限（通常是 `{"authorityPolicies":["智能体-操作"]}`），去成员权限里勾上「智能体-操作」。**只读权限不够。** |
 | 反复出现「控制台会话已失效」 | 已自动重签过令牌仍失败，检查控制台**区域 / 站点 / 代操作 UID** 是否与你的账号匹配（国际站要选 `ap-southeast-1` + `international`）。 |
 | 「本周期未返回限额数据」 | **不是错误**。该窗口可能不限量，可在百炼 Token Plan 控制台核对。 |
 | 无法写入钥匙串 / 凭据管理器 | TokenBar 不会把 Secret 降级成明文。macOS 在「钥匙串访问」中允许 TokenBar 后重试；Windows 检查凭据管理器是否可用。 |
