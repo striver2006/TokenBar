@@ -1,7 +1,11 @@
 import Foundation
 
 /// 菜单栏图标旁额度摘要的文案计算。
-/// 全部为纯函数（不触碰 RefreshManager / AppKit），便于单元测试与 Windows 端对齐。
+/// 全部为纯函数（不触碰 RefreshManager / AppKit），便于单元测试。
+///
+/// 菜单栏只显示数值、不显示厂商名：额度为剩余百分比（同时展示时以 "/" 分隔，
+/// 如 `34%/67%` 表示 5 小时 / 周期剩余），余额只显示金额数字（如 `45.09`）。
+/// 厂商名与额度名称、重置倒计时等完整信息放在悬停 tooltip 中。
 public enum MenuBarStatus {
 
     /// 菜单栏展示结果：title 为图标旁短文案，tooltip 为悬停完整说明。
@@ -15,66 +19,47 @@ public enum MenuBarStatus {
         }
     }
 
-    /// 厂商名过长时截断，避免挤占菜单栏
-    public static let maxProviderNameLength = 8
+    /// 无数据时的占位文案
+    public static let placeholder = "--"
 
-    /// 依据所选指标挑选用于展示的窗口。
+    /// 依据所选指标挑选用于展示的窗口（可能是 0、1 或 2 个）。
     /// primary / secondary 对内置厂商即 5 小时额度 / 周期额度槽位，对自定义厂商为主 / 次槽位。
-    public static func selectWindow(
+    public static func selectWindows(
         primary: TokenWindow?,
         secondary: TokenWindow?,
         metric: MenuBarMetric
-    ) -> TokenWindow? {
+    ) -> [TokenWindow] {
         switch metric {
         case .fiveHour:
-            return primary
+            return [primary].compactMap { $0 }
         case .weekly:
-            return secondary
+            return [secondary].compactMap { $0 }
         case .balance:
-            if let p = primary, p.isBalance { return p }
-            if let s = secondary, s.isBalance { return s }
-            return nil
+            return [balanceWindow(primary: primary, secondary: secondary)].compactMap { $0 }
         case .auto:
             // 纯扣费厂商（DeepSeek / KIMI 等）的余额比速率窗口更值得盯，故余额优先
-            if let p = primary, p.isBalance { return p }
-            if let s = secondary, s.isBalance { return s }
-            return primary ?? secondary
+            if let balance = balanceWindow(primary: primary, secondary: secondary) {
+                return [balance]
+            }
+            return [primary, secondary].compactMap { $0 }
         }
     }
 
-    /// 额度窗口的紧凑标记（余额窗口无标记）。按窗口原始标题判断，与槽位无关。
-    public static func marker(for window: TokenWindow) -> String {
-        if window.isBalance { return "" }
-        let isZh = LocalizationManager.shared.effectiveLanguage == "zh"
-        if window.title.contains("5小时") {
-            return isZh ? "5时" : "5H"
-        }
-        if window.title.contains("周") || window.title.contains("7天") {
-            return isZh ? "周" : "W"
-        }
-        return ""
-    }
-
-    /// 数值文案：余额窗口显示金额，额度窗口显示剩余百分比（带紧凑标记）。
+    /// 单个窗口的数值文案：余额只给数字，额度给剩余百分比。
     public static func valueText(for window: TokenWindow) -> String {
         if window.isBalance {
-            return window.balanceFormatted
+            guard let amount = window.balanceAmount else { return placeholder }
+            return String(format: "%.2f", amount)
         }
-        let percent = Int(window.remainingPercentage.rounded())
-        let mark = marker(for: window)
-        return mark.isEmpty ? "\(percent)%" : "\(mark) \(percent)%"
+        return "\(Int(window.remainingPercentage.rounded()))%"
     }
 
-    /// 组合最终展示文案。
-    public static func compose(providerName: String, window: TokenWindow) -> Text {
-        let name = truncate(providerName)
-        let tooltipDetail = window.isBalance
-            ? "\(window.localizedTitle) \(window.balanceFormatted)"
-            : "\(window.localizedTitle) \(I18n(.remaining)) \(Int(window.remainingPercentage.rounded()))% · \(window.timeRemainingFormatted)"
-        return Text(
-            title: "\(name) \(valueText(for: window))",
-            tooltip: "\(providerName) · \(tooltipDetail)"
-        )
+    /// tooltip 中单个窗口的完整描述
+    public static func detailText(for window: TokenWindow) -> String {
+        if window.isBalance {
+            return "\(window.localizedTitle) \(window.balanceFormatted)"
+        }
+        return "\(window.localizedTitle) \(I18n(.remaining)) \(Int(window.remainingPercentage.rounded()))% · \(window.timeRemainingFormatted)"
     }
 
     /// 计算当前应展示的菜单栏文案；返回 nil 表示只显示图标。
@@ -114,16 +99,21 @@ public enum MenuBarStatus {
             return nil
         }
 
-        guard let window = selectWindow(primary: primary, secondary: secondary, metric: settings.menuBarMetric) else {
+        let windows = selectWindows(primary: primary, secondary: secondary, metric: settings.menuBarMetric)
+        guard !windows.isEmpty else {
             let hint = errorMessage ?? (isAuthorized ? I18n(.menuBarNoData) : I18n(.notAuthorized))
-            return Text(title: "\(truncate(name)) --", tooltip: "\(name) · \(hint)")
+            return Text(title: placeholder, tooltip: "\(name) · \(hint)")
         }
 
-        return compose(providerName: name, window: window)
+        return Text(
+            title: windows.map(valueText).joined(separator: "/"),
+            tooltip: ([name] + windows.map(detailText)).joined(separator: " · ")
+        )
     }
 
-    private static func truncate(_ name: String) -> String {
-        guard name.count > maxProviderNameLength else { return name }
-        return String(name.prefix(maxProviderNameLength)) + "…"
+    private static func balanceWindow(primary: TokenWindow?, secondary: TokenWindow?) -> TokenWindow? {
+        if let p = primary, p.isBalance { return p }
+        if let s = secondary, s.isBalance { return s }
+        return nil
     }
 }

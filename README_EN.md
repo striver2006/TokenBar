@@ -36,7 +36,7 @@ As AI-assisted programming tools like Claude Code, Cursor, and Continue gain wid
   - Automatically pops up the quota card panel after hovering over the tray icon (0.15s on macOS / 0.2s on Windows).
   - Click the icon to pin the panel open for continuous reference during coding sessions.
 - 📌 **Always-on Menu Bar Quota (macOS)**:
-  - Pick any enabled provider in General settings and its 5-hour / weekly remaining quota or account balance is shown right next to the menu bar icon (e.g. `Bailian 5H 62%`, `DeepSeek ¥12.34`) — no need to open the panel.
+  - Pick any enabled provider in General settings and its remaining quota is shown right next to the menu bar icon as bare values — e.g. `34%/67%` (5-hour / weekly left) or `45.09` (account balance). Provider name and reset countdown live in the hover tooltip.
 - 🌐 **Extensive AI Provider Ecosystem**:
   - **Global**: OpenAI (TPM/RPM rate limits), Anthropic (Claude Code 5-hour rolling window & weekly quota), Google Gemini / Google One (AI Studio / OAuth / Antigravity Credential Manager).
   - **Domestic**: DeepSeek, Volcengine Ark, Moonshot KIMI, Zhipu GLM, Aliyun Bailian (Token Plan).

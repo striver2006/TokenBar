@@ -385,13 +385,13 @@ public final class LocalizationManager: ObservableObject {
         case .menuBarQuotaTitle:
             return isZh ? "菜单栏显示额度" : "Show Quota in Menu Bar"
         case .menuBarQuotaSubtitle:
-            return isZh ? "在菜单栏图标旁显示指定厂商的剩余额度或余额" : "Display a provider's remaining quota or balance next to the menu bar icon"
+            return isZh ? "在菜单栏图标旁只显示数值，如 34%/67%（5小时/周期剩余）或 45.09（余额）" : "Show values only next to the menu bar icon, e.g. 34%/67% (5-hour / weekly left) or 45.09 (balance)"
         case .menuBarProviderLabel:
             return isZh ? "显示厂商" : "Provider"
         case .menuBarMetricLabel:
             return isZh ? "显示指标" : "Metric"
         case .menuBarMetricAuto:
-            return isZh ? "自动（余额优先）" : "Auto (balance first)"
+            return isZh ? "自动（余额优先，额度并列）" : "Auto (balance first, both quotas)"
         case .menuBarMetricFiveHour:
             return isZh ? "5 小时剩余额度" : "5-hour remaining"
         case .menuBarMetricWeekly:

@@ -426,19 +426,42 @@ final class TokenBarTests: XCTestCase {
             quota.fiveHourWindow = makePercentWindow(title: "5小时额度", used: 38.0)
             quota.weeklyWindow = makePercentWindow(title: "7天周期额度", used: 70.0)
 
+            // 只显示数值，不带厂商名；auto 下 5 小时与周期并列
+            let auto = MenuBarStatus.resolve(
+                settings: makeSettings(metric: .auto),
+                quotas: [.aliyunBailian: quota],
+                customQuotas: [:]
+            )
+            XCTAssertEqual(auto?.title, "62%/30%")
+            XCTAssertEqual(auto?.tooltip.hasPrefix("百炼 · "), true)
+
             let five = MenuBarStatus.resolve(
                 settings: makeSettings(metric: .fiveHour),
                 quotas: [.aliyunBailian: quota],
                 customQuotas: [:]
             )
-            XCTAssertEqual(five?.title, "百炼 5时 62%")
+            XCTAssertEqual(five?.title, "62%")
 
             let weekly = MenuBarStatus.resolve(
                 settings: makeSettings(metric: .weekly),
                 quotas: [.aliyunBailian: quota],
                 customQuotas: [:]
             )
-            XCTAssertEqual(weekly?.title, "百炼 周 30%")
+            XCTAssertEqual(weekly?.title, "30%")
+        }
+    }
+
+    func testMenuBarStatusShowsSingleWindowOnly() {
+        withChineseUI {
+            var quota = ProviderQuota(provider: .aliyunBailian, isAuthorized: true)
+            quota.fiveHourWindow = makePercentWindow(title: "5小时额度", used: 38.0)
+
+            let auto = MenuBarStatus.resolve(
+                settings: makeSettings(metric: .auto),
+                quotas: [.aliyunBailian: quota],
+                customQuotas: [:]
+            )
+            XCTAssertEqual(auto?.title, "62%")
         }
     }
 
@@ -449,7 +472,7 @@ final class TokenBarTests: XCTestCase {
             quota.fiveHourWindow = makePercentWindow(title: "TPM 速率配额", used: 10.0)
             quota.weeklyWindow = TokenWindow.balance(
                 title: "账户可用余额",
-                amount: 12.34,
+                amount: 45.09,
                 currency: "CNY",
                 warningThreshold: 10,
                 criticalThreshold: 5
@@ -458,7 +481,9 @@ final class TokenBarTests: XCTestCase {
             var settings = makeSettings(key: "deepseek", metric: .auto)
             settings.deepseekEnabled = true
             let status = MenuBarStatus.resolve(settings: settings, quotas: [.deepseek: quota], customQuotas: [:])
-            XCTAssertEqual(status?.title, "DeepSeek ¥12.34")
+            // 余额只显示数字，不带币种符号
+            XCTAssertEqual(status?.title, "45.09")
+            XCTAssertEqual(status?.tooltip, "DeepSeek · 账户可用余额 ¥45.09")
         }
     }
 
@@ -473,7 +498,7 @@ final class TokenBarTests: XCTestCase {
                 quotas: [.aliyunBailian: quota],
                 customQuotas: [:]
             )
-            XCTAssertEqual(status?.title, "百炼 --")
+            XCTAssertEqual(status?.title, "--")
             XCTAssertEqual(status?.tooltip, "百炼 · 未授权连接")
         }
     }
