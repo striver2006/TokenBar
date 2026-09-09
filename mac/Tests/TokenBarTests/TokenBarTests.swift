@@ -504,6 +504,104 @@ final class TokenBarTests: XCTestCase {
         }
     }
 
+    // MARK: - 弹窗锚点解析
+
+    /// 3440×1440 单屏，菜单栏高 25
+    private let anchorScreen = NSRect(x: 0, y: 0, width: 3440, height: 1440)
+    private let anchorVisible = NSRect(x: 0, y: 80, width: 3440, height: 1335)
+    /// 状态项按钮真实位置（缓存正确时）
+    private let anchorButton = NSRect(x: 2815, y: 1415, width: 109, height: 25)
+
+    private func resolveAnchor(
+        cached: NSRect?,
+        mouse: NSPoint,
+        screen: NSRect? = nil,
+        visible: NSRect? = nil
+    ) -> MenuBarAnchor.Resolution {
+        MenuBarAnchor.resolve(
+            cachedButtonRect: cached,
+            mouseLocation: mouse,
+            screenFrame: screen ?? anchorScreen,
+            visibleFrame: visible ?? anchorVisible
+        )
+    }
+
+    func testMenuBarAnchorUsesCachedRectWhenMouseInside() {
+        let result = resolveAnchor(cached: anchorButton, mouse: NSPoint(x: 2870, y: 1428))
+        XCTAssertEqual(result, MenuBarAnchor.Resolution(rect: anchorButton, isFallback: false))
+    }
+
+    func testMenuBarAnchorToleranceAllowsSlightlyOutside() {
+        // 越出 1pt（容差 2）仍信任缓存
+        let inside = resolveAnchor(cached: anchorButton, mouse: NSPoint(x: 2925, y: 1428))
+        XCTAssertFalse(inside.isFallback)
+        XCTAssertEqual(inside.rect, anchorButton)
+
+        // 越出 3pt 判定过期
+        let outside = resolveAnchor(cached: anchorButton, mouse: NSPoint(x: 2927, y: 1428))
+        XCTAssertTrue(outside.isFallback)
+    }
+
+    func testMenuBarAnchorFallsBackWhenCachedRectIsStale() {
+        // 复现线上故障：缓存停留在 1080p 布局，鼠标实际在 3440 宽屏的图标上
+        let stale = NSRect(x: 1815, y: 1055, width: 109, height: 25)
+        let result = resolveAnchor(cached: stale, mouse: NSPoint(x: 2870, y: 1428))
+        XCTAssertTrue(result.isFallback)
+        XCTAssertEqual(result.rect, NSRect(x: 2815.5, y: 1415, width: 109, height: 25))
+    }
+
+    func testMenuBarAnchorFallbackClampsToScreenEdges() {
+        let stale = NSRect(x: 100, y: 100, width: 109, height: 25)
+        let right = resolveAnchor(cached: stale, mouse: NSPoint(x: 3435, y: 1428))
+        XCTAssertTrue(right.isFallback)
+        XCTAssertEqual(right.rect.maxX, 3440)
+
+        let left = resolveAnchor(cached: stale, mouse: NSPoint(x: 5, y: 1428))
+        XCTAssertTrue(left.isFallback)
+        XCTAssertEqual(left.rect.minX, 0)
+    }
+
+    func testMenuBarAnchorFallbackUsesDefaultHeightWhenMenuBarHidden() {
+        let stale = NSRect(x: 100, y: 100, width: 109, height: 25)
+        // 菜单栏隐藏：visibleFrame 顶边与屏幕顶边齐平
+        let hiddenVisible = NSRect(x: 0, y: 80, width: 3440, height: 1360)
+        let result = MenuBarAnchor.resolve(
+            cachedButtonRect: stale,
+            mouseLocation: NSPoint(x: 2870, y: 1430),
+            screenFrame: anchorScreen,
+            visibleFrame: hiddenVisible,
+            defaultMenuBarHeight: 30
+        )
+        XCTAssertTrue(result.isFallback)
+        XCTAssertEqual(result.rect.height, 30)
+        XCTAssertEqual(result.rect.maxY, 1440)
+    }
+
+    func testMenuBarAnchorFallbackWithoutCachedRect() {
+        let result = resolveAnchor(cached: nil, mouse: NSPoint(x: 2870, y: 1428))
+        XCTAssertTrue(result.isFallback)
+        XCTAssertEqual(result.rect.width, MenuBarAnchor.defaultButtonWidth)
+        XCTAssertEqual(result.rect.midX, 2870)
+        XCTAssertEqual(result.rect.maxY, 1440)
+    }
+
+    func testMenuBarAnchorKeepsCachedWhenMouseOutsideMenuBarBand() {
+        // 从 Dock 重开：鼠标在屏幕中部，无法推导，沿用缓存
+        let stale = NSRect(x: 1815, y: 1055, width: 109, height: 25)
+        let result = resolveAnchor(cached: stale, mouse: NSPoint(x: 1720, y: 720))
+        XCTAssertEqual(result, MenuBarAnchor.Resolution(rect: stale, isFallback: false))
+    }
+
+    func testMenuBarAnchorSecondaryScreenOffset() {
+        // 副屏位于主屏右侧、抬高 200
+        let screen = NSRect(x: 3440, y: 200, width: 1920, height: 1080)
+        let visible = NSRect(x: 3440, y: 200, width: 1920, height: 1055)
+        let stale = NSRect(x: 100, y: 100, width: 80, height: 25)
+        let result = resolveAnchor(cached: stale, mouse: NSPoint(x: 5000, y: 1270), screen: screen, visible: visible)
+        XCTAssertTrue(result.isFallback)
+        XCTAssertEqual(result.rect, NSRect(x: 4960, y: 1255, width: 80, height: 25))
+    }
+
     func testMenuBarStatusHiddenWhenProviderDisabled() {
         var quota = ProviderQuota(provider: .aliyunBailian, isAuthorized: true)
         quota.fiveHourWindow = makePercentWindow(title: "5小时额度", used: 10.0)

@@ -63,6 +63,9 @@ macOS 客户端采用纯 Swift 打造，支持 macOS 13 (Ventura) 及以上系�
   - 支持“鼠标悬停快速展开”与“点击固定（Pin）”双重交互模型。
   - 绑定 `NSPopover`，将其根视图托管至 SwiftUI `TokenSummaryPopoverView`。
   - 订阅 `RefreshManager.objectWillChange`，按用户配置把某个厂商的剩余额度 / 余额渲染到 `NSStatusItem` 标题（文案由纯函数 `MenuBarStatus` 计算，便于单测）。
+  - 弹窗定位两层防护（macOS 26 起状态项托管在系统进程，本进程缓存的状态栏窗口坐标在显示器熄屏/唤醒后可能过期，会把 `NSPopover` 定位到屏幕中央）：
+    - 主动层：订阅 `NSApplication.didChangeScreenParametersNotification` 与 `NSWorkspace` 的唤醒通知，去抖后对 `NSStatusItem.length` 做“定长 → 变长”轻推，迫使状态项重新布局并同步坐标。
+    - 被动层：悬停/点击触发时由纯函数 `MenuBarAnchor` 用鼠标位置校验缓存的按钮矩形，过期则把 `NSPopover` 挂到一个透明、穿透点击的辅助 `NSPanel` 上，按鼠标位置贴菜单栏锚定；弹窗关闭后回收面板并再轻推一次。
 - **SwiftUI 视图组件**：
   - `TokenSummaryPopoverView`：主看板，包含标题区（TokenBar 及中英文副标题）、即时刷新动画按钮、滚动卡片列表以及状态栏。
   - `ProviderCardView` & `CustomProviderCardView`：展示各模型厂商卡片，双窗口（5 小时与每周）进度条及重置时间。

@@ -31,6 +31,19 @@ final class HoverTrackingView: NSView {
 public final class MenuBarController: NSObject {
     public static let shared = MenuBarController()
 
+    /// 弹窗锚点来源：`.pointer` 表示由悬停/点击触发（鼠标一定在图标上，可用于校验坐标），
+    /// `.cached` 表示从 Dock / Finder 重开等鼠标不在图标上的场景，只能信任缓存坐标。
+    public enum PopoverAnchorMode {
+        case pointer
+        case cached
+    }
+
+    /// 两层防护的独立开关，便于排查时单独关闭
+    private static let screenRelayoutEnabled = true
+    private static let anchorFallbackEnabled = true
+    /// 调试键：`defaults write com.tokenbar.mac TokenBarForceAnchorFallback -bool YES` 强制走兜底路径
+    private static let forceFallbackDefaultsKey = "TokenBarForceAnchorFallback"
+
     private var statusItem: NSStatusItem!
     private var popover: NSPopover!
     private var hoverTimer: Timer?
@@ -38,6 +51,13 @@ public final class MenuBarController: NSObject {
     private var settingsWindow: NSWindow?
     private var trackingView: HoverTrackingView?
     private var cancellables = Set<AnyCancellable>()
+
+    /// 缓存坐标过期时用于挂载 NSPopover 的透明辅助面板（懒创建、复用）
+    private var anchorPanel: NSPanel?
+    /// 本次弹窗实际使用的锚点屏幕矩形；悬停期间的鼠标命中判断只认它
+    private var currentAnchorRect: NSRect?
+    private var lastShowUsedFallback = false
+    private var relayoutWorkItem: DispatchWorkItem?
 
     public override init() {
         super.init()
@@ -86,6 +106,7 @@ public final class MenuBarController: NSObject {
         popover.contentSize = NSSize(width: 320, height: 420)
         popover.behavior = .transient
         popover.animates = true
+        popover.delegate = self
 
         let popoverContent = TokenSummaryPopoverView(
             refreshManager: .shared,
@@ -116,6 +137,10 @@ public final class MenuBarController: NSObject {
                 self?.handleMouseMoved(event)
             }
             return event
+        }
+
+        if Self.screenRelayoutEnabled {
+            observeScreenChanges()
         }
     }
 
@@ -177,21 +202,15 @@ public final class MenuBarController: NSObject {
     private func handleMouseMoved(_ event: NSEvent) {
         guard popover.isShown && !isPinnedByClick else { return }
 
-        if let button = statusItem.button, let window = button.window {
-            let buttonScreenRect = window.convertToScreen(button.convert(button.bounds, to: nil))
-            let mouseLoc = NSEvent.mouseLocation
-            if buttonScreenRect.contains(mouseLoc) {
-                hoverTimer?.invalidate()
-                return
-            }
+        let mouseLoc = NSEvent.mouseLocation
+        if let anchorRect = currentAnchorRect ?? cachedButtonScreenRect(), anchorRect.contains(mouseLoc) {
+            hoverTimer?.invalidate()
+            return
+        }
 
-            if let popWindow = popover.contentViewController?.view.window {
-                let popRect = popWindow.frame
-                if popRect.contains(mouseLoc) {
-                    hoverTimer?.invalidate()
-                    return
-                }
-            }
+        if let popWindow = popover.contentViewController?.view.window, popWindow.frame.contains(mouseLoc) {
+            hoverTimer?.invalidate()
+            return
         }
     }
 
@@ -216,10 +235,89 @@ public final class MenuBarController: NSObject {
         }
     }
 
-    public func showPopover() {
+    // MARK: - 弹窗定位
+
+    /// 本进程缓存的状态项按钮屏幕矩形。macOS 26 起状态项托管在系统进程，
+    /// 显示器熄屏/唤醒后这份缓存可能过期，调用方需自行校验。
+    private func cachedButtonScreenRect() -> NSRect? {
+        guard let button = statusItem?.button, let window = button.window else { return nil }
+        return window.convertToScreen(button.convert(button.bounds, to: nil))
+    }
+
+    public func showPopover(anchor: PopoverAnchorMode = .pointer) {
         guard let button = statusItem.button else { return }
-        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        let cachedRect = cachedButtonScreenRect()
+
+        var resolution = MenuBarAnchor.Resolution(rect: cachedRect ?? .zero, isFallback: false)
+        if Self.anchorFallbackEnabled, anchor == .pointer {
+            let mouse = NSEvent.mouseLocation
+            // accessory 应用的 NSScreen.main 不可靠，按鼠标所在屏幕取
+            let screen = NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.screens.first
+            if let screen {
+                resolution = MenuBarAnchor.resolve(
+                    cachedButtonRect: cachedRect,
+                    mouseLocation: mouse,
+                    screenFrame: screen.frame,
+                    visibleFrame: screen.visibleFrame,
+                    defaultMenuBarHeight: NSStatusBar.system.thickness
+                )
+                if !resolution.isFallback, UserDefaults.standard.bool(forKey: Self.forceFallbackDefaultsKey) {
+                    // 调试：强制走兜底路径，用一个不含鼠标的矩形触发推导
+                    resolution = MenuBarAnchor.resolve(
+                        cachedButtonRect: NSRect(x: -10_000, y: -10_000, width: cachedRect?.width ?? 0, height: 1),
+                        mouseLocation: mouse,
+                        screenFrame: screen.frame,
+                        visibleFrame: screen.visibleFrame,
+                        defaultMenuBarHeight: NSStatusBar.system.thickness
+                    )
+                }
+            }
+        }
+        currentAnchorRect = resolution.rect
+        lastShowUsedFallback = resolution.isFallback
+
+        if resolution.isFallback, let anchorView = prepareAnchorPanel(frame: resolution.rect) {
+            NSLog("[MenuBar] 状态项缓存坐标过期 cached=%@，改用鼠标位置锚定 %@",
+                  NSStringFromRect(cachedRect ?? .zero), NSStringFromRect(resolution.rect))
+            popover.show(relativeTo: anchorView.bounds, of: anchorView, preferredEdge: .minY)
+        } else {
+            // 正常路径不留辅助面板
+            anchorPanel?.orderOut(nil)
+            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        }
         popover.contentViewController?.view.window?.makeKey()
+    }
+
+    /// 透明、穿透点击、贴在菜单栏上的辅助面板，仅在缓存坐标不可信时作为 NSPopover 的定位视图。
+    private func prepareAnchorPanel(frame: NSRect) -> NSView? {
+        let panel: NSPanel
+        if let existing = anchorPanel {
+            panel = existing
+        } else {
+            panel = NSPanel(
+                contentRect: frame,
+                styleMask: [.borderless, .nonactivatingPanel],
+                backing: .buffered,
+                defer: false
+            )
+            panel.isOpaque = false
+            panel.backgroundColor = .clear
+            panel.hasShadow = false
+            // 面板叠在状态项正上方，点击必须穿透到真正的状态按钮
+            panel.ignoresMouseEvents = true
+            panel.level = .statusBar
+            panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
+            // NSPanel 默认失活即隐藏，那样挂在它上面的弹窗会一起消失
+            panel.hidesOnDeactivate = false
+            panel.isReleasedWhenClosed = false
+            panel.isExcludedFromWindowsMenu = true
+            panel.contentView = NSView(frame: NSRect(origin: .zero, size: frame.size))
+            anchorPanel = panel
+        }
+        panel.setFrame(frame, display: false)
+        // 必须先可见，NSPopover 才能把自己挂成它的子窗口；accessory 应用用 orderFront(nil) 可能不生效
+        panel.orderFrontRegardless()
+        return panel.contentView
     }
 
     public func closePopover() {
@@ -232,11 +330,55 @@ public final class MenuBarController: NSObject {
             closePopover()
         } else {
             isPinnedByClick = true
-            showPopover()
+            // 从 Dock / Finder 重开，鼠标不在图标上，只能信任缓存坐标
+            showPopover(anchor: .cached)
             if !popover.isShown {
                 openSettings(tab: .openAI)
             }
         }
+    }
+
+    // MARK: - 状态项重新布局
+
+    /// 显示器参数变化 / 唤醒后，托管在系统进程里的状态项窗口可能已被移动，
+    /// 而本进程的 frame 副本只在状态项重新布局时才同步，这里主动轻推一次。
+    private func observeScreenChanges() {
+        NotificationCenter.default
+            .publisher(for: NSApplication.didChangeScreenParametersNotification)
+            .sink { [weak self] _ in
+                Task { @MainActor in self?.scheduleStatusItemRelayout() }
+            }
+            .store(in: &cancellables)
+
+        let workspaceCenter = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.screensDidWakeNotification, NSWorkspace.didWakeNotification] {
+            workspaceCenter
+                .publisher(for: name)
+                .sink { [weak self] _ in
+                    Task { @MainActor in self?.scheduleStatusItemRelayout() }
+                }
+                .store(in: &cancellables)
+        }
+    }
+
+    /// 显示器重配置期间通知会连发多次，合并到最后一次之后再动布局
+    private func scheduleStatusItemRelayout(delay: TimeInterval = 1.0) {
+        relayoutWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            self?.nudgeStatusItemLayout()
+        }
+        relayoutWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
+    }
+
+    /// 用"定长 → 变长"轻推状态项，迫使 NSStatusBar 重新布局并同步托管窗口 frame。
+    /// 净宽度不变，因此不产生可见跳动；弹窗打开时跳过（布局变化会让 NSPopover 重定位）。
+    private func nudgeStatusItemLayout() {
+        guard let statusItem = statusItem, let button = statusItem.button, !popover.isShown else { return }
+        let width = button.bounds.width
+        guard width > 0 else { return }
+        statusItem.length = width
+        statusItem.length = NSStatusItem.variableLength
     }
 
     private func showContextMenu() {
@@ -309,5 +451,22 @@ public final class MenuBarController: NSObject {
         self.settingsWindow = window
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+}
+
+// MARK: - NSPopoverDelegate
+
+extension MenuBarController: NSPopoverDelegate {
+    public func popoverDidClose(_ notification: Notification) {
+        // 弹窗是辅助面板的子窗口，只能在它关闭之后再回收面板
+        anchorPanel?.orderOut(nil)
+        currentAnchorRect = nil
+        if lastShowUsedFallback {
+            lastShowUsedFallback = false
+            // 刚刚证实缓存坐标过期，趁弹窗关闭轻推一次，争取下次回到正常路径
+            if Self.screenRelayoutEnabled {
+                scheduleStatusItemRelayout(delay: 0.3)
+            }
+        }
     }
 }
