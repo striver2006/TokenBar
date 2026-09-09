@@ -112,6 +112,16 @@ macOS 客户端采用纯 Swift 打造，支持 macOS 13 (Ventura) 及以上系�
 
    同理，`resolveCredentials` / `ResolveCredentials` 的 `secretStore` 参数**没有默认值也
    不回退**，必须显式传入预取好的内存快照——默认值会把最危险的选项做成打字最少的选项。
+
+   **这条铁律同样管住 `/usr/bin/security` 子进程路径。** `GeminiService.readKeychainToken`
+   读的是 Antigravity 用 go-keyring 写入的条目（service `gemini` / account `antigravity`），
+   条目的 ACL 归 Antigravity，TokenBar 不在白名单里——**给自己固定签名身份对它无效**，
+   每次读取都可能弹一次系统授权框，而授权框弹出时子进程会无限期挂着等用户。
+   `SecretStore` 的 `assertOffMain` 护栏拦不到这条路（它只覆盖 Security framework API），
+   所以这里自带三样东西：后台队列执行 + 独立的主线程断言、3 秒 SIGTERM / 再 2 秒 SIGKILL
+   看门狗、以及 5 分钟成功缓存 + 30 秒失败冷却。缓存和冷却不是性能优化——没有它们，
+   刷新间隔设成 1 分钟就是每分钟弹一次授权框。决策抽在 `KeychainProbeDecision.resolve`
+   里，同样有单测守着。
 3. **`Process` 子进程要先读 pipe 再 `waitUntilExit`**，并配超时 kill 与
    `standardInput = FileHandle.nullDevice`。反序会在输出超过 64KB pipe 缓冲区时形成
    父子互等死锁；`withTimeout` 救不了子进程（不响应 Task 取消），必须自己兜。
