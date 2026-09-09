@@ -66,3 +66,6 @@ TestResults/
 *.trx
 # Swift PM 工作目录（Package.resolved 位于 mac/ 根，正常提交）
 .swiftpm/
+
+# 本地代码签名身份（每台机器各自配置，不进仓库；模板见 *.example）
+signing.local.env

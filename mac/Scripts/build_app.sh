@@ -60,13 +60,24 @@ echo -n "APPL????" > "$APP_BUNDLE/Contents/PkgInfo"
 # 冻结整个额度刷新流程（详见 Services/SecretStore.swift 的 prefetch 注释）。
 #
 # 用固定的开发者证书签名后，ACL 按签名身份 + bundle id 匹配，重新编译不再反复授权。
-# 用 SHA-1 哈希而不是证书名精确指定：本机有一张同名但已吊销的证书
-# （CSSMERR_TP_CERT_REVOKED），按名字签会撞上它。
-# 可用 CODESIGN_IDENTITY 环境变量覆盖；设成 "-" 可退回 ad-hoc。
-CODESIGN_IDENTITY="${CODESIGN_IDENTITY:-6A23BDDF68FFAB1F4512525597A063684EAE0B4D}"
+# 建议用 SHA-1 哈希而不是证书名指定：同名证书可能有多张（例如已吊销的旧证书，
+# 按名字签会撞上它报 CSSMERR_TP_CERT_REVOKED）。
+#
+# 签名身份是每台机器各自的本地配置，不进仓库。取值优先级：
+#   1. CODESIGN_IDENTITY 环境变量
+#   2. Scripts/signing.local.env（未跟踪，见同目录 signing.local.env.example）
+#   3. 都没有则退回 ad-hoc
+SIGNING_ENV="$PROJECT_DIR/Scripts/signing.local.env"
+if [ -z "$CODESIGN_IDENTITY" ] && [ -f "$SIGNING_ENV" ]; then
+    # shellcheck source=/dev/null
+    . "$SIGNING_ENV"
+fi
+CODESIGN_IDENTITY="${CODESIGN_IDENTITY:--}"
 
 if [ "$CODESIGN_IDENTITY" = "-" ]; then
     echo "==> 执行 ad-hoc 签名（钥匙串会反复要求授权）..."
+    echo "    如需固定签名身份：cp Scripts/signing.local.env.example Scripts/signing.local.env 并填入" >&2
+    echo "    security find-identity -v -p codesigning 里的 SHA-1 哈希" >&2
     codesign --force --deep --sign - "$APP_BUNDLE"
 elif security find-identity -v -p codesigning | grep -q "$CODESIGN_IDENTITY"; then
     echo "==> 使用开发者证书签名: $CODESIGN_IDENTITY"

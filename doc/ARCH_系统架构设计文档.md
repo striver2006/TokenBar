@@ -123,12 +123,27 @@ log show --last 1h --predicate 'subsystem == "com.tokenbar.mac"' --info --style 
 
 #### 2.2.3 签名与钥匙串 ACL
 
-`Scripts/build_app.sh` 默认用固定的 Apple Development 证书签名（SHA-1 哈希精确指定，
-避开本机同名但已吊销的那张），可用 `CODESIGN_IDENTITY` 覆盖，设 `-` 退回 ad-hoc。
+`Scripts/build_app.sh` 推荐用固定的 Apple Development 证书签名。**签名身份属于每台
+机器的本地配置，不进仓库**，取值优先级为：
 
-原因：ad-hoc 签名没有稳定的 designated requirement，钥匙串 ACL 只能按 cdhash 匹配，
-而 cdhash 每次重新编译都变——于是每次构建后首次读钥匙串都会弹授权框，而这个框卡在
-主线程上就会冻结整个刷新流程。固定证书签名后 requirement 变成
+1. `CODESIGN_IDENTITY` 环境变量；
+2. `mac/Scripts/signing.local.env`（已 gitignore，模板见同目录 `signing.local.env.example`）；
+3. 都没有则退回 ad-hoc（脚本会打印如何配置的提示）。
+
+首次 clone 后配置一次即可：
+
+```bash
+cd mac/Scripts
+cp signing.local.env.example signing.local.env
+security find-identity -v -p codesigning   # 取行首 40 位 SHA-1 填进去
+```
+
+用 SHA-1 哈希而非证书名指定：同名证书可能有多张（例如已吊销的旧证书，
+按名字签会撞上它报 `CSSMERR_TP_CERT_REVOKED`）。
+
+为什么不用 ad-hoc：ad-hoc 签名没有稳定的 designated requirement，钥匙串 ACL 只能按
+cdhash 匹配，而 cdhash 每次重新编译都变——于是每次构建后首次读钥匙串都会弹授权框，
+而这个框卡在主线程上就会冻结整个刷新流程。固定证书签名后 requirement 变成
 `identifier "com.tokenbar.mac" and ... certificate leaf[subject.CN] = "..."`，
 重新编译不再反复授权。切换签名身份后第一次启动仍会问一次，点「始终允许」即可。
 
