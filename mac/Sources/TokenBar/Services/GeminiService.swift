@@ -114,6 +114,18 @@ public final class GeminiService {
     private var cachedAccessToken: String?
     private var cachedAccessTokenExpiry = Date.distantPast
 
+    /// 上一次令牌刷新整体失败的时刻。候选逐个试是个昂贵操作（最坏 3 次网络往返），
+    /// 凭证真的失效时每轮刷新都重试一遍纯属浪费，冷却期内直接放弃。
+    /// 与 AliyunBailianService.TokenCoordinator 的 failureCooldown 是同一套思路。
+    private var lastTokenRefreshFailure: Date?
+    private static let tokenRefreshCooldown: TimeInterval = 120
+    /// 单个候选的请求超时；候选循环的总预算见 refreshGoogleAccessToken
+    private static let tokenRequestTimeout: TimeInterval = 8
+    private static let tokenRefreshBudget: TimeInterval = 20
+    /// 最多试几个 client 候选。曾经是全部 8 个 × 默认 60s 超时 = 单次刷新可以挂 8 分钟，
+    /// 把 RefreshManager 的刷新闸门占死，导致定时刷新整体停摆。
+    private static let tokenClientCandidateLimit = 3
+
     private struct QuotaAuthError: Error {}
 
     private var isZh: Bool { LocalizationManager.shared.effectiveLanguage == "zh" }
@@ -252,9 +264,24 @@ public final class GeminiService {
     public func refreshGoogleAccessToken(refreshToken: String) async -> String? {
         guard let tokenUrl = URL(string: "https://oauth2.googleapis.com/token") else { return nil }
 
-        for client in getAntigravityClientCandidates() {
+        if let last = lastTokenRefreshFailure,
+           Date().timeIntervalSince(last) < Self.tokenRefreshCooldown {
+            Log.provider.info("gemini token 刷新处于冷却期，跳过本轮")
+            return nil
+        }
+
+        // 整个候选循环的硬预算：任何一个候选慢下来都不能让整轮刷新失控。
+        let deadline = Date().addingTimeInterval(Self.tokenRefreshBudget)
+
+        for client in getAntigravityClientCandidates().prefix(Self.tokenClientCandidateLimit) {
+            if Date() >= deadline {
+                Log.provider.error("gemini token 刷新超出 \(Self.tokenRefreshBudget, format: .fixed(precision: 0))s 预算，放弃剩余候选")
+                break
+            }
+
             var request = URLRequest(url: tokenUrl)
             request.httpMethod = "POST"
+            request.timeoutInterval = Self.tokenRequestTimeout
             request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
 
             let params = [
@@ -268,7 +295,7 @@ public final class GeminiService {
             request.httpBody = bodyString.data(using: .utf8)
 
             do {
-                let (data, response) = try await URLSession.shared.data(for: request)
+                let (data, response) = try await HTTPClient.data(for: request)
                 guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { continue }
                 if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                    let newAccessToken = json["access_token"] as? String {
@@ -278,6 +305,7 @@ public final class GeminiService {
                     antigravityClientCandidates?.insert(client, at: 0)
                     cachedAccessToken = newAccessToken
                     cachedAccessTokenExpiry = Date().addingTimeInterval(max(60, expiresIn - 120))
+                    lastTokenRefreshFailure = nil
                     // Update local jetski cache if possible
                     updateLocalAccessToken(newAccessToken)
                     return newAccessToken
@@ -286,6 +314,8 @@ public final class GeminiService {
                 continue
             }
         }
+        lastTokenRefreshFailure = Date()
+        Log.provider.error("gemini token 刷新失败：所有候选都没能换到 access token")
         return nil
     }
 
@@ -398,7 +428,7 @@ public final class GeminiService {
             req.timeoutInterval = 15
 
             do {
-                let (data, resp) = try await URLSession.shared.data(for: req)
+                let (data, resp) = try await HTTPClient.data(for: req)
                 guard let http = resp as? HTTPURLResponse else { continue }
                 if http.statusCode == 401 || http.statusCode == 403 {
                     throw QuotaAuthError()
@@ -505,7 +535,7 @@ public final class GeminiService {
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.timeoutInterval = 6
 
-        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+        guard let (data, resp) = try? await HTTPClient.data(for: req),
               let http = resp as? HTTPURLResponse, http.statusCode == 200,
               let userJson = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return nil
@@ -546,7 +576,7 @@ public final class GeminiService {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.timeoutInterval = 12
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await HTTPClient.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
         }

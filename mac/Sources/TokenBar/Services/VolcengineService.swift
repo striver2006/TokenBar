@@ -35,7 +35,7 @@ public final class VolcengineService: @unchecked Sendable {
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         req.timeoutInterval = 10
 
-        let (data, response) = try await URLSession.shared.data(for: req)
+        let (data, response) = try await HTTPClient.data(for: req)
         guard let httpResp = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
         }

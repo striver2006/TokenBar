@@ -34,7 +34,7 @@ public final class OpenRouterService: @unchecked Sendable {
             var req = URLRequest(url: url)
             req.setValue("Bearer \(cleanKey)", forHTTPHeaderField: "Authorization")
             req.timeoutInterval = 10
-            if let (data, resp) = try? await URLSession.shared.data(for: req),
+            if let (data, resp) = try? await HTTPClient.data(for: req),
                let http = resp as? HTTPURLResponse {
                 if http.statusCode == 401 {
                     creditsUnauthorized = true
@@ -59,7 +59,7 @@ public final class OpenRouterService: @unchecked Sendable {
             var req = URLRequest(url: url)
             req.setValue("Bearer \(cleanKey)", forHTTPHeaderField: "Authorization")
             req.timeoutInterval = 10
-            if let (data, resp) = try? await URLSession.shared.data(for: req),
+            if let (data, resp) = try? await HTTPClient.data(for: req),
                let http = resp as? HTTPURLResponse {
                 if http.statusCode == 401 || http.statusCode == 403 {
                     keyAuthFailed = true

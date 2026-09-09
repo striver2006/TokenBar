@@ -13,10 +13,14 @@ public enum MenuBarStatus {
     public struct Text: Equatable {
         public let title: String
         public let tooltip: String
+        /// 数据已明显超过刷新周期没更新。菜单栏据此把数值变灰，
+        /// 避免"第一轮成功之后，之后每轮都失败但界面照样显示旧百分比"。
+        public let isStale: Bool
 
-        public init(title: String, tooltip: String) {
+        public init(title: String, tooltip: String, isStale: Bool = false) {
             self.title = title
             self.tooltip = tooltip
+            self.isStale = isStale
         }
     }
 
@@ -74,7 +78,8 @@ public enum MenuBarStatus {
     public static func resolve(
         settings: AppSettings,
         quotas: [ProviderType: ProviderQuota],
-        customQuotas: [UUID: CustomProviderQuota]
+        customQuotas: [UUID: CustomProviderQuota],
+        now: Date = Date()
     ) -> Text? {
         guard settings.menuBarQuotaEnabled else { return nil }
 
@@ -87,6 +92,7 @@ public enum MenuBarStatus {
         let balance: TokenWindow?
         let isAuthorized: Bool
         let errorMessage: String?
+        let lastUpdated: Date?
 
         if let type = ProviderOrdering.parseProviderType(key) {
             guard settings.isEnabled(type), let quota = quotas[type] else { return nil }
@@ -96,6 +102,7 @@ public enum MenuBarStatus {
             balance = quota.balanceWindow
             isAuthorized = quota.isAuthorized
             errorMessage = quota.errorMessage
+            lastUpdated = quota.lastUpdated
         } else if let id = ProviderOrdering.parseCustomKey(key),
                   let quota = customQuotas[id],
                   settings.customProviders.first(where: { $0.id == id })?.isEnabled == true {
@@ -105,6 +112,7 @@ public enum MenuBarStatus {
             balance = nil
             isAuthorized = quota.isAuthorized
             errorMessage = quota.errorMessage
+            lastUpdated = quota.lastUpdated
         } else {
             // 所选厂商已被删除或停用
             return nil
@@ -116,11 +124,29 @@ public enum MenuBarStatus {
             return Text(title: placeholder, tooltip: "\(name) · \(hint)")
         }
 
+        // 容忍 2.5 个刷新周期（至少 15 分钟）；超过就认为这份数值不再可信。
+        let staleAfter = max(Double(settings.refreshIntervalMinutes) * 60 * 2.5, 900)
+        let isStale = lastUpdated.map { now.timeIntervalSince($0) > staleAfter } ?? false
+
+        var tooltipParts = [name] + windows.map(detailText)
+        if isStale {
+            let stamp = lastUpdated.map { staleTimeFormatter.string(from: $0) } ?? "?"
+            tooltipParts.append("\(I18n(.dataStale))（\(stamp)）")
+        }
+
+        // title 保持不变：加符号会让菜单栏宽度来回抖动，陈旧状态改用颜色表达。
         return Text(
             title: windows.map(valueText).joined(separator: "/"),
-            tooltip: ([name] + windows.map(detailText)).joined(separator: " · ")
+            tooltip: tooltipParts.joined(separator: " · "),
+            isStale: isStale
         )
     }
+
+    private static let staleTimeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        return f
+    }()
 
     private static func balanceWindow(primary: TokenWindow?, secondary: TokenWindow?) -> TokenWindow? {
         if let p = primary, p.isBalance { return p }

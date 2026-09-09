@@ -225,10 +225,25 @@ public final class MenuBarController: NSObject {
         )
 
         if let status = status {
-            button.title = " " + status.title
+            if status.isStale {
+                // 数据明显过期时变灰，宽度不变、不抖动。
+                button.attributedTitle = NSAttributedString(
+                    string: " " + status.title,
+                    attributes: [
+                        .foregroundColor: NSColor.tertiaryLabelColor,
+                        .font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+                    ]
+                )
+            } else {
+                // attributedTitle 与 title 在 NSButton 上是两套状态，
+                // 切回正常态必须显式清空前者，否则会一直发灰。
+                button.attributedTitle = NSAttributedString(string: "")
+                button.title = " " + status.title
+            }
             button.imagePosition = .imageLeading
             button.toolTip = status.tooltip
         } else {
+            button.attributedTitle = NSAttributedString(string: "")
             button.title = ""
             button.imagePosition = .imageOnly
             button.toolTip = "TokenBar - \(I18n(.subtitle))"
@@ -277,8 +292,7 @@ public final class MenuBarController: NSObject {
         lastShowUsedFallback = resolution.isFallback
 
         if resolution.isFallback, let anchorView = prepareAnchorPanel(frame: resolution.rect) {
-            NSLog("[MenuBar] 状态项缓存坐标过期 cached=%@，改用鼠标位置锚定 %@",
-                  NSStringFromRect(cachedRect ?? .zero), NSStringFromRect(resolution.rect))
+            Log.lifecycle.debug("状态项缓存坐标过期，改用鼠标位置锚定：cached=\(NSStringFromRect(cachedRect ?? .zero)) actual=\(NSStringFromRect(resolution.rect))")
             popover.show(relativeTo: anchorView.bounds, of: anchorView, preferredEdge: .minY)
         } else {
             // 正常路径不留辅助面板

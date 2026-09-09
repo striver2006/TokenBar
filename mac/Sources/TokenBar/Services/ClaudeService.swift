@@ -184,8 +184,9 @@ public final class ClaudeService {
         request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
         request.setValue("claude-code/2.1.263", forHTTPHeaderField: "User-Agent")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.timeoutInterval = 12
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await HTTPClient.data(for: request)
 
         guard let httpResp = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
@@ -306,7 +307,7 @@ public final class ClaudeService {
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         req.timeoutInterval = 10
 
-        let (data, response) = try await URLSession.shared.data(for: req)
+        let (data, response) = try await HTTPClient.data(for: req)
         guard let httpResp = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
         }

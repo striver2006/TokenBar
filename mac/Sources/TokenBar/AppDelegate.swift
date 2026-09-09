@@ -22,6 +22,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         // Setup the Menu Bar status item and popover
         MenuBarController.shared.setup()
 
+        Log.lifecycle.notice("TokenBar 启动，refreshInterval=\(RefreshManager.shared.settings.refreshIntervalMinutes, privacy: .public)min")
+
         LocalizationManager.shared.$currentLanguage
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in

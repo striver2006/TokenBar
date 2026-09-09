@@ -74,8 +74,63 @@ macOS 客户端采用纯 Swift 打造，支持 macOS 13 (Ventura) 及以上系�
 ### 2.2 状态与并发管理 (State & Concurrency Layer)
 - **`RefreshManager`**：
   - 单例对象，遵循 `ObservableObject` 协议，向所有视图广播额度变更。
-  - 采用 Swift 结构化并发 `withTaskGroup`，当触发全量刷新时，各开启的厂商并行拉取，互不阻塞。
-  - 定时调度器：使用 `Timer` 按照用户设定周期（1~60 分钟）静默触发。
+  - 采用 Swift 结构化并发 `withTaskGroup`，当触发全量刷新时，各开启的厂商并行拉取。
+  - 定时调度器：使用 `Timer` 按照用户设定周期（1~60 分钟）静默触发，注册到 `.common`
+    runloop mode，避免右键菜单/拖拽这类 `.eventTracking` 交互期间被暂停。
+  - **定时器在 `init()` 中同步创建，先于首刷**。曾经是"首刷完成后才建定时器"，首刷一旦
+    挂起就永远不会有自动刷新。
+  - **刷新闸门带看门狗**：`isRefreshing` 配 `refreshStartedAt` + `refreshGeneration`，
+    上一轮超过 90 秒未结束时新一轮强制抢占。以前只是 `guard !isRefreshing else { return }`，
+    一轮卡死就会让之后每一次 tick 和手动刷新都被静默丢弃。
+  - **单厂商超时隔离**：每个 provider 经 `withTimeout`（`TaskTimeout.swift`）套独立预算
+    （百炼 35s / Gemini 30s / 其余 25s），单个厂商挂起不拖垮整轮。
+
+#### 2.2.1 刷新链路的三条硬约束
+
+这三条都来自真实故障（自动刷新连续 4 小时停摆），改动时不要回退：
+
+1. **所有网络请求走 `HTTPClient`，不用 `URLSession.shared`**。shared 的
+   `timeoutIntervalForResource` 默认 **7 天**，而 `URLRequest.timeoutInterval` 只是
+   "不活动超时"——代理环境下 TCP 停在 ESTABLISHED、响应慢速滴流时它可能永不触发。
+   `HTTPClient` 统一 12s 请求 / 30s 端到端上限，并禁用 URLCache（靠响应头取额度的厂商
+   命中缓存会连响应头一起回放旧值）。
+2. **钥匙串访问必须在后台线程**（`KeychainSecretStore.prefetch`）。`SecItemCopyMatching`
+   是同步阻塞调用，经 mach IPC 等 securityd；签名变化触发的授权框、钥匙串锁定、securityd
+   繁忙都会让它久等。一旦发生在 MainActor 上，主线程冻结会让**所有** provider 的刷新任务
+   一起停摆（它们全都跑在 MainActor 上），连超时哨兵恢复执行都排不上队。
+3. **`Process` 子进程要先读 pipe 再 `waitUntilExit`**，并配超时 kill 与
+   `standardInput = FileHandle.nullDevice`。反序会在输出超过 64KB pipe 缓冲区时形成
+   父子互等死锁；`withTimeout` 救不了子进程（不响应 Task 取消），必须自己兜。
+
+#### 2.2.2 可观测性与排查
+
+`Log.swift` 统一日志出口，subsystem `com.tokenbar.mac`，category 分
+`timer` / `refresh` / `provider` / `net` / `lifecycle`。级别按落盘规则选：
+`.notice` / `.error` 持久化（定时器 fire、轮次起止、厂商超时、闸门抢占），
+`.info` / `.debug` 只驻内存（单厂商耗时、排队时间、超时哨兵触发时刻）。
+
+```bash
+# 实时观察定时器是否真的按周期 fire
+log stream --predicate 'subsystem == "com.tokenbar.mac" AND category IN {"timer","refresh"}' --style compact
+
+# 事后回溯（notice/error 已落盘）
+log show --last 1h --predicate 'subsystem == "com.tokenbar.mac"' --info --style compact
+```
+
+排查"更新不及时"时，**先看 `timer fired，距上次 xxxs` 是否稳定在设定周期**，再看
+`round end` 的耗时与 `provider=xxx TIMEOUT`。若某厂商耗时异常而主线程栈（`sample <pid>`）
+显示空闲，怀疑 MainActor 上的同步阻塞（钥匙串、子进程）。
+
+#### 2.2.3 签名与钥匙串 ACL
+
+`Scripts/build_app.sh` 默认用固定的 Apple Development 证书签名（SHA-1 哈希精确指定，
+避开本机同名但已吊销的那张），可用 `CODESIGN_IDENTITY` 覆盖，设 `-` 退回 ad-hoc。
+
+原因：ad-hoc 签名没有稳定的 designated requirement，钥匙串 ACL 只能按 cdhash 匹配，
+而 cdhash 每次重新编译都变——于是每次构建后首次读钥匙串都会弹授权框，而这个框卡在
+主线程上就会冻结整个刷新流程。固定证书签名后 requirement 变成
+`identifier "com.tokenbar.mac" and ... certificate leaf[subject.CN] = "..."`，
+重新编译不再反复授权。切换签名身份后第一次启动仍会问一次，点「始终允许」即可。
 
 ### 2.3 国际化与本地化架构 (`I18n.swift`)
 - **设计策略**：

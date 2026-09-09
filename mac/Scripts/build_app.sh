@@ -52,8 +52,30 @@ fi
 # 复制 PkgInfo
 echo -n "APPL????" > "$APP_BUNDLE/Contents/PkgInfo"
 
-echo "==> 执行本地签名..."
-codesign --force --deep --sign - "$APP_BUNDLE"
+# 签名身份。
+#
+# 为什么不用 ad-hoc（`--sign -`）：ad-hoc 签名没有稳定的 designated requirement，
+# 钥匙串 ACL 只能按 cdhash 匹配，而 cdhash 每次重新编译都会变 —— 于是每次构建后
+# 首次读取钥匙串都会弹一次「TokenBar 想访问钥匙串」。这个授权框卡在主线程上时会
+# 冻结整个额度刷新流程（详见 Services/SecretStore.swift 的 prefetch 注释）。
+#
+# 用固定的开发者证书签名后，ACL 按签名身份 + bundle id 匹配，重新编译不再反复授权。
+# 用 SHA-1 哈希而不是证书名精确指定：本机有一张同名但已吊销的证书
+# （CSSMERR_TP_CERT_REVOKED），按名字签会撞上它。
+# 可用 CODESIGN_IDENTITY 环境变量覆盖；设成 "-" 可退回 ad-hoc。
+CODESIGN_IDENTITY="${CODESIGN_IDENTITY:-6A23BDDF68FFAB1F4512525597A063684EAE0B4D}"
+
+if [ "$CODESIGN_IDENTITY" = "-" ]; then
+    echo "==> 执行 ad-hoc 签名（钥匙串会反复要求授权）..."
+    codesign --force --deep --sign - "$APP_BUNDLE"
+elif security find-identity -v -p codesigning | grep -q "$CODESIGN_IDENTITY"; then
+    echo "==> 使用开发者证书签名: $CODESIGN_IDENTITY"
+    codesign --force --deep --sign "$CODESIGN_IDENTITY" "$APP_BUNDLE"
+else
+    echo "警告：签名身份 $CODESIGN_IDENTITY 不可用，退回 ad-hoc 签名" >&2
+    echo "      （钥匙串将反复要求授权；用 security find-identity -v -p codesigning 查看可用身份）" >&2
+    codesign --force --deep --sign - "$APP_BUNDLE"
+fi
 
 echo "==> 构建完成！产物路径: $APP_BUNDLE"
 echo "可以通过以下命令启动测试："

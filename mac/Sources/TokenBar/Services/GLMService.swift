@@ -43,9 +43,10 @@ public final class GLMService {
             openAiReq.httpMethod = "GET"
             openAiReq.setValue("Bearer \(cleanKey)", forHTTPHeaderField: "Authorization")
             openAiReq.setValue("application/json", forHTTPHeaderField: "Accept")
+            openAiReq.timeoutInterval = 12
 
             do {
-                let (openAiData, openAiResp) = try await URLSession.shared.data(for: openAiReq)
+                let (openAiData, openAiResp) = try await HTTPClient.data(for: openAiReq)
                 if let httpResp = openAiResp as? HTTPURLResponse {
                     if httpResp.statusCode == 401 || httpResp.statusCode == 403 {
                         throw NSError(domain: "GLMService", code: httpResp.statusCode, userInfo: [NSLocalizedDescriptionKey: isZh ? "GLM API Key 无效或未授权" : "GLM API Key is invalid or unauthorized"])
@@ -87,8 +88,9 @@ public final class GLMService {
             quotaReq.setValue("Bearer \(cleanKey)", forHTTPHeaderField: "Authorization")
             quotaReq.setValue("application/json", forHTTPHeaderField: "Accept")
             quotaReq.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) TokenBar/1.0", forHTTPHeaderField: "User-Agent")
+            quotaReq.timeoutInterval = 12
 
-            if let (quotaData, quotaResp) = try? await URLSession.shared.data(for: quotaReq),
+            if let (quotaData, quotaResp) = try? await HTTPClient.data(for: quotaReq),
                let httpResp = quotaResp as? HTTPURLResponse, httpResp.statusCode == 200,
                let rootJson = try? JSONSerialization.jsonObject(with: quotaData) as? [String: Any] {
 

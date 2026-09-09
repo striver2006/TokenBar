@@ -29,6 +29,10 @@ public enum I18nKey: String {
     case refreshing
     case ready
     case updatedAt
+    case attemptedAt
+    case refreshFailedRound
+    case errRefreshTimeout
+    case dataStale
     case openSettings
     case quitApp
 
@@ -357,6 +361,14 @@ public final class LocalizationManager: ObservableObject {
             return isZh ? "准备就绪" : "Ready"
         case .updatedAt:
             return isZh ? "更新于: " : "Updated: "
+        case .attemptedAt:
+            return isZh ? "尝试于: " : "Tried: "
+        case .refreshFailedRound:
+            return isZh ? "本轮刷新失败" : "last round failed"
+        case .errRefreshTimeout:
+            return isZh ? "刷新超时，已跳过本轮" : "Refresh timed out; round skipped"
+        case .dataStale:
+            return isZh ? "数据可能已过期" : "Data may be stale"
         case .openSettings:
             return isZh ? "打开设置 (Cmd+,)" : "Settings (Cmd+,)"
         case .quitApp:

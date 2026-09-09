@@ -394,6 +394,94 @@ final class TokenBarTests: XCTestCase {
         body()
     }
 
+    // MARK: - 刷新可靠性（定时刷新停摆修复）
+
+    func testWithTimeoutReturnsTrueWhenOperationFinishesInTime() async {
+        let finished = await withTimeout(seconds: 2) { @MainActor in
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        XCTAssertTrue(finished)
+    }
+
+    func testWithTimeoutReturnsFalseWhenOperationOverruns() async {
+        let start = Date()
+        let finished = await withTimeout(seconds: 0.3) { @MainActor in
+            // 故意用一个不响应取消的睡眠，模拟挂死的厂商请求
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+        }
+        XCTAssertFalse(finished)
+        // 关键：必须在预算内返回，而不是等操作自己跑完
+        XCTAssertLessThan(Date().timeIntervalSince(start), 2.0)
+    }
+
+    @MainActor
+    func testWithTimeoutFromMainActorContext() async {
+        // 复现真实调用场景：从 @MainActor 上下文调用，且 operation 挂在一个
+        // 不响应取消的等待上（模拟卡死的网络请求）
+        let start = Date()
+        let finished = await withTimeout(seconds: 0.5) { @MainActor in
+            await withCheckedContinuation { (_: CheckedContinuation<Void, Never>) in
+                // 故意永不 resume
+            }
+        }
+        let elapsed = Date().timeIntervalSince(start)
+        XCTAssertFalse(finished, "超时必须返回 false")
+        XCTAssertLessThan(elapsed, 3.0, "必须在预算内返回，实际 \(elapsed)s")
+    }
+
+    func testMenuBarStatusMarksStaleDataWhenLastUpdatedIsOld() {
+        withChineseUI {
+            let now = Date()
+            var quota = ProviderQuota(provider: .aliyunBailian, isAuthorized: true)
+            quota.fiveHourWindow = makePercentWindow(title: "5小时额度", used: 38.0)
+            // 默认间隔 5 分钟 → 阈值为 max(750, 900) = 900 秒
+            quota.lastUpdated = now.addingTimeInterval(-1200)
+
+            let stale = MenuBarStatus.resolve(
+                settings: makeSettings(metric: .fiveHour),
+                quotas: [.aliyunBailian: quota],
+                customQuotas: [:],
+                now: now
+            )
+            XCTAssertEqual(stale?.isStale, true)
+            // 数值本身不变，只是 tooltip 追加提示
+            XCTAssertEqual(stale?.title, "62%")
+            XCTAssertEqual(stale?.tooltip.contains("数据可能已过期"), true)
+        }
+    }
+
+    func testMenuBarStatusNotStaleWhenFresh() {
+        withChineseUI {
+            let now = Date()
+            var quota = ProviderQuota(provider: .aliyunBailian, isAuthorized: true)
+            quota.fiveHourWindow = makePercentWindow(title: "5小时额度", used: 38.0)
+            quota.lastUpdated = now.addingTimeInterval(-60)
+
+            let fresh = MenuBarStatus.resolve(
+                settings: makeSettings(metric: .fiveHour),
+                quotas: [.aliyunBailian: quota],
+                customQuotas: [:],
+                now: now
+            )
+            XCTAssertEqual(fresh?.isStale, false)
+            XCTAssertEqual(fresh?.tooltip.contains("数据可能已过期"), false)
+        }
+    }
+
+    func testMenuBarStatusNotStaleWhenNeverUpdated() {
+        // lastUpdated 为 nil（还没刷过）不应该被误判成陈旧
+        var quota = ProviderQuota(provider: .aliyunBailian, isAuthorized: true)
+        quota.fiveHourWindow = makePercentWindow(title: "5小时额度", used: 38.0)
+        quota.lastUpdated = nil
+
+        let status = MenuBarStatus.resolve(
+            settings: makeSettings(metric: .fiveHour),
+            quotas: [.aliyunBailian: quota],
+            customQuotas: [:]
+        )
+        XCTAssertEqual(status?.isStale, false)
+    }
+
     private func makeSettings(
         enabled: Bool = true,
         key: String = "aliyun",

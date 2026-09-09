@@ -144,14 +144,25 @@ public struct TokenSummaryPopoverView: View {
 
             // Footer
             HStack {
-                if let lastUpdated = refreshManager.lastRefreshDate {
-                    Text("\(I18n(.updatedAt))\(timeFormatter.string(from: lastUpdated))")
-                        .font(.system(size: 10))
-                        .foregroundColor(.secondary)
-                } else {
-                    Text(I18n(.ready))
-                        .font(.system(size: 10))
-                        .foregroundColor(.secondary)
+                VStack(alignment: .leading, spacing: 1) {
+                    if let lastUpdated = refreshManager.lastRefreshDate {
+                        Text("\(I18n(.updatedAt))\(timeFormatter.string(from: lastUpdated))")
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                    } else {
+                        Text(I18n(.ready))
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                    }
+
+                    // 只在"刷新过但没拿到新数据"时补一行。正常态视觉完全不变。
+                    // 没有这行的话，全失败的轮次在界面上和"根本没刷新"长得一模一样。
+                    if let attempt = refreshManager.lastAttemptDate,
+                       refreshManager.lastRoundOutcome != .success {
+                        Text("\(I18n(.attemptedAt))\(timeFormatter.string(from: attempt)) · \(I18n(.refreshFailedRound))")
+                            .font(.system(size: 9))
+                            .foregroundColor(.orange)
+                    }
                 }
 
                 Spacer()

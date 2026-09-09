@@ -247,7 +247,7 @@ public final class AliyunBailianService: @unchecked Sendable {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await URLSession.shared.data(for: request)
+            (data, response) = try await HTTPClient.data(for: request)
         } catch {
             throw AliyunChannelError.network(error.localizedDescription)
         }
@@ -361,7 +361,7 @@ public final class AliyunBailianService: @unchecked Sendable {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await URLSession.shared.data(for: request)
+            (data, response) = try await HTTPClient.data(for: request)
         } catch {
             throw AliyunChannelError.network(error.localizedDescription)
         }
@@ -390,7 +390,7 @@ public final class AliyunBailianService: @unchecked Sendable {
 
     // MARK: - 通道 3：官方 CLI
 
-    public func fetchViaCLI() async throws -> AliyunQuotaResult {
+    public func fetchViaCLI(timeout: TimeInterval = 20) async throws -> AliyunQuotaResult {
         guard let blBinary = Self.locateBLBinary() else { throw AliyunChannelError.cliNotFound }
 
         return try await withCheckedThrowingContinuation { continuation in
@@ -411,27 +411,63 @@ public final class AliyunBailianService: @unchecked Sendable {
                 let pipe = Pipe()
                 process.standardOutput = pipe
                 process.standardError = pipe
+                // stdin 接 /dev/null：bl 未登录时可能等待交互输入，否则会永远挂住。
+                process.standardInput = FileHandle.nullDevice
 
                 do {
                     try process.run()
-                    process.waitUntilExit()
-
-                    let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                    let isZh = LocalizationManager.shared.effectiveLanguage == "zh"
-                    let label = isZh ? "百炼 CLI (cn-beijing)" : "Bailian CLI (cn-beijing)"
-                    do {
-                        let result = try Self.parseTokenPlanResponse(data, accountLabel: label, channel: .cli)
-                        continuation.resume(returning: result)
-                    } catch {
-                        let raw = String(data: data, encoding: .utf8)?.prefix(200) ?? ""
-                        continuation.resume(throwing: (error as? AliyunChannelError)
-                            ?? AliyunChannelError.cliFailed(String(raw)))
-                    }
                 } catch {
                     continuation.resume(throwing: AliyunChannelError.cliFailed(error.localizedDescription))
+                    return
+                }
+
+                // 超时看门狗：先 SIGTERM，3 秒后仍在跑就 SIGKILL。
+                // 子进程一死，pipe 写端关闭，下面的 readDataToEndOfFile 立刻拿到 EOF。
+                // 看门狗只负责杀进程，绝不 resume continuation —— resume 路径始终唯一。
+                let timedOut = TimeoutFlag()
+                let watchdog = DispatchWorkItem {
+                    guard process.isRunning else { return }
+                    timedOut.set()
+                    Log.provider.error("bl CLI 超时 \(timeout, format: .fixed(precision: 0))s，terminate")
+                    process.terminate()
+                    DispatchQueue.global().asyncAfter(deadline: .now() + 3) {
+                        if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+                    }
+                }
+                DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: watchdog)
+
+                // 顺序很重要：必须先读到 EOF 再 waitUntilExit。
+                // 反过来的话，子进程输出超过 pipe 缓冲区（64KB）时会阻塞在写、
+                // 父进程阻塞在等，形成经典死锁。
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                process.waitUntilExit()
+                watchdog.cancel()
+
+                if timedOut.value {
+                    continuation.resume(throwing: AliyunChannelError.cliFailed("timeout"))
+                    return
+                }
+
+                let isZh = LocalizationManager.shared.effectiveLanguage == "zh"
+                let label = isZh ? "百炼 CLI (cn-beijing)" : "Bailian CLI (cn-beijing)"
+                do {
+                    let result = try Self.parseTokenPlanResponse(data, accountLabel: label, channel: .cli)
+                    continuation.resume(returning: result)
+                } catch {
+                    let raw = String(data: data, encoding: .utf8)?.prefix(200) ?? ""
+                    continuation.resume(throwing: (error as? AliyunChannelError)
+                        ?? AliyunChannelError.cliFailed(String(raw)))
                 }
             }
         }
+    }
+
+    /// NSLock 保护的一次性布尔，供看门狗线程与工作线程共享
+    private final class TimeoutFlag: @unchecked Sendable {
+        private let lock = NSLock()
+        private var flag = false
+        var value: Bool { lock.lock(); defer { lock.unlock() }; return flag }
+        func set() { lock.lock(); flag = true; lock.unlock() }
     }
 
     static func locateBLBinary() -> String? {
@@ -490,7 +526,7 @@ public final class AliyunBailianService: @unchecked Sendable {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await URLSession.shared.data(for: request)
+            (data, response) = try await HTTPClient.data(for: request)
         } catch {
             throw AliyunChannelError.network(error.localizedDescription)
         }

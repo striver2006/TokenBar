@@ -44,7 +44,7 @@ public final class DeepSeekService: @unchecked Sendable {
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         req.timeoutInterval = 10
 
-        let (data, response) = try await URLSession.shared.data(for: req)
+        let (data, response) = try await HTTPClient.data(for: req)
         guard let httpResp = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
         }
@@ -133,7 +133,7 @@ public final class DeepSeekService: @unchecked Sendable {
         var req = URLRequest(url: url)
         req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         req.timeoutInterval = 5
-        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+        guard let (data, resp) = try? await HTTPClient.data(for: req),
               let http = resp as? HTTPURLResponse, http.statusCode == 200,
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let infos = json["balance_infos"] as? [[String: Any]],

@@ -85,6 +85,48 @@ public struct KeychainSecretStore: SecretStoring {
         let status = SecItemDelete(baseQuery(key) as CFDictionary)
         return status == errSecSuccess || status == errSecItemNotFound
     }
+
+    // MARK: - 后台访问
+
+    /// 钥匙串专用串行队列。securityd 是单点，并发打它没有收益；
+    /// 这个队列存在的真正理由是把同步的 Security 调用挪出主线程。
+    private static let queue = DispatchQueue(label: "com.tokenbar.mac.keychain", qos: .userInitiated)
+
+    /// 在后台线程把一批 secret 读出来，装进内存 store 交给同步代码使用。
+    ///
+    /// 为什么非得这样：`SecItemCopyMatching` 是同步阻塞调用，内部经 mach IPC 等
+    /// securityd 应答。ad-hoc 签名换了 cdhash 时系统会弹授权框（accessory 进程没有
+    /// Dock 图标，用户往往看不见），钥匙串锁定或 securityd 繁忙时也会久等。
+    /// 一旦它发生在 MainActor 上，主线程冻结 → 所有 provider 的刷新任务（全都跑在
+    /// MainActor 上）集体停摆，连超时哨兵恢复执行都排不上队，表现就是
+    /// "定时刷新彻底不动了，手动点一下（阻塞刚好解除）却好了"。
+    ///
+    /// 读不到就返回空值，让调用方走各自的降级路径 —— 绝不为了等凭证而卡住刷新。
+    public func prefetch(_ keys: [SecretKey], timeout: TimeInterval = 5) async -> InMemorySecretStore {
+        let values: [SecretKey: String] = await withCheckedContinuation { cont in
+            let gate = ResumeOnce<[SecretKey: String]>(cont)
+            Self.queue.async {
+                var out: [SecretKey: String] = [:]
+                for key in keys {
+                    if let value = self.get(key) { out[key] = value }
+                }
+                gate.resume(out)
+            }
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+                // 超时不代表钥匙串坏了，只代表这一轮不等它了。
+                gate.resume([:])
+            }
+        }
+
+        let store = InMemorySecretStore()
+        for (key, value) in values { store.set(value, for: key) }
+        return store
+    }
+
+    /// 后台写入，调用方不必等待。写钥匙串同样可能卡在 securityd 上。
+    public func setInBackground(_ value: String, for key: SecretKey) {
+        Self.queue.async { _ = self.set(value, for: key) }
+    }
 }
 
 /// 内存实现，供单测使用（真实钥匙串会弹授权框，不适合放进自动化测试）。

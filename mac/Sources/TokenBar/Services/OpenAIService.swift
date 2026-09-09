@@ -49,7 +49,7 @@ public final class OpenAIService: @unchecked Sendable {
         }
         request.timeoutInterval = 12
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await HTTPClient.data(for: request)
         guard let httpResp = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
         }
