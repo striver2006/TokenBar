@@ -299,6 +299,7 @@ public enum I18nKey: String {
     case errMissingVolcengineKey
     case errMissingKimiKey
     case errMissingCustomKey
+    case errSecretKeychainUnreadable
 }
 
 public final class LocalizationManager: ObservableObject {
@@ -853,6 +854,8 @@ public final class LocalizationManager: ObservableObject {
             return isZh ? "请在配置中输入 KIMI API Key" : "Please enter KIMI API Key in settings"
         case .errMissingCustomKey:
             return isZh ? "请在配置中填入 API KEY" : "Please enter API Key in settings"
+        case .errSecretKeychainUnreadable:
+            return isZh ? "钥匙串读取失败：密钥可能仍在系统中，请重启应用，或在「钥匙串访问」中允许 TokenBar 后重新保存" : "Keychain read failed: the key is likely still stored. Relaunch the app, or allow TokenBar in Keychain Access and save again."
         }
     }
 }

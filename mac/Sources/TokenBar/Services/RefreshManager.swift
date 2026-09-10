@@ -79,6 +79,10 @@ public final class RefreshManager: ObservableObject {
     /// 这里 90s 纯粹是兜底：防住 Process.waitUntilExit 这类不响应 Task 取消的路径。
     private static let gateStaleThreshold: TimeInterval = 90
 
+    /// 启动钥匙串读取失败后的重试延迟。登录风暴时 securityd 往往要几秒才缓过来，
+    /// 取 15s 避开第一轮刷新与启动高峰。
+    private static let keychainRetryDelaySeconds: TimeInterval = 15
+
     // 余额窗口的展示辅助状态（较上次差值 + 低余额提醒状态机），进程内有效
     private var lastBalanceValues: [String: Double] = [:]
     private var balanceAlertedKeys: Set<String> = []
@@ -116,6 +120,7 @@ public final class RefreshManager: ObservableObject {
             // 凭证必须先于首刷从钥匙串读进内存，否则首轮全部厂商都会被判成未配置
             await self?.loadSecretsFromKeychain()
             await self?.setupInitialData()
+            await self?.retryUnreadableSecretsOnce()
         }
     }
 
@@ -170,11 +175,38 @@ public final class RefreshManager: ObservableObject {
         Log.lifecycle.notice("凭证加载完成：loaded=\(loaded.count) migrated=\(toMigrate.count) unreadable=\(unreadable.count) secretsInKeychain=\(allTrustworthy)")
         // 读不到与写不进是两种故障，横幅文案不同：读不到时凭证仍以旧明文运行，
         // 写不进时是迁移没能落地。两者同时出现时以「读不到」为准（更根本）。
+        // 全部可信时清掉横幅 —— 重试加载成功后靠这条路径撤下告警。
         if !unreadable.isEmpty {
             secretStoreError = I18n(.warnSecretStoreUnavailable)
         } else if migrationFailed {
             secretStoreError = I18n(.warnSecretStoreWriteFailed)
+        } else {
+            secretStoreError = nil
         }
+    }
+
+    /// 启动加载读不到的键，延迟重试一次。
+    ///
+    /// securityd 偶发繁忙、钥匙串瞬时不可用通常几秒内自愈；签名不符导致的 ACL 拒绝
+    /// 不会自愈 —— 那种情况卡片会显示「钥匙串读取失败」，保持到用户重启或重新授权。
+    /// 放在首刷之后串行执行：重试成功后的补刷要过刷新闸门，与首刷并发会被闸门丢弃。
+    private func retryUnreadableSecretsOnce() async {
+        guard !unreadableSecretKeys.isEmpty else { return }
+        try? await Task.sleep(nanoseconds: UInt64(Self.keychainRetryDelaySeconds * 1_000_000_000))
+        // 睡眠期间用户可能已手动保存，写回路径会摘掉已读到的键
+        guard !unreadableSecretKeys.isEmpty else { return }
+        Log.lifecycle.notice("启动时有 \(self.unreadableSecretKeys.count) 个凭证键没读到，重试一次")
+        await loadSecretsFromKeychain()
+        if unreadableSecretKeys.isEmpty {
+            Log.lifecycle.notice("钥匙串重试成功，补刷一轮额度")
+            await refreshAll(trigger: .initial)
+        }
+    }
+
+    /// 「内存里缺 key」时选文案：若该键在启动加载时就读不到（条目多半还在钥匙串里），
+    /// 报「钥匙串读取失败」而不是误导性的「未配置」。
+    private func missingKeyMessage(key: SecretKey, missing: I18nKey) -> I18nKey {
+        unreadableSecretKeys.contains(key) ? .errSecretKeychainUnreadable : missing
     }
 
     /// 把内存里变更过的凭证同步到钥匙串。失败时不降级明文：保留内存值、置 `secretStoreError`
@@ -696,7 +728,7 @@ public final class RefreshManager: ObservableObject {
 
         guard !settings.glmApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             quota.isAuthorized = false
-            quota.errorMessage = I18n(.errMissingGLMKey)
+            quota.errorMessage = I18n(missingKeyMessage(key: .glmApiKey, missing: .errMissingGLMKey))
             quota.isLoading = false
             commit(quota, for: .glm, gen: gen)
             return
@@ -841,7 +873,7 @@ public final class RefreshManager: ObservableObject {
 
         guard !settings.openAIApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             quota.isAuthorized = false
-            quota.errorMessage = I18n(.errMissingOpenAIKey)
+            quota.errorMessage = I18n(missingKeyMessage(key: .openAIApiKey, missing: .errMissingOpenAIKey))
             quota.isLoading = false
             commit(quota, for: .openAI, gen: gen)
             return
@@ -877,7 +909,7 @@ public final class RefreshManager: ObservableObject {
 
         guard !settings.deepseekApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             quota.isAuthorized = false
-            quota.errorMessage = I18n(.errMissingDeepSeekKey)
+            quota.errorMessage = I18n(missingKeyMessage(key: .deepseekApiKey, missing: .errMissingDeepSeekKey))
             quota.isLoading = false
             commit(quota, for: .deepseek, gen: gen)
             return
@@ -921,7 +953,7 @@ public final class RefreshManager: ObservableObject {
 
         guard !settings.openRouterApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             quota.isAuthorized = false
-            quota.errorMessage = I18n(.errMissingOpenRouterKey)
+            quota.errorMessage = I18n(missingKeyMessage(key: .openRouterApiKey, missing: .errMissingOpenRouterKey))
             quota.isLoading = false
             commit(quota, for: .openRouter, gen: gen)
             return
@@ -964,7 +996,7 @@ public final class RefreshManager: ObservableObject {
 
         guard !settings.volcengineApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             quota.isAuthorized = false
-            quota.errorMessage = I18n(.errMissingVolcengineKey)
+            quota.errorMessage = I18n(missingKeyMessage(key: .volcengineApiKey, missing: .errMissingVolcengineKey))
             quota.isLoading = false
             commit(quota, for: .volcengine, gen: gen)
             return
@@ -1000,7 +1032,7 @@ public final class RefreshManager: ObservableObject {
 
         guard !settings.kimiApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             quota.isAuthorized = false
-            quota.errorMessage = I18n(.errMissingKimiKey)
+            quota.errorMessage = I18n(missingKeyMessage(key: .kimiApiKey, missing: .errMissingKimiKey))
             quota.isLoading = false
             commit(quota, for: .kimi, gen: gen)
             return
@@ -1049,7 +1081,7 @@ public final class RefreshManager: ObservableObject {
 
         guard !config.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             q.isAuthorized = false
-            q.errorMessage = I18n(.errMissingCustomKey)
+            q.errorMessage = I18n(missingKeyMessage(key: SecretKey.custom(config.id, .apiKey), missing: .errMissingCustomKey))
             q.isLoading = false
             commitCustom(q, for: config.id, gen: gen)
             return
