@@ -1287,6 +1287,11 @@ final class TokenBarTests: XCTestCase {
         XCTAssertEqual(AliyunBailianService.plannedChannels(for: creds), [.cli, .cookie])
 
         XCTAssertEqual(AliyunBailianService.plannedChannels(for: AliyunCredentials()), [.cli])
+
+        // bl 不存在 / 冷却期内：CLI 通道不参与，不再每轮遍历 PATH 或起子进程
+        creds = AliyunCredentials(accessKeyId: "id", accessKeySecret: "sec", cookie: "c")
+        XCTAssertEqual(AliyunBailianService.plannedChannels(for: creds, cliAvailable: false), [.accessKey, .cookie])
+        XCTAssertEqual(AliyunBailianService.plannedChannels(for: AliyunCredentials(), cliAvailable: false), [])
     }
 
     func testAliyunResolveCredentialsPrefersUserSettings() {

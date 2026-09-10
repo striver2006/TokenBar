@@ -89,7 +89,6 @@ public enum I18nKey: String {
     case enableHoverSubtitle
     case launchAtLoginTitle
     case launchAtLoginSubtitle
-    case appAboutFooter
 
     // Provider Tabs & Forms
     case openAITitle
@@ -133,7 +132,6 @@ public enum I18nKey: String {
     case defaultModelLabel
     case noCustomProviders
     case noCustomProvidersHint
-    case enableMonitoring
     case alertNotice
     case alertOk
 
@@ -156,7 +154,6 @@ public enum I18nKey: String {
     case placeholderApiKeyOpenAI
     case placeholderApiKeyVolcengine
     case placeholderApiKeyGLM
-    case placeholderApiKeyAliyun
     case placeholderOrgId
     case placeholderCustomName
     case placeholderCustomModel
@@ -194,9 +191,6 @@ public enum I18nKey: String {
     case glmProtocolInternational
     case glmCustomEndpoint
 
-    case aliyunQuotaNoticeTitle
-    case aliyunQuotaNoticeDesc
-    case aliyunRecommendedAuthTitle
 
     // 方式一：OpenAPI AccessKey（推荐，多设备并发）
     case aliyunMethodAKTitle
@@ -217,7 +211,6 @@ public enum I18nKey: String {
     case hintAliyunReuseCLIConfig
     case btnAliyunSaveAndTestAK
     case labelAliyunBalanceThreshold
-    case alertAliyunAKSaved
     case alertAliyunSecretStoreFailed
     case alertAliyunSecretDeleteFailed
     case alertAliyunSecretKeptUnreadable
@@ -232,9 +225,7 @@ public enum I18nKey: String {
     case aliyunMethodCookieTitle
     case aliyunMethodCookieDesc
     case btnAliyunTerminalCLI
-    case aliyunMethodWebLogin
     case btnAliyunWebLogin
-    case hintAliyunKey
     case labelAliyunCookie
     case placeholderAliyunCookie
     case btnAliyunSaveAndRefresh
@@ -476,8 +467,6 @@ public final class LocalizationManager: ObservableObject {
             return isZh ? "开机自动启动" : "Launch at Login"
         case .launchAtLoginSubtitle:
             return isZh ? "登录 macOS 时自动在状态栏运行 TokenBar" : "Automatically launch TokenBar when logging into macOS"
-        case .appAboutFooter:
-            return isZh ? "TokenBar v1.1.1 • 模型额度监控" : "TokenBar v1.1.1 • Model Quota Monitor"
 
         case .openAITitle:
             return "OpenAI API"
@@ -562,8 +551,6 @@ public final class LocalizationManager: ObservableObject {
             return isZh ? "提示" : "Notice"
         case .alertOk:
             return isZh ? "好的" : "OK"
-        case .enableMonitoring:
-            return isZh ? "启用监控" : "Enable Monitoring"
 
         case .balanceBadge:
             return isZh ? "余额" : "Balance"
@@ -599,8 +586,6 @@ public final class LocalizationManager: ObservableObject {
             return isZh ? "sk-... 或 API Key" : "sk-... or API Key"
         case .placeholderApiKeyGLM:
             return isZh ? "例如: 75f...your_api_key" : "e.g. 75f...your_api_key"
-        case .placeholderApiKeyAliyun:
-            return isZh ? "例如: sk-sp-xxxxxxxx" : "e.g. sk-sp-xxxxxxxx"
         case .placeholderOrgId:
             return isZh ? "org-xxxxxxxx (选填)" : "org-xxxxxxxx (Optional)"
         case .placeholderCustomName:
@@ -670,12 +655,6 @@ public final class LocalizationManager: ObservableObject {
         case .glmCustomEndpoint:
             return isZh ? "自定义端点:" : "Custom Endpoint:"
 
-        case .aliyunQuotaNoticeTitle:
-            return isZh ? "额度获取说明" : "Quota Retrieval Notice"
-        case .aliyunQuotaNoticeDesc:
-            return isZh ? "阿里云百炼的 OpenAI 兼容端点（如 token-plan.../compatible-mode/v1）仅用于模型对话推理，并不提供配额查询接口。TokenBar 支持通过百炼官方 CLI (`bl`) 或控制台网页登录会话自动获取真实的 7 天周期额度 与 5 小时额度。" : "Aliyun Bailian's OpenAI-compatible endpoint is for model inference only and does not support quota lookup. TokenBar retrieves real 7-day and 5-hour quotas via the official CLI (`bl`) or console web login."
-        case .aliyunRecommendedAuthTitle:
-            return isZh ? "推荐授权方式" : "Recommended Authorization"
 
         case .aliyunMethodAKTitle:
             return isZh ? "方式一：OpenAPI AccessKey（推荐 · 多台设备可同时在线）" : "Option 1: OpenAPI AccessKey (recommended - several machines at once)"
@@ -686,7 +665,7 @@ public final class LocalizationManager: ObservableObject {
         case .aliyunRAMHowToTitle:
             return isZh ? "如何创建专用 AccessKey？" : "How do I create a dedicated AccessKey?"
         case .aliyunRAMHowToSteps:
-            return isZh ? "1. 用主账号登录 RAM 控制台，创建用户，登录名例如 tokenbar-monitor\n2. 访问方式只勾选「使用永久 AccessKey 访问」，不要勾控制台登录\n3. 创建后立即复制 AccessKey ID 与 Secret（Secret 只显示一次）\n4. 授权：系统策略里搜 Bailian，优先选只读策略；要显示账户余额再加财务只读 bss:DescribeAcccount\n5. 回百炼控制台，再给该用户授予对应业务空间的只读权限（RAM 权限与百炼空间权限是两套体系，都要授）\n6. 把 ID / Secret 粘贴到下方，点「保存并测试」" : "1. Sign in to the RAM console as the main account and create a user, e.g. tokenbar-monitor\n2. Under access mode tick only permanent AccessKey; leave console sign-in off\n3. Copy the AccessKey ID and Secret right away - the Secret is shown only once\n4. Grant permissions: search Bailian in the system policies and prefer a read-only one; add the read-only billing action bss:DescribeAcccount if you also want the account balance\n5. Back in the Bailian console, also grant that user read access to the workspace - RAM permissions and Bailian workspace permissions are two separate systems\n6. Paste the ID / Secret below and press Save and test"
+            return isZh ? "1. 用主账号登录 RAM 控制台，创建用户，登录名例如 tokenbar-monitor\n2. 访问方式只勾选「使用永久 AccessKey 访问」，不要勾控制台登录\n3. 创建后立即复制 AccessKey ID 与 Secret（Secret 只显示一次）\n4. 授权：系统策略里搜 Bailian，优先选只读策略；要显示账户余额再加财务只读 bss:DescribeAccount\n5. 回百炼控制台，再给该用户授予对应业务空间的只读权限（RAM 权限与百炼空间权限是两套体系，都要授）\n6. 把 ID / Secret 粘贴到下方，点「保存并测试」" : "1. Sign in to the RAM console as the main account and create a user, e.g. tokenbar-monitor\n2. Under access mode tick only permanent AccessKey; leave console sign-in off\n3. Copy the AccessKey ID and Secret right away - the Secret is shown only once\n4. Grant permissions: search Bailian in the system policies and prefer a read-only one; add the read-only billing action bss:DescribeAccount if you also want the account balance\n5. Back in the Bailian console, also grant that user read access to the workspace - RAM permissions and Bailian workspace permissions are two separate systems\n6. Paste the ID / Secret below and press Save and test"
         case .labelAliyunAccessKeyId:
             return "AccessKey ID"
         case .placeholderAliyunAccessKeyId:
@@ -713,8 +692,6 @@ public final class LocalizationManager: ObservableObject {
             return isZh ? "保存并测试 AccessKey 通道" : "Save and test the AccessKey channel"
         case .labelAliyunBalanceThreshold:
             return isZh ? "账户余额提醒阈值" : "Balance alert threshold"
-        case .alertAliyunAKSaved:
-            return isZh ? "AccessKey 已保存到系统钥匙串。" : "The AccessKey has been saved to the system keychain."
         case .alertAliyunSecretStoreFailed:
             return isZh ? "无法写入系统钥匙串，AccessKey Secret 未能保存。TokenBar 不会把它降级存成明文 —— 请在「钥匙串访问」中允许 TokenBar 后重试。" : "Could not write to the system keychain, so the AccessKey Secret was not saved. TokenBar will not fall back to plain text - allow TokenBar in Keychain Access and try again."
         case .alertAliyunSecretDeleteFailed:
@@ -741,12 +718,8 @@ public final class LocalizationManager: ObservableObject {
             return isZh ? "Cookie 同样会被其他设备的登录顶掉，且有效期较短，仅作为前两种方式都不可用时的兜底。" : "The cookie is also invalidated when another device signs in, and it expires quickly. Use it only when the first two options are unavailable."
         case .btnAliyunTerminalCLI:
             return isZh ? "在终端登录百炼 CLI (推荐)" : "Login Bailian CLI in Terminal (Recommended)"
-        case .aliyunMethodWebLogin:
-            return isZh ? "控制台网页登录授权" : "Console Web Login Authorization"
         case .btnAliyunWebLogin:
             return isZh ? "控制台网页登录授权" : "Console Web Login Authorization"
-        case .hintAliyunKey:
-            return isZh ? "百炼专属 API Key 通常以 sk-sp- 开头，供推理端点与工具使用。" : "Bailian API Key usually starts with sk-sp-, used for model inference."
         case .labelAliyunCookie:
             return isZh ? "控制台 Session Cookie (可选/备用)" : "Console Session Cookie (Optional/Backup)"
         case .placeholderAliyunCookie:

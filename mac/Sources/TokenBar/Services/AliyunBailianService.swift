@@ -114,23 +114,49 @@ public final class AliyunBailianService: @unchecked Sendable {
     ///
     /// 有 AK/SK 时不单独跑 `.consoleToken` —— `.accessKey` 内部本来就会先用缓存令牌，
     /// 只有拿不到或遇到 NotLogined 才签发新的。
-    public static func plannedChannels(for credentials: AliyunCredentials) -> [AliyunChannel] {
+    /// - Parameter cliAvailable: 本机是否装了 `bl` 且最近没有因未登录等原因失败过。
+    ///   以前 `.cli` 无条件参与：没装 `bl` 也每轮遍历 PATH，装了但未登录则每轮起一个最多 20s 的子进程。
+    public static func plannedChannels(for credentials: AliyunCredentials, cliAvailable: Bool = true) -> [AliyunChannel] {
         var channels: [AliyunChannel] = []
         if credentials.hasAccessKey {
             channels.append(.accessKey)
         } else if credentials.hasConsoleToken {
             channels.append(.consoleToken)
         }
-        channels.append(.cli)
+        if cliAvailable {
+            channels.append(.cli)
+        }
         if credentials.hasCookie {
             channels.append(.cookie)
         }
         return channels
     }
 
+    /// CLI 通道的可用性门槛：`bl` 存在（结果缓存 5 分钟，PATH 遍历不必每轮做）
+    /// 且上一次 CLI 失败距今超过冷却期（未登录时不必每轮起子进程）。
+    private let cliGate = CLIGate()
+
+    private actor CLIGate {
+        private var binaryChecked: (at: Date, found: Bool)?
+        private var lastFailure: Date?
+        private static let binaryTTL: TimeInterval = 300
+        private static let failureCooldown: TimeInterval = 600
+
+        func isAvailable() -> Bool {
+            if let lastFailure, Date().timeIntervalSince(lastFailure) < Self.failureCooldown { return false }
+            if let checked = binaryChecked, Date().timeIntervalSince(checked.at) < Self.binaryTTL { return checked.found }
+            let found = AliyunBailianService.locateBLBinary() != nil
+            binaryChecked = (Date(), found)
+            return found
+        }
+
+        func recordFailure() { lastFailure = Date() }
+        func recordSuccess() { lastFailure = nil }
+    }
+
     /// 按优先级依次尝试各通道；全部失败时抛出一条聚合了每级失败原因的错误。
     public func fetchQuota(credentials: AliyunCredentials) async throws -> AliyunQuotaResult {
-        let channels = Self.plannedChannels(for: credentials)
+        let channels = Self.plannedChannels(for: credentials, cliAvailable: await cliGate.isAvailable())
         var failures: [(AliyunChannel, String)] = []
 
         for channel in channels {
@@ -141,7 +167,14 @@ public final class AliyunBailianService: @unchecked Sendable {
                 case .consoleToken:
                     return try await fetchViaConsoleToken(credentials)
                 case .cli:
-                    return try await fetchViaCLI()
+                    do {
+                        let result = try await fetchViaCLI(credentials: credentials)
+                        await cliGate.recordSuccess()
+                        return result
+                    } catch {
+                        await cliGate.recordFailure()
+                        throw error
+                    }
                 case .cookie:
                     return try await fetchViaCookie(credentials)
                 }
@@ -390,8 +423,12 @@ public final class AliyunBailianService: @unchecked Sendable {
 
     // MARK: - 通道 3：官方 CLI
 
-    public func fetchViaCLI(timeout: TimeInterval = 20) async throws -> AliyunQuotaResult {
+    /// - Parameter credentials: 只取其中的 region / site 透传给 CLI；以前硬编码 `cn-beijing / domestic`，
+    ///   新加坡站用户走到这条通道必然拿错数据。
+    public func fetchViaCLI(credentials: AliyunCredentials = AliyunCredentials(), timeout: TimeInterval = 20) async throws -> AliyunQuotaResult {
         guard let blBinary = Self.locateBLBinary() else { throw AliyunChannelError.cliNotFound }
+        let region = credentials.consoleRegion.trimmed.isEmpty ? "cn-beijing" : credentials.consoleRegion.trimmed
+        let site = credentials.consoleSite.trimmed.isEmpty ? "domestic" : credentials.consoleSite.trimmed
 
         return try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
@@ -399,8 +436,8 @@ public final class AliyunBailianService: @unchecked Sendable {
                 process.executableURL = URL(fileURLWithPath: blBinary)
                 process.arguments = [
                     "usage", "token-plan",
-                    "--console-region", "cn-beijing",
-                    "--console-site", "domestic",
+                    "--console-region", region,
+                    "--console-site", site,
                     "--output", "json"
                 ]
 
@@ -487,7 +524,14 @@ public final class AliyunBailianService: @unchecked Sendable {
 
     func fetchViaCookie(_ credentials: AliyunCredentials) async throws -> AliyunQuotaResult {
         let api = Self.tokenPlanUsageAPI
-        let urlString = "https://bailian-cs.console.aliyun.com/data/api.json?action=BroadScopeAspnGateway"
+        // 站点与地域跟随用户设置（以前硬编码北京 / 国内站，国际站用户这条通道必败）
+        let region = credentials.consoleRegion.trimmed.isEmpty ? "cn-beijing" : credentials.consoleRegion.trimmed
+        let site = credentials.consoleSite.trimmed.isEmpty ? "domestic" : credentials.consoleSite.trimmed
+        let route = Self.gatewayRoute(region: region, site: site)
+        let consoleOrigin = site == "international"
+            ? "https://bailian.console.alibabacloud.com"
+            : "https://bailian.console.aliyun.com"
+        let urlString = "https://\(route.host)/data/api.json?action=\(route.action)"
             + "&product=sfm_bailian&api=\(AliyunSigner.percentEncode(api))&_v=undefined"
         guard let url = URL(string: urlString) else { throw URLError(.badURL) }
 
@@ -497,8 +541,8 @@ public final class AliyunBailianService: @unchecked Sendable {
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json, text/plain, */*", forHTTPHeaderField: "Accept")
         request.setValue(credentials.cookie.trimmed, forHTTPHeaderField: "Cookie")
-        request.setValue("https://bailian.console.aliyun.com", forHTTPHeaderField: "Origin")
-        request.setValue("https://bailian.console.aliyun.com/cn-beijing?tab=plan", forHTTPHeaderField: "Referer")
+        request.setValue(consoleOrigin, forHTTPHeaderField: "Origin")
+        request.setValue("\(consoleOrigin)/\(region)?tab=plan", forHTTPHeaderField: "Referer")
         request.setValue(
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
             forHTTPHeaderField: "User-Agent")
@@ -506,12 +550,12 @@ public final class AliyunBailianService: @unchecked Sendable {
 
         var cornerstone: [String: Any] = [
             "feTraceId": UUID().uuidString.lowercased(),
-            "feURL": "https://bailian.console.aliyun.com/cn-beijing?tab=plan#/efm/subscription/token-plan",
+            "feURL": "\(consoleOrigin)/\(region)?tab=plan#/efm/subscription/token-plan",
             "protocol": "V2",
             "console": "ONE_CONSOLE",
             "productCode": "p_efm",
             "switchUserType": 3,
-            "domain": "bailian.console.aliyun.com",
+            "domain": consoleOrigin.replacingOccurrences(of: "https://", with: ""),
             "consoleSite": "BAILIAN_ALIYUN",
             "userNickName": "",
             "userPrincipalName": "",
@@ -521,7 +565,7 @@ public final class AliyunBailianService: @unchecked Sendable {
 
         let paramsJSON = (try? JSONSerialization.data(withJSONObject: cornerstone))
             .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
-        request.httpBody = Self.formBody(["params": paramsJSON, "region": "cn-beijing"])
+        request.httpBody = Self.formBody(["params": paramsJSON, "region": region])
 
         let data: Data
         let response: URLResponse

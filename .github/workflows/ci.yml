@@ -1,0 +1,43 @@
+name: CI
+
+# push / PR 触发：两端各自编译并跑单元测试。发布流程见 release.yml。
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'doc/**'
+  pull_request:
+    paths-ignore:
+      - '**.md'
+      - 'doc/**'
+
+jobs:
+  test-macos:
+    name: macOS swift test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: swift build --package-path mac
+
+      - name: Test
+        # 测试全部离线：不依赖网络、钥匙串或开发者本机的 ~/.claude.json / ~/.gemini
+        run: swift test --package-path mac
+
+  test-windows:
+    name: Windows dotnet test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Build
+        run: dotnet build windows/TokenBar.sln -c Release
+
+      - name: Test
+        run: dotnet test windows/tests/TokenBar.Tests/TokenBar.Tests.csproj -c Release --no-build
