@@ -44,7 +44,7 @@ As AI-assisted programming tools like Claude Code, Cursor, and Continue gain wid
 - 🌍 **Dynamic Bilingual Interface (i18n)**:
   - Instant toggle between **English** and **简体中文** without application restarts.
 - 🔒 **Local Security & Zero Tracking**:
-  - All keys, tokens, and settings stay on your local disk. No third-party proxy or telemetry tracking.
+  - All API keys, login tokens and cookies live only in the macOS Keychain / Windows Credential Manager, never in the config file. No third-party proxy or telemetry tracking.
 
 ---
 
