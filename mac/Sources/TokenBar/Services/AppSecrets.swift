@@ -14,6 +14,7 @@ public enum AppSecrets {
         (.claudeToken, { $0.claudeToken }, { $0.claudeToken = $1 }),
         (.geminiApiKey, { $0.geminiApiKey }, { $0.geminiApiKey = $1 }),
         (.geminiToken, { $0.geminiToken }, { $0.geminiToken = $1 }),
+        (.geminiRefreshToken, { $0.geminiRefreshToken }, { $0.geminiRefreshToken = $1 }),
         (.deepseekApiKey, { $0.deepseekApiKey }, { $0.deepseekApiKey = $1 }),
         (.volcengineApiKey, { $0.volcengineApiKey }, { $0.volcengineApiKey = $1 }),
         (.kimiApiKey, { $0.kimiApiKey }, { $0.kimiApiKey = $1 }),

@@ -134,15 +134,26 @@ macOS 客户端采用纯 Swift 打造，支持 macOS 13 (Ventura) 及以上系�
    同理，`resolveCredentials` / `ResolveCredentials` 的 `secretStore` 参数**没有默认值也
    不回退**，必须显式传入预取好的内存快照——默认值会把最危险的选项做成打字最少的选项。
 
-   **这条铁律同样管住 `/usr/bin/security` 子进程路径。** `GeminiService.readKeychainToken`
-   读的是 Antigravity 用 go-keyring 写入的条目（service `gemini` / account `antigravity`），
-   条目的 ACL 归 Antigravity，TokenBar 不在白名单里——**给自己固定签名身份对它无效**，
-   每次读取都可能弹一次系统授权框，而授权框弹出时子进程会无限期挂着等用户。
-   `SecretStore` 的 `assertOffMain` 护栏拦不到这条路（它只覆盖 Security framework API），
-   所以这里自带三样东西：后台队列执行 + 独立的主线程断言、3 秒 SIGTERM / 再 2 秒 SIGKILL
-   看门狗、以及 5 分钟成功缓存 + 30 秒失败冷却。缓存和冷却不是性能优化——没有它们，
-   刷新间隔设成 1 分钟就是每分钟弹一次授权框。决策抽在 `KeychainProbeDecision.resolve`
-   里，同样有单测守着。
+   **读别人的钥匙串条目：刷新链路关交互，授权只在设置页做一次。** Antigravity 用 go-keyring
+   在 login.keychain 里存了一份 Google 凭证（service `gemini` / account `antigravity`），这是
+   **唯一持续更新**的数据源（`cdat` 不变、`mdat` 每小时变，说明是原地更新，ACL 不会被冲掉）；
+   `~/.gemini/jetski-standalone-oauth-token` 实测会停在几天前的旧 token 上，只能当回退。
+   条目的 ACL 归 Antigravity，TokenBar 首次读取需要用户在系统授权框里点「始终允许」——
+   构建已固定开发者证书签名（`Scripts/build_app.sh`），ACL 按 designated requirement 匹配，
+   重新编译不会失配。
+   曾经的做法是 `/usr/bin/security` 子进程 + 3 秒看门狗 + 缓存/冷却限流，结果是一个死循环：
+   3 秒内人来不及点授权框，子进程被 SIGTERM 记为失败，失败冷却（30s）又远短于刷新间隔
+   （最小 60s），于是每轮刷新都再弹一次，用户永远点不到「始终允许」，白名单永远建不起来。
+   现在的规则是 `KeychainSecretStore.readForeign(allowInteraction:)`：
+   - 刷新链路 `allowInteraction: false` —— 查询带 `kSecUseAuthenticationUIFail`，并在钥匙串
+     串行队列上成对切换 `SecKeychainSetUserInteractionAllowed`。未授权时 securityd 在 1ms 内
+     返回 `errSecAuthFailed`（实测 -25293，不是 -25308），归 `.unavailable`，降级到文件；
+     **绝不弹框**是机制保证，不靠限流。
+   - 设置页「读取本地 Gemini 配置」按钮 `allowInteraction: true` —— 全 App 唯一允许弹框的入口，
+     超时 120s 让用户慢慢点。
+   三层来源合并在 `GeminiService.mergeCredentials`（纯函数，有单测）：钥匙串 > 文件 >
+   TokenBar 自有条目里的 `geminiRefreshToken` 快照（额度拉取成功后写入，Antigravity 卸载后
+   仍能续期）。
 3. **`Process` 子进程要先读 pipe 再 `waitUntilExit`**，并配超时 kill 与
    `standardInput = FileHandle.nullDevice`。反序会在输出超过 64KB pipe 缓冲区时形成
    父子互等死锁；`withTimeout` 救不了子进程（不响应 Task 取消），必须自己兜。
@@ -152,7 +163,7 @@ macOS 客户端采用纯 Swift 打造，支持 macOS 13 (Ventura) 及以上系�
    `ClaudeService.readLocalClaudeJson()`（async）、`BailianCLIConfig.loadFromDiskAsync()`、
    `BalanceHistoryStore`（actor，内存常驻一份，磁盘只在首次访问读一次）。
 
-   **有可变缓存的 Service 必须是 actor**（`GeminiService`：token 缓存、client 候选、钥匙串探测缓存）。
+   **有可变缓存的 Service 必须是 actor**（`GeminiService`：token 缓存、client 候选、刷新失败冷却）。
    普通 class 的 nonisolated async 方法从 MainActor `await` 进去后并不在主线程执行，刷新链路与
    设置页「测试」按钮并发进入就是数据竞争。排查此类问题可临时开严格检查：
    `swift build -Xswiftc -strict-concurrency=complete`（目前约 100 条警告，多为 Foundation

@@ -305,7 +305,7 @@ public final class RefreshManager: ObservableObject {
         }
 
         // Auto-detect local Gemini if available
-        let localGemini = await GeminiService.shared.readLocalGeminiConfig()
+        let localGemini = await GeminiService.shared.readLocalGeminiConfig(storedRefreshToken: settings.geminiRefreshToken)
         if localGemini.token != nil || localGemini.account != nil {
             var quota = quotas[.gemini] ?? ProviderQuota(provider: .gemini)
             quota.isAuthorized = true
@@ -652,7 +652,7 @@ public final class RefreshManager: ObservableObject {
                 return
             } catch {
                 // If API Key failed, only fall back to OAuth/local if available
-                let local = await GeminiService.shared.readLocalGeminiConfig()
+                let local = await GeminiService.shared.readLocalGeminiConfig(storedRefreshToken: settings.geminiRefreshToken)
                 let hasOAuth = !settings.geminiToken.isEmpty || local.account != nil || local.token != nil || local.refreshToken != nil
                 if !hasOAuth {
                     quota.isAuthorized = false
@@ -667,12 +667,16 @@ public final class RefreshManager: ObservableObject {
 
         // 2. OAuth Web Login / Local Credentials Fallback
         do {
-            let res = try await GeminiService.shared.fetchQuota(token: settings.geminiToken)
+            let res = try await GeminiService.shared.fetchQuota(
+                token: settings.geminiToken,
+                storedRefreshToken: settings.geminiRefreshToken
+            )
             quota.fiveHourWindow = res.fiveHour
             quota.weeklyWindow = res.weekly
             quota.isAuthorized = true
             if let acc = res.account { quota.accountInfo = acc }
             quota.lastUpdated = Date()
+            persistGeminiRefreshToken(res.refreshToken)
         } catch {
             quota.isAuthorized = false
             quota.errorMessage = error.localizedDescription
@@ -802,10 +806,15 @@ public final class RefreshManager: ObservableObject {
         return false
     }
 
-    /// async 是因为它要读钥匙串（可能弹授权框）—— 调用方 SettingsView 用 Task 包起来，
-    /// 别让按钮点击把主线程占住。
+    /// 设置页按钮的入口，**全 App 唯一允许钥匙串弹授权框的地方**：用户在场，
+    /// 点一次「始终允许」后 TokenBar 进入 Antigravity 条目的 ACL，刷新链路从此静默读取。
+    /// async 是因为授权框会让那次钥匙串调用挂到用户点完为止 —— 调用方 SettingsView 用
+    /// Task 包起来，别让按钮点击把主线程占住。
     public func importGeminiFromLocal() async -> Bool {
-        let local = await GeminiService.shared.readLocalGeminiConfig()
+        let local = await GeminiService.shared.readLocalGeminiConfig(
+            storedRefreshToken: settings.geminiRefreshToken,
+            allowKeychainInteraction: true
+        )
         if let token = local.token {
             settings.geminiToken = token
             saveSettings()
@@ -813,6 +822,14 @@ public final class RefreshManager: ObservableObject {
             return true
         }
         return false
+    }
+
+    /// 把 ~/.gemini 里读到的 refresh_token 快照进自有钥匙串条目。
+    /// 只在值变化时写：saveSettings 会走一遍全部凭证的 diff，别每轮刷新都触发。
+    private func persistGeminiRefreshToken(_ refreshToken: String?) {
+        guard let refreshToken, !refreshToken.isEmpty, refreshToken != settings.geminiRefreshToken else { return }
+        settings.geminiRefreshToken = refreshToken
+        saveSettings()
     }
 
     public func refreshOpenAI() async {

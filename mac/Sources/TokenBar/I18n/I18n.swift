@@ -749,9 +749,9 @@ public final class LocalizationManager: ObservableObject {
         case .alertGeminiWebSuccess:
             return isZh ? "Gemini 网站登录授权成功！" : "Gemini web login authorization successful!"
         case .alertGeminiLocalSuccess:
-            return isZh ? "已从 ~/.gemini/oauth_creds.json 读取本地凭证！" : "Successfully read local credentials from ~/.gemini/oauth_creds.json!"
+            return isZh ? "已读取本地 Antigravity 凭证！若刚才在系统授权框中选择了「始终允许」，此后自动刷新将静默读取，不再弹框。" : "Local Antigravity credentials loaded. If you chose \"Always Allow\" in the system prompt, future refreshes will read silently."
         case .alertGeminiLocalNotFound:
-            return isZh ? "未检测到本地 ~/.gemini 配置文件，请使用网页登录授权。" : "No local ~/.gemini config found. Please use web login authorization."
+            return isZh ? "未读到本地 Antigravity 凭证：请确认 Antigravity 已登录，且在系统授权框中选择了「始终允许」；或改用网页登录授权。" : "No local Antigravity credentials found. Make sure Antigravity is signed in and you chose \"Always Allow\" in the system prompt, or use web login instead."
         case .alertGeminiTokenSaved:
             return isZh ? "Gemini Token 已保存！" : "Gemini Token saved!"
         case .alertDeepSeekSuccess:

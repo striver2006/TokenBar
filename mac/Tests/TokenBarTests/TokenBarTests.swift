@@ -189,6 +189,8 @@ final class TokenBarTests: XCTestCase {
         XCTAssertEqual(decoded.glmEndpoint, "https://open.bigmodel.cn/api/v1")
         XCTAssertEqual(decoded.claudeToken, "sk-ant-test")
         XCTAssertEqual(decoded.geminiToken, "ya29.test")
+        // 新增字段：老配置里没有，必须解成空串而不是抛错
+        XCTAssertEqual(decoded.geminiRefreshToken, "")
         XCTAssertEqual(decoded.refreshIntervalMinutes, 15)
 
         // Verifies new fields get safe default values without throwing
@@ -1433,58 +1435,80 @@ final class TokenBarTests: XCTestCase {
         }
     }
 
-    // MARK: - Gemini 钥匙串探测的缓存/冷却决策
+    // MARK: - Gemini 凭证三层合并
 
-    // 这几条守的是两件事：定时刷新不因授权框停摆（超时后进冷却，不再阻塞后续轮次），
-    // 以及用户不被每轮弹一次授权框。子进程本身没法在单测里跑，但决策逻辑可以。
+    // 守的是「钥匙串是活数据、文件可能陈旧」这条顺序：钥匙串有 token 时必须连 expiry 一起用它的，
+    // 否则会拿着新 token 配旧 expiry，被误判为过期而去多做一次无谓的刷新。
 
-    private func probeDecision(
-        cachedAgo: TimeInterval?,
-        failedAgo: TimeInterval?,
-        ttl: TimeInterval = 300,
-        cooldown: TimeInterval = 30
-    ) -> KeychainProbeDecision {
-        let now = Date()
-        return KeychainProbeDecision.resolve(
-            now: now,
-            cachedAt: cachedAgo.map { now.addingTimeInterval(-$0) } ?? .distantPast,
-            hasCache: cachedAgo != nil,
-            lastFailure: failedAgo.map { now.addingTimeInterval(-$0) },
-            ttl: ttl,
-            cooldown: cooldown
+    private func geminiFiles(
+        jetskiToken: String? = nil, jetskiRefresh: String? = nil, jetskiExpiry: Date? = nil,
+        oauthToken: String? = nil, oauthRefresh: String? = nil
+    ) -> GeminiService.LocalGeminiFiles {
+        var f = GeminiService.LocalGeminiFiles()
+        f.jetskiToken = jetskiToken
+        f.jetskiRefreshToken = jetskiRefresh
+        f.jetskiExpiry = jetskiExpiry
+        f.oauthToken = oauthToken
+        f.oauthRefreshToken = oauthRefresh
+        return f
+    }
+
+    func testGeminiMergeKeychainWinsWithItsOwnExpiry() {
+        let kcExpiry = Date().addingTimeInterval(3600)
+        let fileExpiry = Date().addingTimeInterval(-86400)
+        let merged = GeminiService.mergeCredentials(
+            keychain: .init(token: "kc-at", refreshToken: "kc-rt", expiry: kcExpiry),
+            files: geminiFiles(jetskiToken: "file-at", jetskiRefresh: "file-rt", jetskiExpiry: fileExpiry),
+            storedRefreshToken: "stored-rt"
         )
+        XCTAssertEqual(merged.token, "kc-at")
+        XCTAssertEqual(merged.refreshToken, "kc-rt")
+        XCTAssertEqual(merged.expiry, kcExpiry)
     }
 
-    func testKeychainProbeUsesFreshCache() {
-        XCTAssertEqual(probeDecision(cachedAgo: 10, failedAgo: nil), .useCache)
+    func testGeminiMergeFallsBackToFileWhenKeychainUnavailable() {
+        let fileExpiry = Date().addingTimeInterval(600)
+        let merged = GeminiService.mergeCredentials(
+            keychain: nil,
+            files: geminiFiles(jetskiToken: "file-at", jetskiRefresh: "file-rt", jetskiExpiry: fileExpiry),
+            storedRefreshToken: "stored-rt"
+        )
+        XCTAssertEqual(merged.token, "file-at")
+        XCTAssertEqual(merged.refreshToken, "file-rt")
+        XCTAssertEqual(merged.expiry, fileExpiry)
     }
 
-    func testKeychainProbeAfterCacheExpired() {
-        XCTAssertEqual(probeDecision(cachedAgo: 301, failedAgo: nil), .probe)
+    /// 钥匙串只有 refresh_token 没有 access_token 时，token/expiry 从文件补，refresh 仍用钥匙串的。
+    func testGeminiMergeFillsMissingFieldsFromFile() {
+        let fileExpiry = Date().addingTimeInterval(600)
+        let merged = GeminiService.mergeCredentials(
+            keychain: .init(token: nil, refreshToken: "kc-rt", expiry: nil),
+            files: geminiFiles(jetskiToken: "file-at", jetskiRefresh: "file-rt", jetskiExpiry: fileExpiry),
+            storedRefreshToken: nil
+        )
+        XCTAssertEqual(merged.token, "file-at")
+        XCTAssertEqual(merged.refreshToken, "kc-rt")
+        XCTAssertEqual(merged.expiry, fileExpiry)
     }
 
-    func testKeychainProbeColdStart() {
-        XCTAssertEqual(probeDecision(cachedAgo: nil, failedAgo: nil), .probe)
+    /// 钥匙串、文件都没有 refresh_token 时才用自有条目里的快照；空串不算有。
+    func testGeminiMergeStoredSnapshotIsLastResort() {
+        let merged = GeminiService.mergeCredentials(keychain: nil, files: geminiFiles(), storedRefreshToken: "stored-rt")
+        XCTAssertNil(merged.token)
+        XCTAssertEqual(merged.refreshToken, "stored-rt")
+
+        let empty = GeminiService.mergeCredentials(keychain: nil, files: geminiFiles(), storedRefreshToken: "")
+        XCTAssertNil(empty.refreshToken)
     }
 
-    /// 最关键的一条：上一轮读钥匙串超时（用户没理授权框）后，冷却期内不许再跑子进程。
-    /// 这条挂了就意味着刷新间隔设成 1 分钟时，用户每分钟被弹一次授权框。
-    func testKeychainProbeCooldownAfterFailureWithoutCache() {
-        XCTAssertEqual(probeDecision(cachedAgo: nil, failedAgo: 5), .cooldown)
-    }
-
-    func testKeychainProbeResumesAfterCooldownElapsed() {
-        XCTAssertEqual(probeDecision(cachedAgo: nil, failedAgo: 31), .probe)
-    }
-
-    /// 缓存有效时优先用缓存，不受失败冷却影响 —— 两个条件同时成立时不该退化成放弃。
-    func testKeychainProbeCacheWinsOverCooldown() {
-        XCTAssertEqual(probeDecision(cachedAgo: 10, failedAgo: 5), .useCache)
-    }
-
-    /// 缓存过期 + 仍在冷却：既不读也不弹，调用方拿过期缓存或走文件回退。
-    func testKeychainProbeExpiredCacheStillRespectsCooldown() {
-        XCTAssertEqual(probeDecision(cachedAgo: 301, failedAgo: 5), .cooldown)
+    func testGeminiKeychainPayloadDecodesGoKeyringBase64() {
+        let inner = #"{"auth_method":"consumer","token":{"access_token":"at","refresh_token":"rt","expiry":"2026-09-10T20:16:39+08:00"}}"#
+        let raw = "go-keyring-base64:" + Data(inner.utf8).base64EncodedString()
+        let dict = GeminiService.decodeKeychainPayload(raw)
+        XCTAssertEqual(dict?["access_token"] as? String, "at")
+        XCTAssertEqual(dict?["refresh_token"] as? String, "rt")
+        XCTAssertNil(GeminiService.decodeKeychainPayload("go-keyring-base64:@@@"))
+        XCTAssertNil(GeminiService.decodeKeychainPayload(#"{"no_token":1}"#))
     }
 
     // MARK: - 第 1 批：假数据与错误状态

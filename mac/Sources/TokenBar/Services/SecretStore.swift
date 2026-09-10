@@ -96,6 +96,7 @@ public struct SecretKey: Hashable, Sendable, CustomStringConvertible {
     public static let claudeToken = SecretKey(account: "claudeToken")
     public static let geminiApiKey = SecretKey(account: "geminiApiKey")
     public static let geminiToken = SecretKey(account: "geminiToken")
+    public static let geminiRefreshToken = SecretKey(account: "geminiRefreshToken")
     public static let deepseekApiKey = SecretKey(account: "deepseekApiKey")
     public static let volcengineApiKey = SecretKey(account: "volcengineApiKey")
     public static let kimiApiKey = SecretKey(account: "kimiApiKey")
@@ -183,14 +184,57 @@ public struct KeychainSecretStore: SecretStoring, Sendable {
 
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
+        return Self.decodeLookup(status: status, item: item, label: key.account)
+    }
 
+    /// 读**别的 App** 写入的通用密码条目（例如 Antigravity 的 `gemini` / `antigravity`）。
+    ///
+    /// 条目的 ACL 归写入方所有，TokenBar 首次读取需要用户在系统授权框里点「始终允许」，
+    /// 之后才会静默。两种模式：
+    /// - `allowInteraction: false`：**刷新链路专用**。需要授权就直接返回 `.unavailable`，
+    ///   绝不弹框——这是「定时刷新永不打扰用户」的机制保证，而不是靠缓存/冷却限流。
+    /// - `allowInteraction: true`：只给设置页的显式按钮用，用户在场、可以点「始终允许」。
+    ///
+    /// 关交互用了两道保险：查询字典里的 `kSecUseAuthenticationUIFail`，以及进程级的
+    /// `SecKeychainSetUserInteractionAllowed`。前者是文档化的现代 API，但 login.keychain
+    /// 的 ACL 提示走的是 securityd → SecurityAgent 那条老路，不确定它是否管得住；
+    /// 后者是进程全局开关，所以只在钥匙串串行队列上成对切换，不会影响并发的其他调用。
+    public func readForeign(service: String, account: String, allowInteraction: Bool) -> SecretLookup {
+        Self.assertOffMain(#function)
+
+        var query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        if !allowInteraction {
+            query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
+        }
+
+        var previous: DarwinBoolean = true
+        SecKeychainGetUserInteractionAllowed(&previous)
+        SecKeychainSetUserInteractionAllowed(allowInteraction)
+        defer { SecKeychainSetUserInteractionAllowed(previous.boolValue) }
+
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        if status == errSecInteractionNotAllowed {
+            Log.lifecycle.notice("keychain readForeign 需要授权但已禁用交互 service=\(service, privacy: .public) account=\(account, privacy: .public)")
+            return .unavailable
+        }
+        return Self.decodeLookup(status: status, item: item, label: "\(service)/\(account)")
+    }
+
+    private static func decodeLookup(status: OSStatus, item: CFTypeRef?, label: String) -> SecretLookup {
         switch status {
         case errSecSuccess:
             guard let data = item as? Data,
                   let value = String(data: data, encoding: .utf8) else {
                 // 条目在、内容取不出来。归到「读不到」而不是「没有」——
                 // 宁可让调用方保守放弃，也不能诱导它去删一个存在的条目。
-                Log.lifecycle.error("keychain lookup 解码失败 account=\(key.account, privacy: .public)")
+                Log.lifecycle.error("keychain lookup 解码失败 account=\(label, privacy: .public)")
                 return .unavailable
             }
             return value.isEmpty ? .absent : .found(value)
@@ -200,7 +244,7 @@ public struct KeychainSecretStore: SecretStoring, Sendable {
             // errSecAuthFailed / errSecInteractionNotAllowed / errSecUserCanceled /
             // errSecNotAvailable / errSecMissingEntitlement …… 一律「读不到」。
             Log.lifecycle.error(
-                "keychain lookup 失败 account=\(key.account, privacy: .public) status=\(status, privacy: .public)")
+                "keychain lookup 失败 account=\(label, privacy: .public) status=\(status, privacy: .public)")
             return .unavailable
         }
     }
@@ -264,6 +308,16 @@ public struct KeychainSecretStore: SecretStoring, Sendable {
     /// 后台读单个 secret，带超时。超时/失败返回 `.unavailable`，**绝不伪装成 `.absent`**。
     public func lookupAsync(_ key: SecretKey, timeout: TimeInterval = 5) async -> SecretLookup {
         await runOnKeychainQueue(timeout: timeout, timedOutValue: .unavailable) { $0.lookup(key) }
+    }
+
+    /// `readForeign` 的后台版本。允许交互时超时要给足（用户在授权框上慢慢点），
+    /// 静默读则维持秒级——它要么立刻成功、要么立刻 `errSecInteractionNotAllowed`。
+    public func readForeignAsync(
+        service: String, account: String, allowInteraction: Bool
+    ) async -> SecretLookup {
+        await runOnKeychainQueue(timeout: allowInteraction ? 120 : 5, timedOutValue: .unavailable) {
+            $0.readForeign(service: service, account: account, allowInteraction: allowInteraction)
+        }
     }
 
     /// 后台写，可 await 拿到结果。
