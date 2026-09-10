@@ -136,7 +136,23 @@
             </Border>
 
             <!-- Right Content Area -->
-            <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto" Background="#FFFFFF">
+            <Grid Grid.Column="1">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+                <!-- 凭据管理器不可用 / 写入失败：所有厂商的 Key 都受影响，故置于全部选项卡之上 -->
+                <Border x:Name="BdrSecretStoreWarning" Grid.Row="0" Background="#FEF3C7"
+                        BorderBrush="#FCD34D" BorderThickness="0,0,0,1" Padding="20,10" Visibility="Collapsed">
+                    <DockPanel LastChildFill="True">
+                        <TextBlock DockPanel.Dock="Left" Text="⚠" FontSize="13" Foreground="#D97706"
+                                   Margin="0,0,8,0" VerticalAlignment="Top"/>
+                        <TextBlock x:Name="TxtSecretStoreWarning" TextWrapping="Wrap" FontSize="11" Foreground="#92400E"/>
+                    </DockPanel>
+                </Border>
+
+                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Background="#FFFFFF">
                 <Grid Margin="24,20">
                     <!-- Tab 0: OpenAI -->
                     <!-- Tab 0: OpenAI -->
@@ -651,7 +667,8 @@
                         </Border>
                     </StackPanel>
                 </Grid>
-            </ScrollViewer>
+                </ScrollViewer>
+            </Grid>
         </Grid>
 
         <!-- Bottom Footer Bar -->

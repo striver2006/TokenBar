@@ -192,6 +192,14 @@ namespace TokenBar.I18n
             ? "读取 Windows 凭据管理器失败。输入框为空并不表示凭据管理器里没有 Secret，保存时不会删除已存的 Secret。"
             : "Could not read Windows Credential Manager. An empty field here does not mean the credential is missing, and saving will not delete the stored Secret.";
         public string BtnRetryReadCredential => IsChinese ? "重试读取" : "Retry";
+
+        // 全部凭证托管到凭据管理器后的横幅（与 mac 端 I18n.swift 同名 key；「钥匙串访问」对应改为「凭据管理器」）
+        public string WarnSecretStoreUnavailable => IsChinese
+            ? "启动时读取不到 Windows 凭据管理器，凭证暂以旧配置运行；在凭据管理器恢复可读之前不会清除或迁移任何凭证。请检查凭据管理器是否可用后重启 TokenBar。"
+            : "Windows Credential Manager could not be read at launch, so credentials are running from the previous configuration. Nothing will be cleared or migrated until Credential Manager is readable again. Check that Credential Manager is available and relaunch TokenBar.";
+        public string WarnSecretStoreWriteFailed => IsChinese
+            ? "无法把凭证写入 Windows 凭据管理器。本次输入已暂存到 settings.json 明文兜底，请检查凭据管理器是否可用后重新保存。"
+            : "Could not write credentials to Windows Credential Manager. What you entered has been kept in settings.json as a plain-text fallback for now - check that Credential Manager is available and save again.";
         public string AlertOk => IsChinese ? "好的" : "OK";
 
         // Secondary Labels

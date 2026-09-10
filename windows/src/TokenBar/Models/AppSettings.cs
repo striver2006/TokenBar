@@ -1,5 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace TokenBar.Models
 {
@@ -30,6 +33,15 @@ namespace TokenBar.Models
         public decimal? BalanceAlertThreshold { get; set; }
         // 厂商控制台 Web 登录态（如小米 MiMo 的余额/Token Plan 用量查询只接受 Cookie，不接受 API Key）
         public string ConsoleCookie { get; set; } = string.Empty;
+
+        /// <summary>去掉凭证字段后的副本，供落盘用（与 mac 端 strippingSecrets 同语义）</summary>
+        public CustomProviderConfig StrippingSecrets()
+        {
+            var copy = (CustomProviderConfig)MemberwiseClone();
+            copy.ApiKey = string.Empty;
+            copy.ConsoleCookie = string.Empty;
+            return copy;
+        }
     }
 
     public class AppSettings
@@ -106,5 +118,35 @@ namespace TokenBar.Models
         // 浮动框卡片显示顺序（键见 ProviderOrdering.DefaultOrder 与 CustomKeyPrefix）；
         // 空列表表示使用默认顺序，未列入的已启用厂商按默认顺序追加在末尾
         public List<string> ProviderOrder { get; set; } = new();
+
+        /// <summary>
+        /// 凭证是否已全部托管在 Windows 凭据管理器。为 true 时 SerializeForDisk 不再把凭证字段
+        /// 写进 settings.json；为 false（首次启动、或凭据管理器读不到 / 迁移失败）时照旧写明文，
+        /// 保证在安全存储可用之前**不会丢掉用户已经配好的凭证**。不参与序列化。
+        /// </summary>
+        [JsonIgnore]
+        public bool SecretsInKeychain { get; set; } = false;
+
+        private static readonly JsonSerializerOptions DiskOptions = new() { WriteIndented = true };
+
+        /// <summary>
+        /// 落盘用的 JSON。SecretsInKeychain 为 true 时序列化的是去掉凭证字段的副本
+        /// （内置凭证字段写空串、自定义厂商逐个去掉 ApiKey / ConsoleCookie），内存里的对象保持明文不变。
+        /// </summary>
+        public string SerializeForDisk()
+        {
+            var target = SecretsInKeychain ? ForPersistence() : this;
+            return JsonSerializer.Serialize(target, DiskOptions);
+        }
+
+        /// <summary>去掉全部凭证字段后的浅拷贝；CustomProviders 逐个换成 StrippingSecrets 副本。</summary>
+        public AppSettings ForPersistence()
+        {
+            var copy = (AppSettings)MemberwiseClone();
+            copy.CustomProviders = CustomProviders.Select(c => c.StrippingSecrets()).ToList();
+            copy.ProviderOrder = new List<string>(ProviderOrder);
+            TokenBar.Services.AppSecrets.Strip(copy);
+            return copy;
+        }
     }
 }

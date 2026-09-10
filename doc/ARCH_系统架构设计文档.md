@@ -304,12 +304,17 @@ Windows 客户端采用轻量现代的 **.NET 8 WPF** 架构，利用 Windows �
      Key 与 Cookie、阿里云 AccessKey Secret 与控制台令牌，macOS 一律存入系统钥匙串（Security.framework，
      service `TokenBar`，account 名见 `SecretKey` / `AppSecrets`），Windows 存入凭据管理器（`CredWriteW`，
      TargetName `TokenBar/<同名>`）。`AppSettings` 在内存里仍持有明文供刷新链路与设置页使用，
-     但 `encode(to:)` 在 `secretsInKeychain` 为 true 时不再把任何凭证写进 plist / settings.json。
-   - **迁移与三态**：启动时 `RefreshManager.loadSecretsFromKeychain` 用 `lookupAll` 逐键三态读取：
-     found → 以钥匙串为准；absent 且旧明文非空 → 迁入钥匙串；unavailable → 保留旧明文、什么都不写不删，
-     `secretsInKeychain` 保持 false 让明文继续落盘兜底。全部键可信且迁移成功后才置 true 并重写配置清掉明文。
-     保存时 `syncSecretsToKeychain` 按差异写 / 删，「输入为空且这轮没读到」只保留不删（`AppSecrets.saveAction`，
-     有单测）。安全存储不可用时**不降级为明文**，而是在设置页横幅如实报错。
+     但 macOS 的 `AppSettings.encode(to:)` / Windows 的 `AppSettings.SerializeForDisk()` 在
+     `secretsInKeychain` / `SecretsInKeychain` 为 true 时不再把任何凭证写进 plist / settings.json。
+   - **迁移与三态**：启动时 `RefreshManager.loadSecretsFromKeychain`（Windows：`LoadSecretsFromStoreAsync`）
+     用 `lookupAll` / `LookupAllAsync` 逐键三态读取：
+     found → 以安全存储为准；absent 且旧明文非空 → 迁入安全存储；unavailable → 保留旧明文、什么都不写不删，
+     标志保持 false 让明文继续落盘兜底。全部键可信且迁移成功后才置 true 并重写配置清掉明文。
+     保存时 `syncSecretsToKeychain` / `SyncSecretsToStoreAsync` 按差异写 / 删，「输入为空且这轮没读到」
+     只保留不删（`AppSecrets.saveAction` / `AppSecrets.ResolveSave`，两端各有单测）。
+     安全存储不可用时**不降级为新的明文写入**，而是在设置页横幅如实报错并保持既有明文兜底。
+     自定义厂商被删除时，它的两个条目由差异同步顺带删除，**不要另开删除路径** —— 那会与同步任务
+     在线程池上并发改同一份对齐表。
    - 网页授权窗口（`WebLoginWindowController`）使用非持久化 `WKWebsiteDataStore`，不把第三方整站登录态落进
      App 容器；completion 只触发一次。`GeminiService` 不再写回 Antigravity 的 `~/.gemini/jetski-standalone-oauth-token`。
    - 本机 `~/.bailian/config.json`（百炼 CLI 的配置）只读复用，**绝不写回** —— CLI 用 tmp+rename

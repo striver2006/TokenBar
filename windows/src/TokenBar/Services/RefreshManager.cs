@@ -23,6 +23,15 @@ namespace TokenBar.Services
         Settings   // 设置变更后立即刷新
     }
 
+    /// <summary>凭据管理器错误态，设置窗口据此选择横幅文案</summary>
+    public enum SecretStoreErrorKind
+    {
+        /// <summary>启动时读不到：凭证暂以旧明文运行，不清除不迁移</summary>
+        Unavailable,
+        /// <summary>保存时写/删失败：已打回明文落盘兜底</summary>
+        WriteFailed
+    }
+
     public class RefreshManager : IDisposable
     {
         public static RefreshManager Instance { get; } = new RefreshManager();
@@ -65,6 +74,31 @@ namespace TokenBar.Services
 
         public event Action? OnQuotasUpdated;
 
+        // ---------- 凭证托管状态（与 mac 端 RefreshManager 的 persistedSecrets / unreadableSecretKeys 同构） ----------
+
+        /// <summary>上次与凭据管理器对齐后的各键值；保存时据此算差异</summary>
+        private Dictionary<SecretKey, string> _persistedSecrets = new();
+        /// <summary>启动时读不到的键：这些键输入为空时绝不删（空只代表「没读到」）</summary>
+        private HashSet<SecretKey> _unreadableSecretKeys = new();
+        /// <summary>LoadSecretsFromStoreAsync 是否已跑过；之前的 SaveSettings 不做同步，避免拿空内存去删条目</summary>
+        private bool _secretsLoaded;
+        /// <summary>同一时刻只允许一轮凭据写/删，避免两次保存的写与删交错</summary>
+        private readonly SemaphoreSlim _secretSyncGate = new(1, 1);
+
+        /// <summary>凭据管理器当前的错误态；null 表示正常。设置窗口据此显示橙色横幅。</summary>
+        public SecretStoreErrorKind? SecretStoreErrorState { get; private set; }
+
+        /// <summary>SecretStoreErrorState 对应的本地化文案（随当前语言变化），null 表示没有错误</summary>
+        public string? SecretStoreError => SecretStoreErrorState switch
+        {
+            SecretStoreErrorKind.Unavailable => LocalizationManager.Instance.WarnSecretStoreUnavailable,
+            SecretStoreErrorKind.WriteFailed => LocalizationManager.Instance.WarnSecretStoreWriteFailed,
+            _ => null
+        };
+
+        /// <summary>SecretStoreErrorState 变化时在 UI 线程触发</summary>
+        public event Action? OnSecretStoreErrorChanged;
+
         private RefreshManager()
         {
             var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
@@ -93,9 +127,213 @@ namespace TokenBar.Services
             }
 
             SetupInitialData();
+            // 定时器必须先于首刷创建：首刷一旦挂起，定时器不存在就永远没有自动刷新
             StartTimer();
             Log.Notice("lifecycle", $"TokenBar 启动，refreshInterval={Settings.RefreshIntervalMinutes}min");
-            _ = RefreshAllAsync(RefreshTrigger.Initial);
+            _ = LoadSecretsThenInitialRefreshAsync();
+        }
+
+        /// <summary>凭证必须先于首刷从凭据管理器读进内存，否则首轮全部厂商都会被判成未配置</summary>
+        private async Task LoadSecretsThenInitialRefreshAsync()
+        {
+            try
+            {
+                await LoadSecretsFromStoreAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                // 加载失败不能拦住首刷：内存里仍是 settings.json 的旧明文，照常刷新
+                Log.Error("lifecycle", $"启动加载凭证异常: {ex}");
+            }
+            await RefreshAllAsync(RefreshTrigger.Initial).ConfigureAwait(false);
+        }
+
+        // MARK: - 凭证与凭据管理器
+
+        /// <summary>
+        /// 启动时把全部凭证从凭据管理器读进 Settings，并把 settings.json 里的旧明文一次性迁进凭据管理器。
+        ///
+        /// 三态处理（AppSecrets.ResolveLoad）：
+        /// - Found：以凭据管理器为准；
+        /// - Absent + 旧明文非空：迁移（写入凭据管理器）；
+        /// - Unavailable：保留内存里的旧明文，什么都不写不删，SecretsInKeychain 保持 false，
+        ///   这样接下来任何一次 SaveSettings 仍会把明文写回 settings.json —— 在安全存储可用之前
+        ///   绝不丢用户凭证。全部键都可信且迁移都成功后才置 true 并重写 settings.json 把明文清掉。
+        /// </summary>
+        public async Task LoadSecretsFromStoreAsync()
+        {
+            var keys = AppSecrets.Keys(Settings);
+            var lookups = await CredentialSecretStore.Instance.LookupAllAsync(keys).ConfigureAwait(false);
+            var legacy = AppSecrets.Extract(Settings);
+
+            var loaded = new Dictionary<SecretKey, string>();
+            var toMigrate = new Dictionary<SecretKey, string>();
+            var unreadable = new HashSet<SecretKey>();
+            foreach (var key in keys)
+            {
+                var lookup = lookups.TryGetValue(key, out var l) ? l : SecretLookup.Unavailable;
+                legacy.TryGetValue(key, out var legacyValue);
+                var action = AppSecrets.ResolveLoad(lookup, legacyValue);
+                switch (action.Kind)
+                {
+                    case AppSecrets.LoadActionKind.UseStored:
+                        loaded[key] = action.Value ?? string.Empty;
+                        break;
+                    case AppSecrets.LoadActionKind.Migrate:
+                        toMigrate[key] = action.Value ?? string.Empty;
+                        break;
+                    case AppSecrets.LoadActionKind.KeepLegacy:
+                        unreadable.Add(key);
+                        break;
+                    default:
+                        break;
+                }
+            }
+
+            var migrationFailed = false;
+            foreach (var kv in toMigrate)
+            {
+                if (await CredentialSecretStore.Instance.SetAsync(kv.Key, kv.Value).ConfigureAwait(false))
+                {
+                    loaded[kv.Key] = kv.Value;
+                }
+                else
+                {
+                    migrationFailed = true;
+                    Log.Error("lifecycle", $"凭证迁移写入凭据管理器失败 account={kv.Key}");
+                }
+            }
+
+            AppSecrets.Apply(loaded, Settings);
+            _persistedSecrets = loaded;
+            _unreadableSecretKeys = unreadable;
+            _secretsLoaded = true;
+
+            var allTrustworthy = unreadable.Count == 0 && !migrationFailed;
+            if (allTrustworthy != Settings.SecretsInKeychain || toMigrate.Count > 0)
+            {
+                Settings.SecretsInKeychain = allTrustworthy;
+                // 迁移成功后重写一次 settings.json 把明文清掉；失败则保持明文落盘，下次启动重试
+                PersistSettingsToDisk();
+            }
+            Log.Notice("lifecycle",
+                $"凭证加载完成：loaded={loaded.Count} migrated={toMigrate.Count} unreadable={unreadable.Count} secretsInKeychain={allTrustworthy}");
+            // 读不到与写不进是两种故障，横幅文案不同：读不到时凭证仍以旧明文运行，
+            // 写不进时是迁移没能落地。两者同时出现时以「读不到」为准（更根本）。
+            SetSecretStoreError(
+                unreadable.Count > 0 ? SecretStoreErrorKind.Unavailable
+                : migrationFailed ? SecretStoreErrorKind.WriteFailed
+                : null);
+        }
+
+        /// <summary>
+        /// 把内存里变更过的凭证同步到凭据管理器。失败时不降级明文进内存以外的地方：保留内存值、
+        /// 置 SecretStoreErrorState 提示用户，并把 SecretsInKeychain 打回 false 重写 settings.json 兜底，避免丢凭证。
+        /// </summary>
+        /// <param name="current">
+        /// 凭证快照，**必须由调用方在 UI 线程上取好再传进来**。在这里现取会让线程池线程读 Settings，
+        /// 与用户在设置页继续编辑形成竞态（mac 端整个流程都在 MainActor 上，天然没有这个问题）。
+        /// </param>
+        private async Task SyncSecretsToStoreAsync(Dictionary<SecretKey, string> current)
+        {
+            if (!_secretsLoaded) return;
+
+            await _secretSyncGate.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                var keys = new HashSet<SecretKey>(current.Keys);
+                keys.UnionWith(_persistedSecrets.Keys);
+
+                var writes = new Dictionary<SecretKey, string>();
+                var deletes = new List<SecretKey>();
+                foreach (var key in keys)
+                {
+                    current.TryGetValue(key, out var cur);
+                    _persistedSecrets.TryGetValue(key, out var prev);
+                    var action = AppSecrets.ResolveSave(cur, prev, storeReadable: !_unreadableSecretKeys.Contains(key));
+                    switch (action.Kind)
+                    {
+                        case AppSecrets.SaveActionKind.Write:
+                            writes[key] = action.Value ?? string.Empty;
+                            break;
+                        case AppSecrets.SaveActionKind.Delete:
+                            deletes.Add(key);
+                            break;
+                        default:
+                            break;
+                    }
+                }
+                if (writes.Count == 0 && deletes.Count == 0) return;
+
+                var failed = false;
+                foreach (var kv in writes)
+                {
+                    if (await CredentialSecretStore.Instance.SetAsync(kv.Key, kv.Value).ConfigureAwait(false))
+                    {
+                        _persistedSecrets[kv.Key] = kv.Value;
+                        _unreadableSecretKeys.Remove(kv.Key);
+                    }
+                    else
+                    {
+                        failed = true;
+                        Log.Error("lifecycle", $"凭证写入凭据管理器失败 account={kv.Key}");
+                    }
+                }
+                foreach (var key in deletes)
+                {
+                    if (await CredentialSecretStore.Instance.DeleteAsync(key).ConfigureAwait(false))
+                    {
+                        _persistedSecrets.Remove(key);
+                    }
+                    else
+                    {
+                        failed = true;
+                        Log.Error("lifecycle", $"凭证从凭据管理器删除失败 account={key}");
+                    }
+                }
+
+                if (failed)
+                {
+                    SetSecretStoreError(SecretStoreErrorKind.WriteFailed);
+                    if (Settings.SecretsInKeychain)
+                    {
+                        Settings.SecretsInKeychain = false;
+                        PersistSettingsToDisk();
+                    }
+                }
+                else if (SecretStoreErrorState != null && _unreadableSecretKeys.Count == 0)
+                {
+                    SetSecretStoreError(null);
+                    if (!Settings.SecretsInKeychain)
+                    {
+                        Settings.SecretsInKeychain = true;
+                        PersistSettingsToDisk();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Error("lifecycle", $"同步凭证到凭据管理器异常: {ex}");
+            }
+            finally
+            {
+                _secretSyncGate.Release();
+            }
+        }
+
+        private void SetSecretStoreError(SecretStoreErrorKind? kind)
+        {
+            if (SecretStoreErrorState == kind) return;
+            SecretStoreErrorState = kind;
+            var app = System.Windows.Application.Current;
+            if (app != null && app.Dispatcher != null)
+            {
+                app.Dispatcher.InvokeAsync(() => OnSecretStoreErrorChanged?.Invoke());
+            }
+            else
+            {
+                OnSecretStoreErrorChanged?.Invoke();
+            }
         }
 
         private void SetupInitialData()
@@ -156,11 +394,13 @@ namespace TokenBar.Services
 
         private readonly object _saveLock = new();
 
-        public void SaveSettings()
+        /// <summary>只写 settings.json（凭证字段是否落盘由 Settings.SecretsInKeychain 决定），不碰凭据管理器</summary>
+        private void PersistSettingsToDisk()
         {
             try
             {
-                var json = JsonSerializer.Serialize(Settings, new JsonSerializerOptions { WriteIndented = true });
+                // SerializeForDisk 在 SecretsInKeychain 时序列化的是去掉凭证的副本，内存对象保持明文
+                var json = Settings.SerializeForDisk();
                 // 先写临时文件再原子替换：进程在写到一半时被杀，不会留下半截 JSON
                 lock (_saveLock)
                 {
@@ -173,6 +413,14 @@ namespace TokenBar.Services
             {
                 Log.Error("settings", $"settings.json 写入失败: {ex.Message}");
             }
+        }
+
+        public void SaveSettings()
+        {
+            PersistSettingsToDisk();
+            // 凭证差异写入凭据管理器在后台进行；失败会置 SecretStoreErrorState 并把明文重写回 settings.json 兜底。
+            // 快照在这里（调用线程）取，后台任务只用这份不可变副本。
+            _ = SyncSecretsToStoreAsync(AppSecrets.Extract(Settings));
 
             try
             {
@@ -1198,6 +1446,9 @@ namespace TokenBar.Services
                 _balanceAlerted.Remove($"custom:{id}");
             }
             BalanceHistoryStore.Clear($"custom:{id}");
+            // 该厂商的两个凭据条目由 SaveSettings 的差异同步删除：它们从 Extract 结果里消失、
+            // 但仍在 _persistedSecrets 中，ResolveSave 会判成 Delete。不要在这里另开一条删除路径 ——
+            // 那会在线程池上与 SyncSecretsToStoreAsync 并发改同一个字典。
             SaveSettings();
             NotifyQuotasUpdated();
         }
@@ -1214,6 +1465,7 @@ namespace TokenBar.Services
 
         public void Dispose()
         {
+            _secretSyncGate.Dispose();
             _timer?.Dispose();
         }
     }

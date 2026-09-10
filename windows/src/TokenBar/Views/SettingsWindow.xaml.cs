@@ -53,8 +53,10 @@ namespace TokenBar.Views
 
             LocalizationManager.Instance.PropertyChanged += OnLanguageChanged;
             RefreshManager.Instance.OnQuotasUpdated += OnQuotasUpdated;
+            RefreshManager.Instance.OnSecretStoreErrorChanged += OnSecretStoreErrorChanged;
             Closed += OnClosedUnsubscribe;
             UpdateStatuses();
+            UpdateSecretStoreWarning();
 
             // 凭据读取挂到 Loaded：构造函数不能 await，而同步的 Cred* P/Invoke 在
             // UI 线程上会卡住窗口。对应 mac 端 SettingsView 的 .task 修饰符。
@@ -67,6 +69,22 @@ namespace TokenBar.Views
         private void OnQuotasUpdated()
             => Dispatcher.Invoke(UpdateStatuses);
 
+        private void OnSecretStoreErrorChanged()
+            => Dispatcher.Invoke(UpdateSecretStoreWarning);
+
+        /// <summary>凭据管理器错误横幅；文案随语言变化，故 UpdateLocalization 里也要刷一次。</summary>
+        private void UpdateSecretStoreWarning()
+        {
+            var message = RefreshManager.Instance.SecretStoreError;
+            if (string.IsNullOrEmpty(message))
+            {
+                BdrSecretStoreWarning.Visibility = Visibility.Collapsed;
+                return;
+            }
+            TxtSecretStoreWarning.Text = message;
+            BdrSecretStoreWarning.Visibility = Visibility.Visible;
+        }
+
         private async void OnLoadedReadSecret(object sender, RoutedEventArgs e)
         {
             try { await LoadAliyunSecretAsync(); }
@@ -78,6 +96,7 @@ namespace TokenBar.Views
         {
             LocalizationManager.Instance.PropertyChanged -= OnLanguageChanged;
             RefreshManager.Instance.OnQuotasUpdated -= OnQuotasUpdated;
+            RefreshManager.Instance.OnSecretStoreErrorChanged -= OnSecretStoreErrorChanged;
             Loaded -= OnLoadedReadSecret;
             Closed -= OnClosedUnsubscribe;
         }
@@ -405,6 +424,8 @@ namespace TokenBar.Views
             };
 
             UpdateStatuses();
+            // 横幅文案取自 LocalizationManager，切语言后要跟着重取
+            UpdateSecretStoreWarning();
         }
 
         private void PopulatePresets()

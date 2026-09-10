@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
@@ -6,19 +7,73 @@ using System.Threading.Tasks;
 
 namespace TokenBar.Services
 {
-    /// <summary>钥匙串 / 凭据管理器条目名。与 mac 端 SecretKey 的 rawValue 同名。</summary>
-    public enum SecretKey
+    /// <summary>
+    /// 凭据管理器条目名（TargetName = "TokenBar/" + Account）。Account 与 mac 端
+    /// SecretKey.account 完全同名，两端的键目录见各自的 AppSecrets。
+    ///
+    /// struct 而非 enum：自定义厂商的键带 GUID，枚举表达不了。内置键以静态成员提供，
+    /// 调用处写法（SecretKey.AliyunAccessKeySecret）与以前一致。
+    /// </summary>
+    public readonly struct SecretKey : IEquatable<SecretKey>
     {
-        AliyunAccessKeySecret,
-        AliyunConsoleAccessToken
+        public string Account { get; }
+
+        public SecretKey(string account)
+        {
+            if (string.IsNullOrWhiteSpace(account)) throw new ArgumentException("account 不能为空", nameof(account));
+            Account = account;
+        }
+
+        public static readonly SecretKey AliyunAccessKeySecret = new("aliyunAccessKeySecret");
+        public static readonly SecretKey AliyunConsoleAccessToken = new("aliyunConsoleAccessToken");
+
+        public static readonly SecretKey OpenAIApiKey = new("openAIApiKey");
+        public static readonly SecretKey AnthropicApiKey = new("anthropicApiKey");
+        public static readonly SecretKey ClaudeToken = new("claudeToken");
+        public static readonly SecretKey GeminiApiKey = new("geminiApiKey");
+        public static readonly SecretKey GeminiToken = new("geminiToken");
+        public static readonly SecretKey DeepSeekApiKey = new("deepseekApiKey");
+        public static readonly SecretKey VolcengineApiKey = new("volcengineApiKey");
+        public static readonly SecretKey KimiApiKey = new("kimiApiKey");
+        public static readonly SecretKey OpenRouterApiKey = new("openRouterApiKey");
+        public static readonly SecretKey GLMApiKey = new("glmApiKey");
+        public static readonly SecretKey AliyunApiKey = new("aliyunApiKey");
+        public static readonly SecretKey AliyunCookie = new("aliyunCookie");
+
+        /// <summary>自定义厂商的字段：custom.&lt;GUID&gt;.apiKey / custom.&lt;GUID&gt;.consoleCookie。
+        /// GUID 用大写 "D" 格式，与 mac 端 UUID.uuidString 一致。</summary>
+        public static SecretKey Custom(Guid id, CustomSecretField field)
+        {
+            var suffix = field switch
+            {
+                CustomSecretField.ApiKey => "apiKey",
+                CustomSecretField.ConsoleCookie => "consoleCookie",
+                _ => throw new ArgumentOutOfRangeException(nameof(field))
+            };
+            return new SecretKey($"custom.{id.ToString("D").ToUpperInvariant()}.{suffix}");
+        }
+
+        public bool Equals(SecretKey other) => string.Equals(Account, other.Account, StringComparison.Ordinal);
+        public override bool Equals(object? obj) => obj is SecretKey other && Equals(other);
+        public override int GetHashCode() => StringComparer.Ordinal.GetHashCode(Account ?? string.Empty);
+        public static bool operator ==(SecretKey a, SecretKey b) => a.Equals(b);
+        public static bool operator !=(SecretKey a, SecretKey b) => !a.Equals(b);
+        public override string ToString() => Account ?? string.Empty;
+    }
+
+    public enum CustomSecretField
+    {
+        ApiKey,
+        ConsoleCookie
     }
 
     /// <summary>
-    /// 高敏凭证的存取抽象。目前只托管阿里云 AccessKey Secret 与控制台 access_token ——
-    /// 其余厂商的 API Key 维持原有的 settings.json 明文存储不变。
+    /// 高敏凭证的存取抽象。托管**全部**长期凭证：各厂商 API Key、Claude / Gemini 的 OAuth token、
+    /// 控制台 Cookie、自定义厂商的 Key 与 Cookie，以及阿里云 AccessKey Secret / 控制台 access_token。
+    /// 键目录见 AppSecrets。
     ///
-    /// AccessKey Secret 是阿里云账号级长期凭证，落到 %AppData%\TokenBar\settings.json
-    /// 里等于任何以该用户身份运行的进程都能明文读走，所以单独走 Windows 凭据管理器。
+    /// 以前只有阿里云两项进凭据管理器，其余明文躺在 %AppData%\TokenBar\settings.json 里 ——
+    /// 任何以该用户身份运行的进程都能明文读走。
     ///
     /// 选凭据管理器而不是 System.Security.Cryptography.ProtectedData（DPAPI）：后者在
     /// .NET 8 是独立 NuGet 包，要动 csproj；而 GeminiService 已经 P/Invoke 了 CredReadW，
@@ -120,7 +175,7 @@ namespace TokenBar.Services
             _prefix = prefix;
         }
 
-        private string TargetName(SecretKey key) => _prefix + key;
+        private string TargetName(SecretKey key) => _prefix + key.Account;
 
         // ---------- P/Invoke ----------
 
@@ -169,7 +224,7 @@ namespace TokenBar.Services
                     Flags = 0,
                     Type = CRED_TYPE_GENERIC,
                     TargetName = TargetName(key),
-                    Comment = "TokenBar 托管的阿里云凭证",
+                    Comment = "TokenBar 托管的凭证",
                     CredentialBlobSize = bytes.Length,
                     CredentialBlob = blob,
                     Persist = CRED_PERSIST_LOCAL_MACHINE,
@@ -285,6 +340,33 @@ namespace TokenBar.Services
         public Task<SecretLookup> LookupAsync(SecretKey key) =>
             RunWithTimeoutAsync(() => Lookup(key), ReadTimeout, SecretLookup.Unavailable);
 
+        /// <summary>批量读取超时：条目多、每条都是一次 P/Invoke，给得比单条宽</summary>
+        private static readonly TimeSpan LookupAllTimeout = TimeSpan.FromSeconds(8);
+
+        /// <summary>
+        /// 一次后台读取一批 secret，逐键保留三态。整体超时 / 异常时**全部**记为 Unavailable，
+        /// 绝不把「没读到」伪装成「没有」—— 启动时的凭证加载 / 迁移靠它区分
+        /// 「凭据管理器里确实没有，可以把旧明文迁进去」与「读不到，什么都别动」。
+        /// 与 mac 端 KeychainSecretStore.lookupAll 同语义。
+        /// </summary>
+        public async Task<Dictionary<SecretKey, SecretLookup>> LookupAllAsync(IReadOnlyList<SecretKey> keys)
+        {
+            if (keys.Count == 0) return new Dictionary<SecretKey, SecretLookup>();
+
+            var unavailable = new Dictionary<SecretKey, SecretLookup>();
+            foreach (var key in keys) unavailable[key] = SecretLookup.Unavailable;
+
+            return await RunWithTimeoutAsync(
+                () =>
+                {
+                    var map = new Dictionary<SecretKey, SecretLookup>();
+                    foreach (var key in keys) map[key] = Lookup(key);
+                    return map;
+                },
+                LookupAllTimeout,
+                unavailable).ConfigureAwait(false);
+        }
+
         /// <summary>
         /// 后台写，可 await 拿到结果。需要「写失败即中止、绝不降级明文」语义的
         /// 调用方必须用这个而不是 fire-and-forget。
@@ -308,7 +390,7 @@ namespace TokenBar.Services
             var values = await RunWithTimeoutAsync(
                 () =>
                 {
-                    var map = new System.Collections.Generic.Dictionary<SecretKey, string>();
+                    var map = new Dictionary<SecretKey, string>();
                     foreach (var key in keys)
                     {
                         var r = Lookup(key);
@@ -317,7 +399,7 @@ namespace TokenBar.Services
                     return map;
                 },
                 ReadTimeout,
-                new System.Collections.Generic.Dictionary<SecretKey, string>());
+                new Dictionary<SecretKey, string>());
 
             if (values.Count == 0 && keys.Length > 0)
             {
@@ -351,7 +433,7 @@ namespace TokenBar.Services
     /// </summary>
     public sealed class InMemorySecretStore : ISecretStore
     {
-        private readonly System.Collections.Generic.Dictionary<SecretKey, string> _storage = new();
+        private readonly Dictionary<SecretKey, string> _storage = new();
         private readonly object _lock = new();
 
         /// <summary>置 true 可模拟「凭据管理器不可用」</summary>
