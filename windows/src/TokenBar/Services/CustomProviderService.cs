@@ -4,7 +4,9 @@ using System.Globalization;
 using System.Linq;
 using System.Net.Http;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
+using TokenBar.Helpers;
 using TokenBar.Models;
 
 namespace TokenBar.Services
@@ -13,11 +15,9 @@ namespace TokenBar.Services
     {
         public static CustomProviderService Instance { get; } = new CustomProviderService();
 
-        private static readonly HttpClient HttpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
-
         private CustomProviderService() { }
 
-        public async Task<(TokenWindow? Primary, TokenWindow? Secondary, string? Account)> FetchQuotaAsync(CustomProviderConfig config)
+        public async Task<(TokenWindow? Primary, TokenWindow? Secondary, string? Account)> FetchQuotaAsync(CustomProviderConfig config, CancellationToken ct = default)
         {
             var trimmedKey = config.ApiKey.Trim();
             if (string.IsNullOrEmpty(trimmedKey))
@@ -33,10 +33,10 @@ namespace TokenBar.Services
 
             return config.Protocol switch
             {
-                ApiProtocol.OpenAIChat => await FetchOpenAICompatibleAsync(trimmedKey, endpoint, config, isResponseProtocol: false),
-                ApiProtocol.OpenAIResponses => await FetchOpenAICompatibleAsync(trimmedKey, endpoint, config, isResponseProtocol: true),
-                ApiProtocol.Anthropic => await FetchAnthropicCompatibleAsync(trimmedKey, endpoint, config),
-                _ => await FetchOpenAICompatibleAsync(trimmedKey, endpoint, config, isResponseProtocol: false)
+                ApiProtocol.OpenAIChat => await FetchOpenAICompatibleAsync(trimmedKey, endpoint, config, isResponseProtocol: false, ct),
+                ApiProtocol.OpenAIResponses => await FetchOpenAICompatibleAsync(trimmedKey, endpoint, config, isResponseProtocol: true, ct),
+                ApiProtocol.Anthropic => await FetchAnthropicCompatibleAsync(trimmedKey, endpoint, config, ct),
+                _ => await FetchOpenAICompatibleAsync(trimmedKey, endpoint, config, isResponseProtocol: false, ct)
             };
         }
 
@@ -44,7 +44,8 @@ namespace TokenBar.Services
             string apiKey,
             string endpoint,
             CustomProviderConfig config,
-            bool isResponseProtocol)
+            bool isResponseProtocol,
+            CancellationToken ct)
         {
             string? balanceAccountInfo = null;
             string? planAccountInfo = null;
@@ -70,7 +71,7 @@ namespace TokenBar.Services
 
             if (endpoint.Contains("deepseek.com", StringComparison.OrdinalIgnoreCase))
             {
-                var balance = await DeepSeekService.Instance.FetchBalanceAsync(apiKey);
+                var balance = await DeepSeekService.Instance.FetchBalanceAsync(apiKey, ct);
                 if (balance != null)
                 {
                     var symbol = balance.Value.Currency == "USD" ? "$" : "¥";
@@ -79,7 +80,7 @@ namespace TokenBar.Services
             }
             else if (endpoint.Contains("moonshot.cn", StringComparison.OrdinalIgnoreCase))
             {
-                var balance = await FetchMoonshotBalanceAsync(apiKey);
+                var balance = await FetchMoonshotBalanceAsync(apiKey, ct);
                 if (balance != null)
                 {
                     UseBalance("账户余额", balance.Value, "CNY", $"¥{balance.Value:0.00}");
@@ -87,7 +88,7 @@ namespace TokenBar.Services
             }
             else if (endpoint.Contains("siliconflow.cn", StringComparison.OrdinalIgnoreCase))
             {
-                var balance = await FetchSiliconFlowBalanceAsync(apiKey);
+                var balance = await FetchSiliconFlowBalanceAsync(apiKey, ct);
                 if (balance != null)
                 {
                     UseBalance("账户余额", balance.Value, "CNY", $"¥{balance.Value:0.00}");
@@ -100,7 +101,7 @@ namespace TokenBar.Services
                 var cookie = config.ConsoleCookie.Trim();
                 if (cookie.Length > 0)
                 {
-                    var plan = await FetchMiMoTokenPlanAsync(cookie);
+                    var plan = await FetchMiMoTokenPlanAsync(cookie, ct);
                     if (plan != null)
                     {
                         planWindow = new TokenWindow
@@ -118,7 +119,7 @@ namespace TokenBar.Services
                             : $"Plan used {plan.Value.UsedPercent:0.#}%";
                     }
 
-                    var balance = await FetchMiMoBalanceAsync(cookie);
+                    var balance = await FetchMiMoBalanceAsync(cookie, ct);
                     if (balance != null)
                     {
                         var symbol = balance.Value.Currency == "USD" ? "$" : "¥";
@@ -135,8 +136,8 @@ namespace TokenBar.Services
             request.Headers.Add("Authorization", $"Bearer {apiKey}");
             request.Headers.Add("Accept", "application/json");
 
-            var resp = await HttpClient.SendAsync(request);
-            var body = await resp.Content.ReadAsStringAsync();
+            using var resp = await Http.Shared.SendAsync(request, ct);
+            var body = await resp.Content.ReadAsStringAsync(ct);
 
             if (resp.StatusCode == System.Net.HttpStatusCode.Unauthorized)
             {
@@ -155,7 +156,10 @@ namespace TokenBar.Services
                         msg = detail.GetString() ?? msg;
                     }
                 }
-                catch { }
+                catch (JsonException ex)
+                {
+                    Log.Warn("provider", $"custom 429 响应不是 JSON: {ex.Message}");
+                }
                 throw new Exception(msg);
             }
 
@@ -182,13 +186,13 @@ namespace TokenBar.Services
             TokenWindow? primaryWindow = planWindow ?? balanceWindow;
             TokenWindow? secondaryWindow = planWindow != null ? balanceWindow : null;
 
-            if (double.TryParse(limitTokensStr, out var limitTokens) &&
-                double.TryParse(remainingTokensStr, out var remainingTokens) &&
+            if (double.TryParse(limitTokensStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var limitTokens) &&
+                double.TryParse(remainingTokensStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var remainingTokens) &&
                 limitTokens > 0)
             {
                 var used = Math.Max(0.0, limitTokens - remainingTokens);
                 var usedPct = Math.Clamp((used / limitTokens) * 100.0, 0.0, 100.0);
-                var duration = OpenAIService.Instance.ParseDurationString(resetTokensStr ?? "1s");
+                var duration = TimeSpan.FromSeconds(RateLimitReset.Parse(resetTokensStr) ?? 1);
                 var now = DateTime.Now;
 
                 var rateWindow = new TokenWindow
@@ -218,19 +222,14 @@ namespace TokenBar.Services
                     modelCount = dataArr.GetArrayLength();
                 }
             }
-            catch { }
+            catch (JsonException ex)
+            {
+                Log.Warn("provider", $"custom /models 响应不是 JSON: {ex.Message}");
+            }
 
             if (primaryWindow == null)
             {
-                primaryWindow = new TokenWindow
-                {
-                    Title = "接口连接正常",
-                    UsedPercentage = 0.0,
-                    StartTime = DateTime.Now,
-                    EndTime = DateTime.Now.AddDays(1),
-                    Unit = "%",
-                    IsIdle = true
-                };
+                primaryWindow = TokenWindow.Status("接口连接正常");
             }
 
             var isZhAcct = LocalizationManager.Instance.IsChinese;
@@ -246,7 +245,8 @@ namespace TokenBar.Services
         private async Task<(TokenWindow? Primary, TokenWindow? Secondary, string? Account)> FetchAnthropicCompatibleAsync(
             string apiKey,
             string endpoint,
-            CustomProviderConfig config)
+            CustomProviderConfig config,
+            CancellationToken ct)
         {
             var modelsUrl = endpoint.EndsWith("/models", StringComparison.OrdinalIgnoreCase)
                 ? endpoint
@@ -257,8 +257,8 @@ namespace TokenBar.Services
             request.Headers.Add("anthropic-version", "2023-06-01");
             request.Headers.Add("Accept", "application/json");
 
-            var resp = await HttpClient.SendAsync(request);
-            var body = await resp.Content.ReadAsStringAsync();
+            using var resp = await Http.Shared.SendAsync(request, ct);
+            var body = await resp.Content.ReadAsStringAsync(ct);
 
             if (resp.StatusCode == System.Net.HttpStatusCode.Unauthorized)
             {
@@ -295,13 +295,13 @@ namespace TokenBar.Services
             TokenWindow? primaryWindow = null;
             TokenWindow? secondaryWindow = null;
 
-            if (double.TryParse(tokenLimitStr, out var limit) &&
-                double.TryParse(tokenRemainingStr, out var remaining) &&
+            if (double.TryParse(tokenLimitStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var limit) &&
+                double.TryParse(tokenRemainingStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var remaining) &&
                 limit > 0)
             {
                 var used = Math.Max(0.0, limit - remaining);
                 var usedPct = Math.Clamp((used / limit) * 100.0, 0.0, 100.0);
-                var duration = OpenAIService.Instance.ParseDurationString(tokenResetStr ?? "1s");
+                var duration = TimeSpan.FromSeconds(RateLimitReset.Parse(tokenResetStr) ?? 1);
                 var now = DateTime.Now;
 
                 primaryWindow = new TokenWindow
@@ -317,8 +317,8 @@ namespace TokenBar.Services
                 };
             }
 
-            if (double.TryParse(reqLimitStr, out var reqLimit) &&
-                double.TryParse(reqRemainingStr, out var reqRem) &&
+            if (double.TryParse(reqLimitStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var reqLimit) &&
+                double.TryParse(reqRemainingStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var reqRem) &&
                 reqLimit > 0)
             {
                 var used = Math.Max(0.0, reqLimit - reqRem);
@@ -346,19 +346,14 @@ namespace TokenBar.Services
                     modelCount = dataArr.GetArrayLength();
                 }
             }
-            catch { }
+            catch (JsonException ex)
+            {
+                Log.Warn("provider", $"custom anthropic /models 响应不是 JSON: {ex.Message}");
+            }
 
             if (primaryWindow == null)
             {
-                primaryWindow = new TokenWindow
-                {
-                    Title = "Anthropic 协议连接正常",
-                    UsedPercentage = 0.0,
-                    StartTime = DateTime.Now,
-                    EndTime = DateTime.Now.AddDays(1),
-                    Unit = "%",
-                    IsIdle = true
-                };
+                primaryWindow = TokenWindow.Status("Anthropic 协议连接正常");
             }
 
             var isZhAcct = LocalizationManager.Instance.IsChinese;
@@ -369,17 +364,17 @@ namespace TokenBar.Services
         }
 
         /// <summary>查询 Moonshot 账户余额（人民币），失败返回 null。</summary>
-        private async Task<decimal?> FetchMoonshotBalanceAsync(string apiKey)
+        private async Task<decimal?> FetchMoonshotBalanceAsync(string apiKey, CancellationToken ct)
         {
             try
             {
                 using var req = new HttpRequestMessage(HttpMethod.Get, "https://api.moonshot.cn/v1/users/me/balance");
                 req.Headers.Add("Authorization", $"Bearer {apiKey}");
 
-                var resp = await HttpClient.SendAsync(req);
+                using var resp = await Http.Shared.SendAsync(req, ct);
                 if (!resp.IsSuccessStatusCode) return null;
 
-                var body = await resp.Content.ReadAsStringAsync();
+                var body = await resp.Content.ReadAsStringAsync(ct);
                 using var doc = JsonDocument.Parse(body);
                 if (doc.RootElement.TryGetProperty("data", out var dataObj) &&
                     dataObj.TryGetProperty("available_balance", out var av))
@@ -391,24 +386,28 @@ namespace TokenBar.Services
                         return parsed;
                 }
             }
-            catch { }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                Log.Warn("provider", $"custom 余额/套餐查询失败: {ex.Message}");
+            }
             return null;
         }
 
         /// <summary>查询小米 MiMo 按量余额（仅接受控制台 Cookie），失败返回 null。</summary>
-        private async Task<(decimal Amount, string Currency)?> FetchMiMoBalanceAsync(string cookie)
+        private async Task<(decimal Amount, string Currency)?> FetchMiMoBalanceAsync(string cookie, CancellationToken ct)
         {
             try
             {
                 using var req = new HttpRequestMessage(HttpMethod.Get, "https://platform.xiaomimimo.com/api/v1/balance");
                 req.Headers.Add("Cookie", cookie);
-                req.Headers.Add("User-Agent", "TokenBar/1.0");
+                req.Headers.Add("User-Agent", $"TokenBar/{AppVersion.Short}");
                 req.Headers.Add("Accept", "application/json");
 
-                var resp = await HttpClient.SendAsync(req);
+                using var resp = await Http.Shared.SendAsync(req, ct);
                 if (!resp.IsSuccessStatusCode) return null;
 
-                var body = await resp.Content.ReadAsStringAsync();
+                var body = await resp.Content.ReadAsStringAsync(ct);
                 using var doc = JsonDocument.Parse(body);
                 var root = doc.RootElement;
                 if (root.TryGetProperty("code", out var codeProp) &&
@@ -426,7 +425,11 @@ namespace TokenBar.Services
                     }
                 }
             }
-            catch { }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                Log.Warn("provider", $"custom 余额/套餐查询失败: {ex.Message}");
+            }
             return null;
         }
 
@@ -434,19 +437,19 @@ namespace TokenBar.Services
         /// 查询小米 MiMo Token Plan 套餐用量（仅接受控制台 Cookie）。
         /// data.usage.items[] 中优先取 plan_total_token（套餐总额度），缺失时取第一条；失败返回 null。
         /// </summary>
-        private async Task<(double UsedPercent, double Used, double Limit)?> FetchMiMoTokenPlanAsync(string cookie)
+        private async Task<(double UsedPercent, double Used, double Limit)?> FetchMiMoTokenPlanAsync(string cookie, CancellationToken ct)
         {
             try
             {
                 using var req = new HttpRequestMessage(HttpMethod.Get, "https://platform.xiaomimimo.com/api/v1/tokenPlan/usage");
                 req.Headers.Add("Cookie", cookie);
-                req.Headers.Add("User-Agent", "TokenBar/1.0");
+                req.Headers.Add("User-Agent", $"TokenBar/{AppVersion.Short}");
                 req.Headers.Add("Accept", "application/json");
 
-                var resp = await HttpClient.SendAsync(req);
+                using var resp = await Http.Shared.SendAsync(req, ct);
                 if (!resp.IsSuccessStatusCode) return null;
 
-                var body = await resp.Content.ReadAsStringAsync();
+                var body = await resp.Content.ReadAsStringAsync(ct);
                 using var doc = JsonDocument.Parse(body);
                 var root = doc.RootElement;
                 if (root.TryGetProperty("code", out var codeProp) &&
@@ -503,22 +506,26 @@ namespace TokenBar.Services
 
                 return (Math.Clamp(percent, 0.0, 100.0), used, limit);
             }
-            catch { }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                Log.Warn("provider", $"custom 余额/套餐查询失败: {ex.Message}");
+            }
             return null;
         }
 
         /// <summary>查询 SiliconFlow 用户余额（人民币），失败返回 null。</summary>
-        private async Task<decimal?> FetchSiliconFlowBalanceAsync(string apiKey)
+        private async Task<decimal?> FetchSiliconFlowBalanceAsync(string apiKey, CancellationToken ct)
         {
             try
             {
                 using var req = new HttpRequestMessage(HttpMethod.Get, "https://api.siliconflow.cn/v1/user/info");
                 req.Headers.Add("Authorization", $"Bearer {apiKey}");
 
-                var resp = await HttpClient.SendAsync(req);
+                using var resp = await Http.Shared.SendAsync(req, ct);
                 if (!resp.IsSuccessStatusCode) return null;
 
-                var body = await resp.Content.ReadAsStringAsync();
+                var body = await resp.Content.ReadAsStringAsync(ct);
                 using var doc = JsonDocument.Parse(body);
                 if (doc.RootElement.TryGetProperty("data", out var dataObj) &&
                     dataObj.TryGetProperty("balance", out var bal))
@@ -528,7 +535,11 @@ namespace TokenBar.Services
                         return parsed;
                 }
             }
-            catch { }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                Log.Warn("provider", $"custom 余额/套餐查询失败: {ex.Message}");
+            }
             return null;
         }
     }

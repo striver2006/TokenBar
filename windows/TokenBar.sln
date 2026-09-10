@@ -4,6 +4,8 @@ VisualStudioVersion = 17.8.34330.188
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "TokenBar", "src\TokenBar\TokenBar.csproj", "{C4A78A03-75B0-4A0B-971D-3C61D3A95E92}"
 EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "TokenBar.Tests", "tests\TokenBar.Tests\TokenBar.Tests.csproj", "{7D2E4B61-3A5F-4C8E-9B0D-2F6A1C7E5D43}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -14,6 +16,10 @@ Global
 		{C4A78A03-75B0-4A0B-971D-3C61D3A95E92}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{C4A78A03-75B0-4A0B-971D-3C61D3A95E92}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{C4A78A03-75B0-4A0B-971D-3C61D3A95E92}.Release|Any CPU.Build.0 = Release|Any CPU
+		{7D2E4B61-3A5F-4C8E-9B0D-2F6A1C7E5D43}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7D2E4B61-3A5F-4C8E-9B0D-2F6A1C7E5D43}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7D2E4B61-3A5F-4C8E-9B0D-2F6A1C7E5D43}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7D2E4B61-3A5F-4C8E-9B0D-2F6A1C7E5D43}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

@@ -1,9 +1,12 @@
 using TokenBar.I18n;
 using System;
+using System.Globalization;
 using System.Linq;
 using System.Net.Http;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
+using TokenBar.Helpers;
 using TokenBar.Models;
 
 namespace TokenBar.Services
@@ -12,14 +15,13 @@ namespace TokenBar.Services
     {
         public static VolcengineService Instance { get; } = new VolcengineService();
 
-        private static readonly HttpClient HttpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
-
         private VolcengineService() { }
 
         public async Task<(TokenWindow? FiveHour, TokenWindow? Weekly, string? Account)> FetchQuotaAsync(
             string apiKey,
             string endpoint = "https://ark.cn-beijing.volces.com/api/v3",
-            string model = "")
+            string model = "",
+            CancellationToken ct = default)
         {
             var cleanKey = apiKey.Trim();
             if (string.IsNullOrEmpty(cleanKey))
@@ -41,8 +43,8 @@ namespace TokenBar.Services
             req.Headers.Add("Authorization", $"Bearer {cleanKey}");
             req.Headers.Add("Accept", "application/json");
 
-            var resp = await HttpClient.SendAsync(req);
-            var body = await resp.Content.ReadAsStringAsync();
+            using var resp = await Http.Shared.SendAsync(req, ct);
+            var body = await resp.Content.ReadAsStringAsync(ct);
 
             if (resp.StatusCode == System.Net.HttpStatusCode.Unauthorized)
             {
@@ -75,13 +77,13 @@ namespace TokenBar.Services
 
             TokenWindow? primaryWindow = null;
 
-            if (double.TryParse(limitTokensStr, out var limitTokens) &&
-                double.TryParse(remainingTokensStr, out var remainingTokens) &&
+            if (double.TryParse(limitTokensStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var limitTokens) &&
+                double.TryParse(remainingTokensStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var remainingTokens) &&
                 limitTokens > 0)
             {
                 var used = Math.Max(0.0, limitTokens - remainingTokens);
                 var usedPct = Math.Clamp((used / limitTokens) * 100.0, 0.0, 100.0);
-                var duration = OpenAIService.Instance.ParseDurationString(resetTokensStr ?? "1s");
+                var duration = TimeSpan.FromSeconds(RateLimitReset.Parse(resetTokensStr) ?? 1);
                 var now = DateTime.Now;
 
                 primaryWindow = new TokenWindow
@@ -106,19 +108,14 @@ namespace TokenBar.Services
                     modelCount = dataArr.GetArrayLength();
                 }
             }
-            catch { }
+            catch (JsonException ex)
+            {
+                Log.Warn("provider", $"volcengine /models 响应不是 JSON: {ex.Message}");
+            }
 
             if (primaryWindow == null)
             {
-                primaryWindow = new TokenWindow
-                {
-                    Title = "接入点连接正常",
-                    UsedPercentage = 0.0,
-                    StartTime = DateTime.Now,
-                    EndTime = DateTime.Now.AddDays(1),
-                    Unit = "%",
-                    IsIdle = true
-                };
+                primaryWindow = TokenWindow.Status("接入点连接正常");
             }
 
             var keySuffix = cleanKey.Length > 6 ? cleanKey[^4..] : cleanKey;

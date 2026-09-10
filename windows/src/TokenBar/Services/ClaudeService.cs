@@ -1,9 +1,11 @@
 using TokenBar.I18n;
 using System;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using TokenBar.Models;
 
@@ -12,8 +14,6 @@ namespace TokenBar.Services
     public class ClaudeService
     {
         public static ClaudeService Instance { get; } = new ClaudeService();
-
-        private static readonly HttpClient HttpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
 
         private ClaudeService() { }
 
@@ -82,9 +82,8 @@ namespace TokenBar.Services
                         resetsAtStr = resetsAtProp.GetString();
                     }
 
-                    if (!string.IsNullOrEmpty(resetsAtStr) && DateTime.TryParse(resetsAtStr, null, System.Globalization.DateTimeStyles.RoundtripKind, out var resetsAtUtc))
+                    if (!string.IsNullOrEmpty(resetsAtStr) && TryParseUtc(resetsAtStr, out var resetsAt))
                     {
-                        var resetsAt = resetsAtUtc.ToLocalTime();
                         if (resetsAt > DateTime.Now)
                         {
                             fiveHourWindow = new TokenWindow
@@ -182,9 +181,8 @@ namespace TokenBar.Services
                         resetsAtStr = resetsAtProp.GetString();
                     }
 
-                    if (!string.IsNullOrEmpty(resetsAtStr) && DateTime.TryParse(resetsAtStr, null, System.Globalization.DateTimeStyles.RoundtripKind, out var resetsAtUtc))
+                    if (!string.IsNullOrEmpty(resetsAtStr) && TryParseUtc(resetsAtStr, out var resetsAt))
                     {
-                        var resetsAt = resetsAtUtc.ToLocalTime();
                         weeklyWindow = new TokenWindow
                         {
                             Title = "每周额度",
@@ -210,9 +208,9 @@ namespace TokenBar.Services
                             var resetsAtStr = limit.TryGetProperty("resets_at", out var rp) ? rp.GetString() : null;
                             var now = DateTime.Now;
                             var resetsAt = now.AddDays(7);
-                            if (!string.IsNullOrEmpty(resetsAtStr) && DateTime.TryParse(resetsAtStr, null, System.Globalization.DateTimeStyles.RoundtripKind, out var rUtc))
+                            if (!string.IsNullOrEmpty(resetsAtStr) && TryParseUtc(resetsAtStr, out var parsedReset))
                             {
-                                resetsAt = rUtc.ToLocalTime();
+                                resetsAt = parsedReset;
                             }
 
                             weeklyWindow = new TokenWindow
@@ -231,13 +229,31 @@ namespace TokenBar.Services
 
                 return (fiveHourWindow, weeklyWindow, accountEmail);
             }
-            catch
+            catch (Exception ex)
             {
+                Log.Warn("provider", $"读取 ~/.claude.json 失败: {ex.Message}");
                 return null;
             }
         }
 
-        public async Task<(TokenWindow? FiveHour, TokenWindow? Weekly, string? Account)> FetchRemoteUsageAsync(string token)
+        /// <summary>
+        /// 解析 ISO8601 / RFC3339 时间戳为本地时间。无时区后缀时按 UTC 理解
+        /// （AssumeUniversal），有后缀时按后缀换算（AdjustToUniversal 再转本地）。
+        /// </summary>
+        private static bool TryParseUtc(string? text, out DateTime local)
+        {
+            local = default;
+            if (string.IsNullOrWhiteSpace(text)) return false;
+            if (DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture,
+                    DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var dto))
+            {
+                local = dto.LocalDateTime;
+                return true;
+            }
+            return false;
+        }
+
+        public async Task<(TokenWindow? FiveHour, TokenWindow? Weekly, string? Account)> FetchRemoteUsageAsync(string token, CancellationToken ct = default)
         {
             var cleanToken = token.Trim();
             using var req = new HttpRequestMessage(HttpMethod.Get, "https://api.anthropic.com/api/oauth/usage");
@@ -246,8 +262,8 @@ namespace TokenBar.Services
             req.Headers.Add("User-Agent", "claude-code/2.1.263");
             req.Headers.Add("Accept", "application/json");
 
-            var resp = await HttpClient.SendAsync(req);
-            var body = await resp.Content.ReadAsStringAsync();
+            using var resp = await Http.Shared.SendAsync(req, ct);
+            var body = await resp.Content.ReadAsStringAsync(ct);
 
             if (!resp.IsSuccessStatusCode)
             {
@@ -265,9 +281,8 @@ namespace TokenBar.Services
                 double util = fiveHour.TryGetProperty("utilization", out var u) ? u.GetDouble() : 0.0;
                 string? resetsAtStr = fiveHour.TryGetProperty("resets_at", out var r) ? r.GetString() : null;
 
-                if (!string.IsNullOrEmpty(resetsAtStr) && DateTime.TryParse(resetsAtStr, null, System.Globalization.DateTimeStyles.RoundtripKind, out var resetsAtUtc))
+                if (!string.IsNullOrEmpty(resetsAtStr) && TryParseUtc(resetsAtStr, out var resetsAt))
                 {
-                    var resetsAt = resetsAtUtc.ToLocalTime();
                     if (resetsAt > DateTime.Now)
                     {
                         fiveHourWindow = new TokenWindow
@@ -328,9 +343,8 @@ namespace TokenBar.Services
                 double util = sevenDay.TryGetProperty("utilization", out var u) ? u.GetDouble() : 0.0;
                 string? resetsAtStr = sevenDay.TryGetProperty("resets_at", out var r) ? r.GetString() : null;
 
-                if (!string.IsNullOrEmpty(resetsAtStr) && DateTime.TryParse(resetsAtStr, null, System.Globalization.DateTimeStyles.RoundtripKind, out var resetsAtUtc))
+                if (!string.IsNullOrEmpty(resetsAtStr) && TryParseUtc(resetsAtStr, out var resetsAt))
                 {
-                    var resetsAt = resetsAtUtc.ToLocalTime();
                     weeklyWindow = new TokenWindow
                     {
                         Title = "每周额度",
@@ -348,7 +362,8 @@ namespace TokenBar.Services
 
         public async Task<(TokenWindow? Primary, TokenWindow? Secondary, string? Account)> FetchAnthropicQuotaAsync(
             string apiKey,
-            string endpoint = "https://api.anthropic.com/v1")
+            string endpoint = "https://api.anthropic.com/v1",
+            CancellationToken ct = default)
         {
             var cleanKey = apiKey.Trim();
             if (string.IsNullOrEmpty(cleanKey))
@@ -371,8 +386,8 @@ namespace TokenBar.Services
             req.Headers.Add("anthropic-version", "2023-06-01");
             req.Headers.Add("Accept", "application/json");
 
-            var resp = await HttpClient.SendAsync(req);
-            var body = await resp.Content.ReadAsStringAsync();
+            using var resp = await Http.Shared.SendAsync(req, ct);
+            var body = await resp.Content.ReadAsStringAsync(ct);
 
             if (resp.StatusCode == System.Net.HttpStatusCode.Unauthorized)
             {
@@ -408,8 +423,8 @@ namespace TokenBar.Services
             TokenWindow? primaryWindow = null;
             TokenWindow? secondaryWindow = null;
 
-            if (double.TryParse(limitTokensStr, out var limitTokens) &&
-                double.TryParse(remainingTokensStr, out var remainingTokens) &&
+            if (double.TryParse(limitTokensStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var limitTokens) &&
+                double.TryParse(remainingTokensStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var remainingTokens) &&
                 limitTokens > 0)
             {
                 var used = Math.Max(0.0, limitTokens - remainingTokens);
@@ -429,8 +444,8 @@ namespace TokenBar.Services
                 };
             }
 
-            if (double.TryParse(limitReqsStr, out var limitReqs) &&
-                double.TryParse(remainingReqsStr, out var remReqs) &&
+            if (double.TryParse(limitReqsStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var limitReqs) &&
+                double.TryParse(remainingReqsStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var remReqs) &&
                 limitReqs > 0)
             {
                 var used = Math.Max(0.0, limitReqs - remReqs);
@@ -452,15 +467,7 @@ namespace TokenBar.Services
 
             if (primaryWindow == null && secondaryWindow == null)
             {
-                primaryWindow = new TokenWindow
-                {
-                    Title = "Anthropic API 连接正常",
-                    UsedPercentage = 0.0,
-                    StartTime = DateTime.Now,
-                    EndTime = DateTime.Now.AddDays(1),
-                    Unit = "%",
-                    IsIdle = true
-                };
+                primaryWindow = TokenWindow.Status("Anthropic API 连接正常");
             }
 
             var keySuffix = cleanKey.Length > 6 ? cleanKey[^4..] : cleanKey;

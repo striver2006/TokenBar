@@ -167,7 +167,11 @@ namespace TokenBar
                 Directory.CreateDirectory(dir);
                 File.AppendAllText(Path.Combine(dir, "app.log"), $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] {message}\r\n");
             }
-            catch { }
+            catch (Exception ex)
+            {
+                // app.log 自身写不进去时只能退回 Debug 输出：这里已是最底层的日志通道
+                System.Diagnostics.Debug.WriteLine($"app.log 写入失败: {ex.Message}");
+            }
         }
     }
 }

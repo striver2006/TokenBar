@@ -44,6 +44,7 @@ namespace TokenBar.Services
         public static void Debug(string category, string message) => Write("DEBUG", category, message);
         public static void Info(string category, string message) => Write("INFO ", category, message);
         public static void Notice(string category, string message) => Write("NOTE ", category, message);
+        public static void Warn(string category, string message) => Write("WARN ", category, message);
         public static void Error(string category, string message) => Write("ERROR", category, message);
 
         private static void Write(string level, string category, string message)

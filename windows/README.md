@@ -32,6 +32,15 @@ dotnet publish src/TokenBar/TokenBar.csproj -c Release -r win-x64 --self-contain
 
 发布后的 `TokenBar.exe` 将输出到 `./publish` 目录中，目标机器无需安装 .NET 环境。
 
+### 3. 单元测试 (xUnit)
+
+```bash
+dotnet test tests/TokenBar.Tests/TokenBar.Tests.csproj
+```
+
+覆盖阿里云签名黄金向量（与 mac 端 `testAliyunSignerGoldenVector` 同向量）、Token Plan 三种响应形态解析、
+`SecretSaveAction` 分支、卡片排序、余额预测与 `RateLimitReset` 时长解析。
+
 > ⚠️ **必须使用上面的自包含单文件参数**。安装脚本只会复制一个 `TokenBar.exe`，
 > 如果漏掉 `--self-contained true -p:PublishSingleFile=true`（框架依赖发布产物是
 > 一个小 exe + 一堆 DLL），安装后启动会直接报
@@ -80,6 +89,8 @@ windows/
 ├── install.ps1                   # 一键安装/升级脚本（复制单文件 exe + 快捷方式）
 ├── tools/
 │   └── gui/                      # 托盘实机测试辅助脚本 (PowerShell)
+├── tests/
+│   └── TokenBar.Tests/           # xUnit 单元测试（InternalsVisibleTo 已开放 internal 成员）
 └── src/
     └── TokenBar/
         ├── TokenBar.csproj       # WPF 托盘应用项目文件
@@ -94,12 +105,14 @@ windows/
         │   └── AppSettings.cs    # 本地配置数据结构
         ├── Services/             # 各厂商网络调用实现（平铺，无子目录）
         │   ├── RefreshManager.cs # 定时刷新与多厂商状态调度器
+        │   ├── Http.cs           # 进程内共享 HttpClient 与版本号单源 AppVersion
         │   ├── OpenAIService.cs / ClaudeService.cs / GeminiService.cs
         │   ├── DeepSeekService.cs / VolcengineService.cs / KimiService.cs
         │   ├── GLMService.cs / AliyunBailianService.cs
         │   └── CustomProviderService.cs  # OpenAI/Anthropic 协议自定义端点
         ├── Helpers/
-        │   └── ProviderIcons.cs  # 厂商标识图标资源
+        │   ├── ProviderIcons.cs  # 厂商标识图标资源
+        │   └── RateLimitReset.cs # x-ratelimit-reset-* 头统一解析（Go duration / 秒 / 时间戳）
         └── I18n/
             └── LocalizationManager.cs # 中英文切换管理模块
 ```

@@ -51,13 +51,35 @@ namespace TokenBar.Views
             LoadFromSettings();
             SelectTab(initialTab);
 
-            LocalizationManager.Instance.PropertyChanged += (s, e) => Dispatcher.Invoke(UpdateLocalization);
-            RefreshManager.Instance.OnQuotasUpdated += () => Dispatcher.Invoke(UpdateStatuses);
+            LocalizationManager.Instance.PropertyChanged += OnLanguageChanged;
+            RefreshManager.Instance.OnQuotasUpdated += OnQuotasUpdated;
+            Closed += OnClosedUnsubscribe;
             UpdateStatuses();
 
             // 凭据读取挂到 Loaded：构造函数不能 await，而同步的 Cred* P/Invoke 在
             // UI 线程上会卡住窗口。对应 mac 端 SettingsView 的 .task 修饰符。
-            Loaded += async (_, _) => await LoadAliyunSecretAsync();
+            Loaded += OnLoadedReadSecret;
+        }
+
+        private void OnLanguageChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+            => Dispatcher.Invoke(UpdateLocalization);
+
+        private void OnQuotasUpdated()
+            => Dispatcher.Invoke(UpdateStatuses);
+
+        private async void OnLoadedReadSecret(object sender, RoutedEventArgs e)
+        {
+            try { await LoadAliyunSecretAsync(); }
+            catch (Exception ex) { Log.Error("lifecycle", $"设置页加载凭据失败: {ex.Message}"); }
+        }
+
+        /// <summary>窗口关闭后退订全局事件，否则单例 RefreshManager 会一直持有已关闭窗口的引用。</summary>
+        private void OnClosedUnsubscribe(object? sender, EventArgs e)
+        {
+            LocalizationManager.Instance.PropertyChanged -= OnLanguageChanged;
+            RefreshManager.Instance.OnQuotasUpdated -= OnQuotasUpdated;
+            Loaded -= OnLoadedReadSecret;
+            Closed -= OnClosedUnsubscribe;
         }
 
         /// <summary>
@@ -700,7 +722,10 @@ namespace TokenBar.Views
                         var url = "https://accounts.google.com/o/oauth2/auth?client_id=764086051850-6qr4p6gpi6hn506pt8ejuq83di341hur.apps.googleusercontent.com&redirect_uri=urn:ietf:wg:oauth:2.0:oob&response_type=code&scope=https://www.googleapis.com/auth/cloud-platform%20https://www.googleapis.com/auth/userinfo.email";
                         System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo { FileName = url, UseShellExecute = true });
                     }
-                    catch { }
+                    catch (Exception ex)
+                    {
+                        Log.Warn("settings", $"打开 Google 授权页面失败: {ex.Message}");
+                    }
                 }
             }
         }
@@ -812,7 +837,10 @@ namespace TokenBar.Views
                     UseShellExecute = true
                 });
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Log.Warn("settings", $"打开 RAM 控制台失败: {ex.Message}");
+            }
         }
 
         /// <summary>
@@ -958,7 +986,8 @@ namespace TokenBar.Views
             var i18n = LocalizationManager.Instance;
             try
             {
-                var res = await AliyunBailianService.Instance.FetchViaCliAsync();
+                var s = RefreshManager.Instance.Settings;
+                await AliyunBailianService.Instance.FetchViaCliAsync(s.AliyunConsoleRegion, s.AliyunConsoleSite);
                 MessageBox.Show(i18n.IsChinese ? "百炼 CLI 配额读取成功！已检测到 7天 与 5小时额度。" : "Bailian CLI quota retrieved successfully! 7-day and 5-hour quotas detected.", i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Information);
                 _ = RefreshManager.Instance.RefreshAliyunAsync();
             }
@@ -1404,10 +1433,38 @@ namespace TokenBar.Views
                 using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", false);
                 return key?.GetValue("TokenBar") != null;
             }
-            catch
+            catch (Exception ex)
             {
+                Log.Warn("settings", $"读取开机自启注册表失败: {ex.Message}");
                 return false;
             }
+        }
+
+        /// <summary>install.ps1 的安装目录，Run 键应指向这里而不是当前进程（可能是 bin\Debug 或临时解压目录）。</summary>
+        private static string InstalledExePath => System.IO.Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Programs", "TokenBar", "TokenBar.exe");
+
+        private static string? ResolveStartupExePath()
+        {
+            var processPath = Environment.ProcessPath;
+            var installed = InstalledExePath;
+            if (!string.IsNullOrEmpty(processPath)
+                && string.Equals(System.IO.Path.GetFullPath(processPath), System.IO.Path.GetFullPath(installed), StringComparison.OrdinalIgnoreCase))
+            {
+                return installed;
+            }
+            if (System.IO.File.Exists(installed))
+            {
+                Log.Notice("settings", $"当前进程不在安装目录，开机自启写入安装目录路径: {installed}");
+                return installed;
+            }
+            if (!string.IsNullOrEmpty(processPath))
+            {
+                Log.Notice("settings", $"未找到安装目录下的 TokenBar.exe，开机自启写入当前进程路径: {processPath}");
+                return processPath;
+            }
+            return null;
         }
 
         private static void SetRunAtStartup(bool enable)
@@ -1419,7 +1476,7 @@ namespace TokenBar.Views
 
                 if (enable)
                 {
-                    var exePath = Environment.ProcessPath;
+                    var exePath = ResolveStartupExePath();
                     if (!string.IsNullOrEmpty(exePath))
                     {
                         key.SetValue("TokenBar", $"\"{exePath}\"");
@@ -1430,7 +1487,10 @@ namespace TokenBar.Views
                     key.DeleteValue("TokenBar", false);
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Log.Error("settings", $"写入开机自启注册表失败: {ex.Message}");
+            }
         }
 
         private void BtnSaveAll_Click(object sender, RoutedEventArgs e)

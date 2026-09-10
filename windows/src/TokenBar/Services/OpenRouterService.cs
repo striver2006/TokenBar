@@ -2,6 +2,7 @@ using TokenBar.I18n;
 using System;
 using System.Net.Http;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using TokenBar.Models;
 
@@ -16,14 +17,13 @@ namespace TokenBar.Services
     {
         public static OpenRouterService Instance { get; } = new OpenRouterService();
 
-        private static readonly HttpClient HttpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
-
         private OpenRouterService() { }
 
         public async Task<(TokenWindow? Primary, TokenWindow? Secondary, string? Account)> FetchQuotaAsync(
             string apiKey,
             string endpoint = "https://openrouter.ai/api/v1",
-            decimal balanceAlertThreshold = 5)
+            decimal balanceAlertThreshold = 5,
+            CancellationToken ct = default)
         {
             var cleanKey = apiKey.Trim();
             if (string.IsNullOrEmpty(cleanKey))
@@ -47,14 +47,14 @@ namespace TokenBar.Services
                 using var req = new HttpRequestMessage(HttpMethod.Get, $"{baseEndpoint}/credits");
                 req.Headers.Add("Authorization", $"Bearer {cleanKey}");
 
-                var resp = await HttpClient.SendAsync(req);
+                using var resp = await Http.Shared.SendAsync(req, ct);
                 if (resp.StatusCode == System.Net.HttpStatusCode.Unauthorized)
                 {
                     creditsUnauthorized = true;
                 }
                 else if (resp.IsSuccessStatusCode)
                 {
-                    var json = await resp.Content.ReadAsStringAsync();
+                    var json = await resp.Content.ReadAsStringAsync(ct);
                     using var doc = JsonDocument.Parse(json);
                     if (doc.RootElement.TryGetProperty("data", out var data) &&
                         data.TryGetProperty("total_credits", out var creditsProp) &&
@@ -67,9 +67,11 @@ namespace TokenBar.Services
                     }
                 }
             }
-            catch
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
             {
                 // 网络异常时继续尝试 /key，两者皆失败再抛错
+                Log.Warn("provider", $"openrouter /credits 失败: {ex.Message}");
             }
 
             // 2. 当前 Key 的用量与限额（普通 Key 即可访问）
@@ -84,7 +86,7 @@ namespace TokenBar.Services
                 using var req = new HttpRequestMessage(HttpMethod.Get, $"{baseEndpoint}/key");
                 req.Headers.Add("Authorization", $"Bearer {cleanKey}");
 
-                var resp = await HttpClient.SendAsync(req);
+                using var resp = await Http.Shared.SendAsync(req, ct);
                 if (resp.StatusCode == System.Net.HttpStatusCode.Unauthorized ||
                     resp.StatusCode == System.Net.HttpStatusCode.Forbidden)
                 {
@@ -92,7 +94,7 @@ namespace TokenBar.Services
                 }
                 else if (resp.IsSuccessStatusCode)
                 {
-                    var json = await resp.Content.ReadAsStringAsync();
+                    var json = await resp.Content.ReadAsStringAsync(ct);
                     using var doc = JsonDocument.Parse(json);
                     if (doc.RootElement.TryGetProperty("data", out var data))
                     {
@@ -111,9 +113,11 @@ namespace TokenBar.Services
                     }
                 }
             }
-            catch
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
             {
                 // 与 /credits 一样容错，最后统一判断
+                Log.Warn("provider", $"openrouter /key 失败: {ex.Message}");
             }
 
             if (accountBalance == null && !keyFetched)
@@ -164,15 +168,7 @@ namespace TokenBar.Services
 
             if (balanceWindow == null)
             {
-                balanceWindow = new TokenWindow
-                {
-                    Title = "OpenRouter 连接正常",
-                    UsedPercentage = 0.0,
-                    StartTime = DateTime.Now,
-                    EndTime = DateTime.Now.AddDays(1),
-                    Unit = "%",
-                    IsIdle = true
-                };
+                balanceWindow = TokenWindow.Status("OpenRouter 连接正常");
             }
 
             // 4. 卡片头部账号信息

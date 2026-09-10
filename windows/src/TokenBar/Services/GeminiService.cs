@@ -1,10 +1,12 @@
 using TokenBar.I18n;
 using System;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using TokenBar.Models;
 
@@ -13,8 +15,6 @@ namespace TokenBar.Services
     public class GeminiService
     {
         public static GeminiService Instance { get; } = new GeminiService();
-
-        private static readonly HttpClient HttpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
 
         private GeminiService() { }
 
@@ -114,7 +114,10 @@ namespace TokenBar.Services
                         break;
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Log.Warn("provider", $"扫描 Antigravity 二进制失败: {ex.Message}");
+            }
         }
 
         // Refreshed access tokens are short-lived (~1h); cache in memory instead of refreshing on every poll.
@@ -124,7 +127,7 @@ namespace TokenBar.Services
         // 上一次令牌刷新整体失败的时刻。候选逐个试是昂贵操作，凭证真失效时每轮都重试纯属浪费。
         private static DateTime? _lastTokenRefreshFailureUtc;
         private static readonly TimeSpan TokenRefreshCooldown = TimeSpan.FromSeconds(120);
-        // 候选循环的总预算。HttpClient 的 Timeout 是 15s，8 个候选串行最坏 120s，
+        // 候选循环的总预算。共享 HttpClient 的 Timeout 是 30s，多个候选串行最坏会到分钟级，
         // 远超刷新间隔，会把 RefreshManager 的闸门长时间占住。
         private static readonly TimeSpan TokenRefreshBudget = TimeSpan.FromSeconds(20);
         private const int TokenClientCandidateLimit = 3;
@@ -179,7 +182,10 @@ namespace TokenBar.Services
                     }
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Log.Warn("provider", $"读取凭据管理器 {target} 失败: {ex.Message}");
+            }
             return null;
         }
 
@@ -220,7 +226,10 @@ namespace TokenBar.Services
                             refreshToken = rp2.GetString();
                     }
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    Log.Warn("provider", $"解析 gemini:antigravity 凭据失败: {ex.Message}");
+                }
             }
 
             // 1. Check jetski token
@@ -239,7 +248,10 @@ namespace TokenBar.Services
                             expiry = ParseTokenExpiry(ep.GetString());
                     }
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    Log.Warn("provider", $"解析 jetski-standalone-oauth-token 失败: {ex.Message}");
+                }
             }
 
             // 2. Fallback to oauth_creds.json
@@ -253,7 +265,10 @@ namespace TokenBar.Services
                     if (refreshToken == null && doc.RootElement.TryGetProperty("refresh_token", out var rp))
                         refreshToken = rp.GetString();
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    Log.Warn("provider", $"解析 oauth_creds.json 失败: {ex.Message}");
+                }
             }
 
             // 3. Read Google account email
@@ -267,7 +282,10 @@ namespace TokenBar.Services
                     else if (doc.RootElement.TryGetProperty("old", out var old) && old.ValueKind == JsonValueKind.Array && old.GetArrayLength() > 0)
                         account = old[0].GetString();
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    Log.Warn("provider", $"解析 google_accounts.json 失败: {ex.Message}");
+                }
             }
 
             return (token, refreshToken, account, expiry);
@@ -278,17 +296,18 @@ namespace TokenBar.Services
         {
             if (string.IsNullOrWhiteSpace(value))
                 return null;
-            if (DateTime.TryParse(value, System.Globalization.CultureInfo.InvariantCulture,
-                System.Globalization.DateTimeStyles.None, out var parsed))
+            if (DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var parsed))
             {
-                return parsed;
+                return parsed.LocalDateTime;
             }
             return null;
         }
 
         public async Task<(TokenWindow? FiveHour, TokenWindow? Weekly, string? Account)> FetchQuotaWithApiKeyAsync(
             string apiKey,
-            string endpoint = "https://generativelanguage.googleapis.com")
+            string endpoint = "https://generativelanguage.googleapis.com",
+            CancellationToken ct = default)
         {
             var trimmedKey = apiKey.Trim();
             if (string.IsNullOrEmpty(trimmedKey))
@@ -311,24 +330,31 @@ namespace TokenBar.Services
             request.Headers.Add("x-goog-api-key", trimmedKey);
             request.Headers.Add("Accept", "application/json");
 
-            var resp = await HttpClient.SendAsync(request);
-            var body = await resp.Content.ReadAsStringAsync();
+            using var resp = await Http.Shared.SendAsync(request, ct);
+            var body = await resp.Content.ReadAsStringAsync(ct);
 
             if (!resp.IsSuccessStatusCode)
             {
+                string? apiErrorMessage = null;
                 try
                 {
                     using var doc = JsonDocument.Parse(body);
                     if (doc.RootElement.TryGetProperty("error", out var err) &&
-                        err.TryGetProperty("message", out var msg))
+                        err.TryGetProperty("message", out var msg) && msg.ValueKind == JsonValueKind.String)
                     {
-                        throw new Exception(LocalizationManager.Instance.IsChinese ? $"Gemini API 错误: {msg.GetString()}" : $"Gemini API error: {msg.GetString()}");
+                        apiErrorMessage = msg.GetString();
                     }
                 }
-                catch (Exception ex) when (!ex.Message.StartsWith("Gemini API"))
+                catch (JsonException ex)
                 {
+                    Log.Warn("provider", $"gemini 错误响应不是 JSON: {ex.Message}");
                 }
-                throw new Exception(LocalizationManager.Instance.IsChinese ? $"Gemini API 响应异常 ({(int)resp.StatusCode}): {body}" : $"Gemini API response error ({(int)resp.StatusCode}): {body}");
+                if (!string.IsNullOrEmpty(apiErrorMessage))
+                {
+                    throw new Exception(LocalizationManager.Instance.IsChinese ? $"Gemini API 错误: {apiErrorMessage}" : $"Gemini API error: {apiErrorMessage}");
+                }
+                var snippet = body.Length > 300 ? body[..300] : body;
+                throw new Exception(LocalizationManager.Instance.IsChinese ? $"Gemini API 响应异常 ({(int)resp.StatusCode}): {snippet}" : $"Gemini API response error ({(int)resp.StatusCode}): {snippet}");
             }
 
             int modelCount = 0;
@@ -340,7 +366,10 @@ namespace TokenBar.Services
                     modelCount = models.GetArrayLength();
                 }
             }
-            catch { }
+            catch (JsonException ex)
+            {
+                Log.Warn("provider", $"gemini /models 响应不是 JSON: {ex.Message}");
+            }
 
             string? GetHeader(string name)
             {
@@ -355,8 +384,8 @@ namespace TokenBar.Services
             var remReqsStr = GetHeader("x-ratelimit-remaining-requests") ?? GetHeader("x-ratelimit-remaining-rpm");
 
             TokenWindow? rpmWindow = null;
-            if (double.TryParse(limitReqsStr, out var limitReqs) &&
-                double.TryParse(remReqsStr, out var remReqs) &&
+            if (double.TryParse(limitReqsStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var limitReqs) &&
+                double.TryParse(remReqsStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var remReqs) &&
                 limitReqs > 0)
             {
                 var used = Math.Max(0.0, limitReqs - remReqs);
@@ -375,35 +404,11 @@ namespace TokenBar.Services
                 };
             }
 
-            var now = DateTime.Now;
-            int currentHour = now.Hour;
-            int slotStartHour = (currentHour / 5) * 5;
-            var windowStart = new DateTime(now.Year, now.Month, now.Day, slotStartHour, 0, 0);
-            var windowEnd = windowStart.AddHours(5);
-
-            var fiveHour = rpmWindow ?? new TokenWindow
-            {
-                Title = "API 连接正常",
-                UsedPercentage = 0.0,
-                StartTime = windowStart,
-                EndTime = windowEnd,
-                Unit = "%",
-                IsIdle = true
-            };
-
-            int diffToMonday = (7 + (now.DayOfWeek - DayOfWeek.Monday)) % 7;
-            var weekStart = now.Date.AddDays(-diffToMonday);
-            var weekEnd = weekStart.AddDays(7);
-
-            var weekly = new TokenWindow
-            {
-                Title = modelCount > 0 ? $"可用模型 ({modelCount}个)" : "AI Studio 配额",
-                UsedPercentage = 0.0,
-                StartTime = weekStart,
-                EndTime = weekEnd,
-                Unit = "%",
-                IsIdle = true
-            };
+            // AI Studio 的 API Key 没有任何可查询的周期额度：
+            // 没有速率头时只显示「API 连接正常」状态窗口；第二行用「可用模型 (N)」状态窗口，
+            // 不再用「当前小时/5」拼出假的 5 小时起止，也不再编造 usedPercentage=0 的每周额度。
+            var fiveHour = rpmWindow ?? TokenWindow.Status("API 连接正常");
+            TokenWindow? weekly = modelCount > 0 ? TokenWindow.Status($"可用模型 ({modelCount}个)") : null;
 
             string maskedKey = trimmedKey.Length > 8
                 ? $"{trimmedKey[..6]}...{trimmedKey[^4..]}"
@@ -413,7 +418,7 @@ namespace TokenBar.Services
             return (fiveHour, weekly, accountDisplay);
         }
 
-        public async Task<(TokenWindow? FiveHour, TokenWindow? Weekly, string? Account)> FetchQuotaAsync(string? token)
+        public async Task<(TokenWindow? FiveHour, TokenWindow? Weekly, string? Account)> FetchQuotaAsync(string? token, CancellationToken ct = default)
         {
             var local = ReadLocalGeminiConfig();
             var refreshToken = local.RefreshToken;
@@ -436,7 +441,7 @@ namespace TokenBar.Services
             }
             else if (!string.IsNullOrWhiteSpace(refreshToken))
             {
-                accessToken = await RefreshAntigravityTokenAsync(refreshToken!);
+                accessToken = await RefreshAntigravityTokenAsync(refreshToken!, ct);
             }
             else if (!string.IsNullOrWhiteSpace(token ?? local.Token))
             {
@@ -448,22 +453,22 @@ namespace TokenBar.Services
                 throw new Exception(LocalizationManager.Instance.IsChinese ? "请在设置中配置 Google AI Studio Key 或检测 Google 本地登录凭证" : "Please configure a Google AI Studio Key in Settings, or detect local Google credentials");
             }
 
-            var (fiveHour, weekly) = await FetchQuotaWithAuthRetryAsync(accessToken, refreshToken);
+            var (fiveHour, weekly) = await FetchQuotaWithAuthRetryAsync(accessToken, refreshToken, ct);
 
             if (string.IsNullOrEmpty(detectedAccount))
             {
-                detectedAccount = await FetchUserInfoAsync(accessToken);
+                detectedAccount = await FetchUserInfoAsync(accessToken, ct);
             }
 
             return (fiveHour, weekly, detectedAccount ?? (LocalizationManager.Instance.IsChinese ? "Google 账号" : "Google Account"));
         }
 
         /// <summary>Fetches quota; on auth rejection refreshes the token (when possible) and retries once.</summary>
-        private async Task<(TokenWindow? FiveHour, TokenWindow? Weekly)> FetchQuotaWithAuthRetryAsync(string accessToken, string? refreshToken)
+        private async Task<(TokenWindow? FiveHour, TokenWindow? Weekly)> FetchQuotaWithAuthRetryAsync(string accessToken, string? refreshToken, CancellationToken ct)
         {
             try
             {
-                return await FetchAntigravityQuotaCoreAsync(accessToken);
+                return await FetchAntigravityQuotaCoreAsync(accessToken, ct);
             }
             catch (QuotaAuthException)
             {
@@ -473,8 +478,8 @@ namespace TokenBar.Services
                         ? "Antigravity 凭证无效或已过期，请重新运行 agy 登录或在设置中更新凭证"
                         : "Antigravity credentials are invalid or expired. Please log in again via agy or update credentials in Settings");
                 }
-                var refreshed = await RefreshAntigravityTokenAsync(refreshToken!);
-                return await FetchAntigravityQuotaCoreAsync(refreshed);
+                var refreshed = await RefreshAntigravityTokenAsync(refreshToken!, ct);
+                return await FetchAntigravityQuotaCoreAsync(refreshed, ct);
             }
         }
 
@@ -483,7 +488,7 @@ namespace TokenBar.Services
         /// OAuth client pair until one is accepted (the binaries contain more than one client),
         /// then caches the working pair for the session.
         /// </summary>
-        private async Task<string> RefreshAntigravityTokenAsync(string refreshToken)
+        private async Task<string> RefreshAntigravityTokenAsync(string refreshToken, CancellationToken ct)
         {
             if (_lastTokenRefreshFailureUtc is DateTime lastFailure
                 && DateTime.UtcNow - lastFailure < TokenRefreshCooldown)
@@ -511,16 +516,16 @@ namespace TokenBar.Services
                     break;
                 }
 
-                using var resp = await HttpClient.PostAsync("https://oauth2.googleapis.com/token",
+                using var resp = await Http.Shared.PostAsync("https://oauth2.googleapis.com/token",
                     new FormUrlEncodedContent(new[]
                     {
                         new System.Collections.Generic.KeyValuePair<string, string>("client_id", client.Id),
                         new System.Collections.Generic.KeyValuePair<string, string>("client_secret", client.Secret),
                         new System.Collections.Generic.KeyValuePair<string, string>("grant_type", "refresh_token"),
                         new System.Collections.Generic.KeyValuePair<string, string>("refresh_token", refreshToken)
-                    }));
+                    }), ct);
 
-                var body = await resp.Content.ReadAsStringAsync();
+                var body = await resp.Content.ReadAsStringAsync(ct);
                 if (!resp.IsSuccessStatusCode)
                 {
                     lastDetail = $"{(int)resp.StatusCode}";
@@ -563,12 +568,12 @@ namespace TokenBar.Services
         /// "Gemini Models" group's weekly / 5-hour buckets to TokenWindows.
         /// Throws QuotaAuthException on 401/403 so the caller can refresh and retry.
         /// </summary>
-        private async Task<(TokenWindow? FiveHour, TokenWindow? Weekly)> FetchAntigravityQuotaCoreAsync(string accessToken)
+        private async Task<(TokenWindow? FiveHour, TokenWindow? Weekly)> FetchAntigravityQuotaCoreAsync(string accessToken, CancellationToken ct)
         {
             TokenWindow? fiveHour = null;
             TokenWindow? weekly = null;
 
-            var summaryBody = await PostCloudCodeAsync(accessToken, "/v1internal:retrieveUserQuotaSummary");
+            var summaryBody = await PostCloudCodeAsync(accessToken, "/v1internal:retrieveUserQuotaSummary", ct);
 
             using (var doc = JsonDocument.Parse(summaryBody))
             {
@@ -604,7 +609,7 @@ namespace TokenBar.Services
             if (fiveHour == null && weekly == null)
             {
                 // Older/alternative response shape: fall back to per-model quota and aggregate the gemini family.
-                (fiveHour, weekly) = await FetchAntigravityModelsFallbackAsync(accessToken);
+                (fiveHour, weekly) = await FetchAntigravityModelsFallbackAsync(accessToken, ct);
             }
 
             if (fiveHour == null && weekly == null)
@@ -617,7 +622,7 @@ namespace TokenBar.Services
             return (fiveHour, weekly);
         }
 
-        private async Task<string> PostCloudCodeAsync(string accessToken, string path)
+        private async Task<string> PostCloudCodeAsync(string accessToken, string path, CancellationToken ct)
         {
             Exception? lastEx = null;
             foreach (var baseUrl in CloudCodeQuotaBases)
@@ -629,8 +634,8 @@ namespace TokenBar.Services
                     req.Headers.TryAddWithoutValidation("User-Agent", "antigravity");
                     req.Content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
 
-                    var resp = await HttpClient.SendAsync(req);
-                    var body = await resp.Content.ReadAsStringAsync();
+                    using var resp = await Http.Shared.SendAsync(req, ct);
+                    var body = await resp.Content.ReadAsStringAsync(ct);
 
                     if ((int)resp.StatusCode == 401 || (int)resp.StatusCode == 403)
                     {
@@ -647,6 +652,10 @@ namespace TokenBar.Services
                     return body;
                 }
                 catch (QuotaAuthException)
+                {
+                    throw;
+                }
+                catch (OperationCanceledException)
                 {
                     throw;
                 }
@@ -695,10 +704,10 @@ namespace TokenBar.Services
             DateTime? reset = null;
             if (bucket.TryGetProperty("resetTime", out var rt))
             {
-                if (rt.ValueKind == JsonValueKind.String && DateTime.TryParse(rt.GetString(),
-                        System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var parsed))
+                if (rt.ValueKind == JsonValueKind.String && DateTimeOffset.TryParse(rt.GetString(),
+                        CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var parsed))
                 {
-                    reset = parsed;
+                    reset = parsed.LocalDateTime;
                 }
                 else if (rt.ValueKind == JsonValueKind.Number && rt.TryGetInt64(out var epochSeconds))
                 {
@@ -726,9 +735,9 @@ namespace TokenBar.Services
         }
 
         /// <summary>Fallback via fetchAvailableModels: aggregates the most-constrained gemini model into a 5h window.</summary>
-        private async Task<(TokenWindow? FiveHour, TokenWindow? Weekly)> FetchAntigravityModelsFallbackAsync(string accessToken)
+        private async Task<(TokenWindow? FiveHour, TokenWindow? Weekly)> FetchAntigravityModelsFallbackAsync(string accessToken, CancellationToken ct)
         {
-            var modelsBody = await PostCloudCodeAsync(accessToken, "/v1internal:fetchAvailableModels");
+            var modelsBody = await PostCloudCodeAsync(accessToken, "/v1internal:fetchAvailableModels", ct);
 
             double? minRemaining = null;
             DateTime? reset = null;
@@ -748,10 +757,10 @@ namespace TokenBar.Services
                         {
                             minRemaining = fraction;
                             if (qi.TryGetProperty("resetTime", out var rt) && rt.ValueKind == JsonValueKind.String &&
-                                DateTime.TryParse(rt.GetString(), System.Globalization.CultureInfo.InvariantCulture,
-                                    System.Globalization.DateTimeStyles.None, out var parsed))
+                                DateTimeOffset.TryParse(rt.GetString(), CultureInfo.InvariantCulture,
+                                    DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var parsed))
                             {
-                                reset = parsed;
+                                reset = parsed.LocalDateTime;
                             }
                         }
                     }
@@ -778,7 +787,7 @@ namespace TokenBar.Services
             return (window, null);
         }
 
-        public async Task<string?> FetchUserInfoAsync(string token)
+        public async Task<string?> FetchUserInfoAsync(string token, CancellationToken ct = default)
         {
             try
             {
@@ -786,10 +795,10 @@ namespace TokenBar.Services
                 req.Headers.Add("Authorization", $"Bearer {token}");
                 req.Headers.Add("Accept", "application/json");
 
-                var resp = await HttpClient.SendAsync(req);
+                using var resp = await Http.Shared.SendAsync(req, ct);
                 if (resp.IsSuccessStatusCode)
                 {
-                    var json = await resp.Content.ReadAsStringAsync();
+                    var json = await resp.Content.ReadAsStringAsync(ct);
                     using var doc = JsonDocument.Parse(json);
                     if (doc.RootElement.TryGetProperty("email", out var emailProp) && emailProp.ValueKind == JsonValueKind.String)
                     {
@@ -801,7 +810,11 @@ namespace TokenBar.Services
                     }
                 }
             }
-            catch { }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                Log.Warn("provider", $"gemini userinfo 查询失败: {ex.Message}");
+            }
             return null;
         }
     }

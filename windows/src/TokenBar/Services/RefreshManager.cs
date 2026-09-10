@@ -134,20 +134,48 @@ namespace TokenBar.Services
                     if (loaded != null) Settings = loaded;
                 }
             }
-            catch
+            catch (Exception ex)
             {
+                // 读坏了的配置不能原地覆盖：改名保留现场，用户还能从里面把 API Key 抄回来
                 Settings = new AppSettings();
+                Log.Error("settings", $"settings.json 读取失败，已改名保留: {ex.Message}");
+                try
+                {
+                    var corrupt = _configFilePath + ".corrupt-" + DateTime.Now.ToString("yyyyMMddHHmmss");
+                    File.Move(_configFilePath, corrupt, overwrite: true);
+                    Log.Error("settings", $"损坏文件已改名为 {Path.GetFileName(corrupt)}");
+                }
+                catch (Exception moveEx)
+                {
+                    Log.Error("settings", $"改名损坏的 settings.json 失败: {moveEx.Message}");
+                }
             }
 
             LocalizationManager.Instance.CurrentLanguage = Settings.Language;
         }
+
+        private readonly object _saveLock = new();
 
         public void SaveSettings()
         {
             try
             {
                 var json = JsonSerializer.Serialize(Settings, new JsonSerializerOptions { WriteIndented = true });
-                File.WriteAllText(_configFilePath, json);
+                // 先写临时文件再原子替换：进程在写到一半时被杀，不会留下半截 JSON
+                lock (_saveLock)
+                {
+                    var tmp = _configFilePath + ".tmp";
+                    File.WriteAllText(tmp, json);
+                    File.Move(tmp, _configFilePath, overwrite: true);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Error("settings", $"settings.json 写入失败: {ex.Message}");
+            }
+
+            try
+            {
                 LocalizationManager.Instance.CurrentLanguage = Settings.Language;
                 // 只有间隔真的变了才重建定时器：设置页里切厂商开关、改语言等都会走到这里，
                 // 每次都 Dispose 重建会把计时相位打回零，间隔较长时可能永远刷不到。
@@ -156,7 +184,10 @@ namespace TokenBar.Services
                     StartTimer();
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Log.Error("settings", $"应用设置失败: {ex.Message}");
+            }
         }
 
         public void StartTimer()
@@ -188,7 +219,10 @@ namespace TokenBar.Services
 
                 await RefreshAllAsync(RefreshTrigger.Timer);
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Log.Error("timer", $"定时刷新回调异常: {ex}");
+            }
         }
 
         /// <summary>数据过期时才刷新，用于系统唤醒这类"可能已经错过若干个周期"的补刷场景</summary>
@@ -261,20 +295,21 @@ namespace TokenBar.Services
             {
                 var tasks = new List<Task>();
 
-                if (Settings.OpenAIEnabled) tasks.Add(RunProviderAsync("openai", RefreshOpenAIAsync, ProviderType.OpenAI));
-                if (Settings.ClaudeEnabled) tasks.Add(RunProviderAsync("claude", RefreshClaudeAsync, ProviderType.ClaudeCode));
-                if (Settings.GeminiEnabled) tasks.Add(RunProviderAsync("gemini", RefreshGeminiAsync, ProviderType.Gemini));
-                if (Settings.DeepSeekEnabled) tasks.Add(RunProviderAsync("deepseek", RefreshDeepSeekAsync, ProviderType.DeepSeek));
-                if (Settings.VolcengineEnabled) tasks.Add(RunProviderAsync("volcengine", RefreshVolcengineAsync, ProviderType.Volcengine));
-                if (Settings.KimiEnabled) tasks.Add(RunProviderAsync("kimi", RefreshKimiAsync, ProviderType.Kimi));
-                if (Settings.OpenRouterEnabled) tasks.Add(RunProviderAsync("openrouter", RefreshOpenRouterAsync, ProviderType.OpenRouter));
-                if (Settings.GLMEnabled) tasks.Add(RunProviderAsync("glm", RefreshGLMAsync, ProviderType.GLM));
-                if (Settings.AliyunEnabled) tasks.Add(RunProviderAsync("aliyun", RefreshAliyunAsync, ProviderType.AliyunBailian));
+                var gen = myGeneration;
+                if (Settings.OpenAIEnabled) tasks.Add(RunProviderAsync("openai", ct => RefreshOpenAIAsync(ct, gen), ProviderType.OpenAI));
+                if (Settings.ClaudeEnabled) tasks.Add(RunProviderAsync("claude", ct => RefreshClaudeAsync(ct, gen), ProviderType.ClaudeCode));
+                if (Settings.GeminiEnabled) tasks.Add(RunProviderAsync("gemini", ct => RefreshGeminiAsync(ct, gen), ProviderType.Gemini));
+                if (Settings.DeepSeekEnabled) tasks.Add(RunProviderAsync("deepseek", ct => RefreshDeepSeekAsync(ct, gen), ProviderType.DeepSeek));
+                if (Settings.VolcengineEnabled) tasks.Add(RunProviderAsync("volcengine", ct => RefreshVolcengineAsync(ct, gen), ProviderType.Volcengine));
+                if (Settings.KimiEnabled) tasks.Add(RunProviderAsync("kimi", ct => RefreshKimiAsync(ct, gen), ProviderType.Kimi));
+                if (Settings.OpenRouterEnabled) tasks.Add(RunProviderAsync("openrouter", ct => RefreshOpenRouterAsync(ct, gen), ProviderType.OpenRouter));
+                if (Settings.GLMEnabled) tasks.Add(RunProviderAsync("glm", ct => RefreshGLMAsync(ct, gen), ProviderType.GLM));
+                if (Settings.AliyunEnabled) tasks.Add(RunProviderAsync("aliyun", ct => RefreshAliyunAsync(ct, gen), ProviderType.AliyunBailian));
 
                 foreach (var config in Settings.CustomProviders.Where(c => c.IsEnabled))
                 {
                     var captured = config;
-                    tasks.Add(RunProviderAsync("custom", () => RefreshCustomProviderAsync(captured), null, captured.Id));
+                    tasks.Add(RunProviderAsync("custom", ct => RefreshCustomProviderAsync(captured, ct, gen), null, captured.Id));
                 }
 
                 await Task.WhenAll(tasks);
@@ -289,6 +324,18 @@ namespace TokenBar.Services
                 LastRoundAdvanced = advanced;
 
                 Log.Notice("refresh", $"round end in {roundStart.ElapsedMilliseconds}ms, advanced={advanced}");
+
+                // 定时器自愈：Dispose 后未重建或从未建立时，这里是最后一道防线
+                // （对应 mac RefreshManager.startPeriodicTimer 的 isValid 校验）。
+                if (_timer == null)
+                {
+                    Log.Error("timer", "定时器不存在，重建");
+                    StartTimer();
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Error("refresh", $"round 异常: {ex}");
             }
             finally
             {
@@ -318,16 +365,20 @@ namespace TokenBar.Services
         /// 以前任何一个厂商卡住都会让 RefreshAllAsync 迟迟不返回，闸门被占住，
         /// 之后每一次定时触发和手动刷新都被静默丢弃。
         ///
-        /// 注意超时后被放弃的 Task 仍在后台跑，可能稍后写回 quota。Quotas 的写入都在
-        /// 各 Refresh 方法内部完成，CustomQuotas 是 ConcurrentDictionary，不会破坏结构。
+        /// 预算到期时通过 CancellationToken 真正取消底层 HTTP 请求（各服务把 ct 传到
+        /// HttpClient.SendAsync），而不只是放弃等待；写回 ProviderQuota 前还按 generation 门控，
+        /// 被抢占的旧轮次即使稍后返回也不会把新数据覆盖掉。
         /// </summary>
-        private async Task RunProviderAsync(string name, Func<Task> body, ProviderType? key, Guid? customId = null)
+        private async Task RunProviderAsync(string name, Func<CancellationToken, Task> body, ProviderType? key, Guid? customId = null)
         {
             var sw = System.Diagnostics.Stopwatch.StartNew();
+            var budget = BudgetFor(name);
+            using var cts = new CancellationTokenSource(budget);
+
             Task work;
             try
             {
-                work = body();
+                work = body(cts.Token);
             }
             catch (Exception ex)
             {
@@ -336,17 +387,24 @@ namespace TokenBar.Services
                 return;
             }
 
-            using var cts = new CancellationTokenSource();
-            var timeout = Task.Delay(BudgetFor(name), cts.Token);
-            var winner = await Task.WhenAny(work, timeout).ConfigureAwait(false);
+            // 兜底等待：ct 取消后各服务应很快抛 OperationCanceledException 返回；
+            // 子进程等不响应取消的路径再多给 5 秒，之后放弃等待（进程已由服务自行 Kill）。
+            using var graceCts = new CancellationTokenSource();
+            var grace = Task.Delay(budget + TimeSpan.FromSeconds(5), graceCts.Token);
+            var winner = await Task.WhenAny(work, grace).ConfigureAwait(false);
 
             if (winner == work)
             {
-                cts.Cancel();   // 回收 Task.Delay 的定时器，避免堆积
+                graceCts.Cancel();   // 回收 Task.Delay 的定时器，避免堆积
                 try
                 {
                     await work.ConfigureAwait(false);
                     Log.Info("provider", $"provider={name} done in {sw.ElapsedMilliseconds}ms");
+                }
+                catch (OperationCanceledException)
+                {
+                    Log.Error("provider", $"provider={name} TIMEOUT after {sw.ElapsedMilliseconds}ms（已取消）");
+                    FinishTimedOutProvider(key, customId);
                 }
                 catch (Exception ex)
                 {
@@ -355,9 +413,21 @@ namespace TokenBar.Services
                 return;
             }
 
-            Log.Error("provider", $"provider={name} TIMEOUT after {sw.ElapsedMilliseconds}ms，已放弃本轮");
+            Log.Error("provider", $"provider={name} TIMEOUT after {sw.ElapsedMilliseconds}ms，取消后仍未返回，已放弃本轮");
             // 被放弃的厂商，其 IsLoading 会停在 true（卡片一直转圈），这里补一次收尾。
             FinishTimedOutProvider(key, customId);
+        }
+
+        /// <summary>
+        /// 旧轮次的结果不能写回：generation 为 null 表示不是整轮刷新的一部分（设置页直接触发），
+        /// 始终允许写回。
+        /// </summary>
+        private bool IsStaleGeneration(long? generation, string name)
+        {
+            if (!generation.HasValue) return false;
+            if (Volatile.Read(ref _refreshGeneration) == generation.Value) return false;
+            Log.Notice("provider", $"provider={name} 结果来自已被抢占的旧轮次，丢弃");
+            return true;
         }
 
         private void FinishTimedOutProvider(ProviderType? key, Guid? customId)
@@ -409,7 +479,7 @@ namespace TokenBar.Services
             return latest;
         }
 
-        public async Task RefreshOpenAIAsync()
+        public async Task RefreshOpenAIAsync(CancellationToken ct = default, long? generation = null)
         {
             var quota = Quotas[ProviderType.OpenAI];
             quota.IsLoading = true;
@@ -430,16 +500,20 @@ namespace TokenBar.Services
                 var (primary, secondary, account) = await OpenAIService.Instance.FetchQuotaAsync(
                     Settings.OpenAIApiKey,
                     Settings.OpenAIEndpoint,
-                    Settings.OpenAIOrgId);
+                    Settings.OpenAIOrgId,
+                    ct);
 
+                if (IsStaleGeneration(generation, "openai")) return;
                 quota.FiveHourWindow = primary;
                 quota.WeeklyWindow = secondary;
                 quota.AccountInfo = account;
                 quota.IsAuthorized = true;
                 quota.LastUpdated = DateTime.Now;
             }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex)
             {
+                if (IsStaleGeneration(generation, "openai")) return;
                 quota.IsAuthorized = false;
                 quota.ErrorMessage = ex.Message;
                 Log.Error("provider", $"provider=openai failed: {ex.Message}");
@@ -451,7 +525,7 @@ namespace TokenBar.Services
             }
         }
 
-        public async Task RefreshClaudeAsync()
+        public async Task RefreshClaudeAsync(CancellationToken ct = default, long? generation = null)
         {
             var quota = Quotas[ProviderType.ClaudeCode];
             quota.IsLoading = true;
@@ -469,15 +543,19 @@ namespace TokenBar.Services
             {
                 try
                 {
-                    var (fiveHour, weekly, account) = await ClaudeService.Instance.FetchRemoteUsageAsync(Settings.ClaudeToken);
+                    var (fiveHour, weekly, account) = await ClaudeService.Instance.FetchRemoteUsageAsync(Settings.ClaudeToken, ct);
+                    if (IsStaleGeneration(generation, "claude")) return;
                     quota.FiveHourWindow = fiveHour;
                     quota.WeeklyWindow = weekly;
                     quota.IsAuthorized = true;
                     if (account != null) quota.AccountInfo = account;
                     foundAuth = true;
                 }
-                catch
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                catch (Exception ex)
                 {
+                    Log.Warn("provider", $"claude 远程用量读取失败，退回本地缓存: {ex.Message}");
+                    if (IsStaleGeneration(generation, "claude")) return;
                     if (localClaude != null)
                     {
                         quota.FiveHourWindow = localClaude.Value.FiveHour;
@@ -504,8 +582,10 @@ namespace TokenBar.Services
                 {
                     var (primary, secondary, account) = await ClaudeService.Instance.FetchAnthropicQuotaAsync(
                         Settings.AnthropicApiKey,
-                        Settings.AnthropicEndpoint);
+                        Settings.AnthropicEndpoint,
+                        ct);
 
+                    if (IsStaleGeneration(generation, "claude")) return;
                     quota.FiveHourWindow ??= primary;
                     quota.WeeklyWindow ??= secondary;
 
@@ -518,8 +598,10 @@ namespace TokenBar.Services
                     quota.IsAuthorized = true;
                     foundAuth = true;
                 }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
                 catch (Exception ex)
                 {
+                    if (IsStaleGeneration(generation, "claude")) return;
                     if (!foundAuth)
                     {
                         quota.ErrorMessage = ex.Message;
@@ -528,6 +610,7 @@ namespace TokenBar.Services
                 }
             }
 
+            if (IsStaleGeneration(generation, "claude")) return;
             if (!foundAuth)
             {
                 quota.IsAuthorized = false;
@@ -543,7 +626,7 @@ namespace TokenBar.Services
             NotifyQuotasUpdated();
         }
 
-        public async Task RefreshGeminiAsync()
+        public async Task RefreshGeminiAsync(CancellationToken ct = default, long? generation = null)
         {
             var quota = Quotas[ProviderType.Gemini];
             quota.IsLoading = true;
@@ -559,8 +642,10 @@ namespace TokenBar.Services
                 {
                     var (fiveHour, weekly, account) = await GeminiService.Instance.FetchQuotaWithApiKeyAsync(
                         Settings.GeminiApiKey,
-                        Settings.GeminiEndpoint);
+                        Settings.GeminiEndpoint,
+                        ct);
 
+                    if (IsStaleGeneration(generation, "gemini")) return;
                     quota.FiveHourWindow = fiveHour;
                     quota.WeeklyWindow = weekly;
                     quota.IsAuthorized = true;
@@ -570,12 +655,14 @@ namespace TokenBar.Services
                     NotifyQuotasUpdated();
                     return;
                 }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
                 catch (Exception ex)
                 {
                     var local = GeminiService.Instance.ReadLocalGeminiConfig();
                     bool hasOAuth = !string.IsNullOrWhiteSpace(Settings.GeminiToken) || local.Account != null || local.Token != null;
                     if (!hasOAuth)
                     {
+                        if (IsStaleGeneration(generation, "gemini")) return;
                         quota.IsAuthorized = false;
                         quota.ErrorMessage = ex.Message;
                         Log.Error("provider", $"provider=gemini failed: {ex.Message}");
@@ -589,15 +676,18 @@ namespace TokenBar.Services
             // 2. OAuth Web Login / Local Credentials Fallback
             try
             {
-                var (fiveHour, weekly, account) = await GeminiService.Instance.FetchQuotaAsync(Settings.GeminiToken);
+                var (fiveHour, weekly, account) = await GeminiService.Instance.FetchQuotaAsync(Settings.GeminiToken, ct);
+                if (IsStaleGeneration(generation, "gemini")) return;
                 quota.FiveHourWindow = fiveHour;
                 quota.WeeklyWindow = weekly;
                 quota.IsAuthorized = true;
                 if (account != null) quota.AccountInfo = account;
                 quota.LastUpdated = DateTime.Now;
             }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex)
             {
+                if (IsStaleGeneration(generation, "gemini")) return;
                 quota.IsAuthorized = false;
                 quota.ErrorMessage = ex.Message;
                 Log.Error("provider", $"provider=gemini failed: {ex.Message}");
@@ -609,7 +699,7 @@ namespace TokenBar.Services
             }
         }
 
-        public async Task RefreshDeepSeekAsync()
+        public async Task RefreshDeepSeekAsync(CancellationToken ct = default, long? generation = null)
         {
             var quota = Quotas[ProviderType.DeepSeek];
             quota.IsLoading = true;
@@ -631,7 +721,10 @@ namespace TokenBar.Services
                     Settings.DeepSeekApiKey,
                     Settings.DeepSeekEndpoint,
                     Settings.DeepSeekModel,
-                    Settings.DeepSeekBalanceAlertThreshold);
+                    Settings.DeepSeekBalanceAlertThreshold,
+                    ct);
+
+                if (IsStaleGeneration(generation, "deepseek")) return;
 
                 quota.FiveHourWindow = primary;
                 quota.WeeklyWindow = secondary;
@@ -642,8 +735,10 @@ namespace TokenBar.Services
                 ProcessBalance("deepseek", ProviderType.DeepSeek.GetDisplayName(),
                     quota.WeeklyWindow, Settings.DeepSeekBalanceAlertThreshold);
             }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex)
             {
+                if (IsStaleGeneration(generation, "deepseek")) return;
                 quota.IsAuthorized = false;
                 quota.ErrorMessage = ex.Message;
                 Log.Error("provider", $"provider=deepseek failed: {ex.Message}");
@@ -655,7 +750,7 @@ namespace TokenBar.Services
             }
         }
 
-        public async Task RefreshVolcengineAsync()
+        public async Task RefreshVolcengineAsync(CancellationToken ct = default, long? generation = null)
         {
             var quota = Quotas[ProviderType.Volcengine];
             quota.IsLoading = true;
@@ -676,7 +771,10 @@ namespace TokenBar.Services
                 var (primary, secondary, account) = await VolcengineService.Instance.FetchQuotaAsync(
                     Settings.VolcengineApiKey,
                     Settings.VolcengineEndpoint,
-                    Settings.VolcengineModel);
+                    Settings.VolcengineModel,
+                    ct);
+
+                if (IsStaleGeneration(generation, "volcengine")) return;
 
                 quota.FiveHourWindow = primary;
                 quota.WeeklyWindow = secondary;
@@ -684,8 +782,10 @@ namespace TokenBar.Services
                 quota.IsAuthorized = true;
                 quota.LastUpdated = DateTime.Now;
             }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex)
             {
+                if (IsStaleGeneration(generation, "volcengine")) return;
                 quota.IsAuthorized = false;
                 quota.ErrorMessage = ex.Message;
                 Log.Error("provider", $"provider=volcengine failed: {ex.Message}");
@@ -697,7 +797,7 @@ namespace TokenBar.Services
             }
         }
 
-        public async Task RefreshKimiAsync()
+        public async Task RefreshKimiAsync(CancellationToken ct = default, long? generation = null)
         {
             var quota = Quotas[ProviderType.Kimi];
             quota.IsLoading = true;
@@ -719,7 +819,10 @@ namespace TokenBar.Services
                     Settings.KimiApiKey,
                     Settings.KimiEndpoint,
                     Settings.KimiModel,
-                    Settings.KimiBalanceAlertThreshold);
+                    Settings.KimiBalanceAlertThreshold,
+                    ct);
+
+                if (IsStaleGeneration(generation, "kimi")) return;
 
                 quota.FiveHourWindow = primary;
                 quota.WeeklyWindow = secondary;
@@ -730,8 +833,10 @@ namespace TokenBar.Services
                 ProcessBalance("kimi", ProviderType.Kimi.GetDisplayName(),
                     quota.WeeklyWindow, Settings.KimiBalanceAlertThreshold);
             }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex)
             {
+                if (IsStaleGeneration(generation, "kimi")) return;
                 quota.IsAuthorized = false;
                 quota.ErrorMessage = ex.Message;
                 Log.Error("provider", $"provider=kimi failed: {ex.Message}");
@@ -743,7 +848,7 @@ namespace TokenBar.Services
             }
         }
 
-        public async Task RefreshOpenRouterAsync()
+        public async Task RefreshOpenRouterAsync(CancellationToken ct = default, long? generation = null)
         {
             var quota = Quotas[ProviderType.OpenRouter];
             quota.IsLoading = true;
@@ -764,7 +869,10 @@ namespace TokenBar.Services
                 var (primary, secondary, account) = await OpenRouterService.Instance.FetchQuotaAsync(
                     Settings.OpenRouterApiKey,
                     Settings.OpenRouterEndpoint,
-                    Settings.OpenRouterBalanceAlertThreshold);
+                    Settings.OpenRouterBalanceAlertThreshold,
+                    ct);
+
+                if (IsStaleGeneration(generation, "openrouter")) return;
 
                 quota.FiveHourWindow = primary;
                 quota.WeeklyWindow = secondary;
@@ -775,8 +883,10 @@ namespace TokenBar.Services
                 ProcessBalance("openrouter", ProviderType.OpenRouter.GetDisplayName(),
                     quota.FiveHourWindow, Settings.OpenRouterBalanceAlertThreshold);
             }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex)
             {
+                if (IsStaleGeneration(generation, "openrouter")) return;
                 quota.IsAuthorized = false;
                 quota.ErrorMessage = ex.Message;
                 Log.Error("provider", $"provider=openrouter failed: {ex.Message}");
@@ -788,7 +898,7 @@ namespace TokenBar.Services
             }
         }
 
-        public async Task RefreshGLMAsync()
+        public async Task RefreshGLMAsync(CancellationToken ct = default, long? generation = null)
         {
             var quota = Quotas[ProviderType.GLM];
             quota.IsLoading = true;
@@ -808,7 +918,10 @@ namespace TokenBar.Services
             {
                 var (fiveHour, weekly, account) = await GLMService.Instance.FetchQuotaAsync(
                     Settings.GLMApiKey,
-                    Settings.GLMEndpoint);
+                    Settings.GLMEndpoint,
+                    ct);
+
+                if (IsStaleGeneration(generation, "glm")) return;
 
                 quota.FiveHourWindow = fiveHour;
                 quota.WeeklyWindow = weekly;
@@ -816,8 +929,10 @@ namespace TokenBar.Services
                 quota.IsAuthorized = true;
                 quota.LastUpdated = DateTime.Now;
             }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex)
             {
+                if (IsStaleGeneration(generation, "glm")) return;
                 quota.IsAuthorized = false;
                 quota.ErrorMessage = ex.Message;
                 Log.Error("provider", $"provider=glm failed: {ex.Message}");
@@ -829,7 +944,7 @@ namespace TokenBar.Services
             }
         }
 
-        public async Task RefreshAliyunAsync()
+        public async Task RefreshAliyunAsync(CancellationToken ct = default, long? generation = null)
         {
             var quota = Quotas[ProviderType.AliyunBailian];
             quota.IsLoading = true;
@@ -843,7 +958,9 @@ namespace TokenBar.Services
                 var prefetched = await CredentialSecretStore.Instance.PrefetchAsync(
                     SecretKey.AliyunAccessKeySecret, SecretKey.AliyunConsoleAccessToken);
                 var credentials = AliyunBailianService.ResolveCredentials(Settings, prefetched);
-                var res = await AliyunBailianService.Instance.FetchQuotaAsync(credentials);
+                var res = await AliyunBailianService.Instance.FetchQuotaAsync(credentials, ct);
+
+                if (IsStaleGeneration(generation, "aliyun")) return;
 
                 // 新签发的控制台令牌落进凭据管理器，下次刷新直接复用，避免重复签发。
                 // 写入不阻塞刷新，交给后台。
@@ -870,7 +987,8 @@ namespace TokenBar.Services
                     try
                     {
                         var balance = await AliyunBailianService.Instance
-                            .FetchAccountBalanceAsync(credentials);
+                            .FetchAccountBalanceAsync(credentials, ct);
+                        if (IsStaleGeneration(generation, "aliyun")) return;
                         quota.BalanceWindow = new TokenWindow
                         {
                             Title = "账户余额",
@@ -885,11 +1003,18 @@ namespace TokenBar.Services
                         ProcessBalance("aliyun", ProviderType.AliyunBailian.GetDisplayName(),
                             quota.BalanceWindow, Settings.AliyunBalanceAlertThreshold);
                     }
-                    catch { }
+                    catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                    catch (Exception ex)
+                    {
+                        // 余额是附加信息：查不到只记日志，不能连累已经拿到的额度数据
+                        Log.Warn("provider", $"aliyun 账户余额查询失败: {ex.Message}");
+                    }
                 }
             }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex)
             {
+                if (IsStaleGeneration(generation, "aliyun")) return;
                 quota.IsAuthorized = false;
                 quota.ErrorMessage = ex.Message;
                 Log.Error("provider", $"provider=aliyun failed: {ex.Message}");
@@ -901,7 +1026,7 @@ namespace TokenBar.Services
             }
         }
 
-        public async Task RefreshCustomProviderAsync(CustomProviderConfig config)
+        public async Task RefreshCustomProviderAsync(CustomProviderConfig config, CancellationToken ct = default, long? generation = null)
         {
             var q = CustomQuotas.GetOrAdd(config.Id, _ => new CustomProviderQuota
             {
@@ -925,7 +1050,8 @@ namespace TokenBar.Services
 
             try
             {
-                var (primary, secondary, account) = await CustomProviderService.Instance.FetchQuotaAsync(config);
+                var (primary, secondary, account) = await CustomProviderService.Instance.FetchQuotaAsync(config, ct);
+                if (IsStaleGeneration(generation, "custom")) return;
                 q.PrimaryWindow = primary;
                 q.SecondaryWindow = secondary;
                 q.AccountInfo = account;
@@ -939,8 +1065,10 @@ namespace TokenBar.Services
                 ProcessBalance($"custom:{config.Id}", config.Name,
                     balanceWin, config.BalanceAlertThreshold ?? 10);
             }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex)
             {
+                if (IsStaleGeneration(generation, "custom")) return;
                 q.IsAuthorized = false;
                 q.ErrorMessage = ex.Message;
                 Log.Error("provider", $"provider=custom failed: {ex.Message}");

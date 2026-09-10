@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Shapes;
+using System.Windows.Threading;
 using Brushes = System.Windows.Media.Brushes;
 using Color = System.Windows.Media.Color;
 using HorizontalAlignment = System.Windows.HorizontalAlignment;
@@ -21,17 +22,45 @@ namespace TokenBar.Views
 {
     public partial class PopoverWindow : Window
     {
+        // 浮窗是单实例复用的：普通 Close 只隐藏，只有 ForceClose（退出应用）才真正关闭
+        private bool _allowClose;
+
         public PopoverWindow()
         {
             InitializeComponent();
             UpdateTexts();
-            LocalizationManager.Instance.PropertyChanged += (s, e) => Dispatcher.Invoke(UpdateTexts);
-            RefreshManager.Instance.OnQuotasUpdated += () => Dispatcher.Invoke(UpdateTexts);
-            Closing += (s, e) =>
-            {
-                e.Cancel = true;
-                Hide();
-            };
+            LocalizationManager.Instance.PropertyChanged += OnLanguageChanged;
+            RefreshManager.Instance.OnQuotasUpdated += OnQuotasUpdated;
+            Closing += OnClosingHideInstead;
+            Closed += OnClosedUnsubscribe;
+        }
+
+        private void OnLanguageChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+            => Dispatcher.Invoke(UpdateTexts);
+
+        private void OnQuotasUpdated()
+            => Dispatcher.Invoke(UpdateTexts);
+
+        private void OnClosingHideInstead(object? sender, System.ComponentModel.CancelEventArgs e)
+        {
+            if (_allowClose) return;
+            e.Cancel = true;
+            Hide();
+        }
+
+        private void OnClosedUnsubscribe(object? sender, EventArgs e)
+        {
+            LocalizationManager.Instance.PropertyChanged -= OnLanguageChanged;
+            RefreshManager.Instance.OnQuotasUpdated -= OnQuotasUpdated;
+            Closing -= OnClosingHideInstead;
+            Closed -= OnClosedUnsubscribe;
+        }
+
+        /// <summary>应用退出时真正关闭窗口（普通 Close 会被拦成 Hide）。</summary>
+        public void ForceClose()
+        {
+            _allowClose = true;
+            Close();
         }
 
         private void UpdateTexts()
@@ -458,6 +487,7 @@ namespace TokenBar.Views
         private UIElement CreateWindowQuotaRow(TokenWindow window, string badgeText)
         {
             var isBalance = window.Kind == TokenWindowKind.Balance;
+            var isStatus = window.Kind == TokenWindowKind.Status;
             if (isBalance)
             {
                 badgeText = LocalizationManager.Instance.BalanceBadge;
@@ -500,7 +530,21 @@ namespace TokenBar.Views
             Grid.SetColumn(titleBlock, 1);
             topGrid.Children.Add(titleBlock);
 
-            if (isBalance)
+            if (isStatus)
+            {
+                // 状态型窗口：没有真实额度，只放一个绿色状态点，不显示「剩余 x%」
+                var dot = new Ellipse
+                {
+                    Width = 7,
+                    Height = 7,
+                    Fill = window.StatusBrush,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(6, 0, 2, 0)
+                };
+                Grid.SetColumn(dot, 2);
+                topGrid.Children.Add(dot);
+            }
+            else if (isBalance)
             {
                 // 余额窗口：直接显示金额，而不是"剩余 X%"
                 var balanceBlock = new TextBlock
@@ -537,6 +581,12 @@ namespace TokenBar.Views
             }
 
             rowStack.Children.Add(topGrid);
+
+            if (isStatus)
+            {
+                // 状态型窗口到此为止：没有进度条、时间范围与倒计时
+                return rowStack;
+            }
 
             if (isBalance)
             {
@@ -626,17 +676,107 @@ namespace TokenBar.Views
 
         public void ShowNearTray(bool activate = true)
         {
-            var workArea = SystemParameters.WorkArea;
-            Left = workArea.Right - Width - 10;
-            Top = workArea.Bottom - Height - 10;
-
             // 悬停预览时不能抢焦点，否则会打断用户当前的操作
             ShowActivated = activate;
+
+            // 第一次定位用上次布局的尺寸（首次显示时 ActualHeight 为 0，会用估计高度），
+            // 避免窗口先在错误位置闪一下
+            PositionNearTray();
             Show();
             if (activate)
             {
                 Activate();
             }
+
+            // SizeToContent=Height 的窗口要等布局跑完 ActualHeight 才可信：
+            // 内容变多/变少时都用真实高度再定位一次，否则底部会被任务栏盖住或留出大片空白
+            Dispatcher.InvokeAsync(PositionNearTray, DispatcherPriority.Loaded);
+        }
+
+        /// <summary>
+        /// 把窗口贴到托盘所在屏幕的任务栏旁。
+        /// 以光标所在屏幕为准（托盘只会在被点击/悬停的那块屏上），比较 WorkingArea 与 Bounds
+        /// 判断任务栏在哪一侧；Screen 给的是物理像素，WPF 的 Left/Top 是逻辑像素，需要按 DPI 换算。
+        /// </summary>
+        private void PositionNearTray()
+        {
+            System.Drawing.Point cursor;
+            System.Windows.Forms.Screen screen;
+            try
+            {
+                cursor = System.Windows.Forms.Cursor.Position;
+                screen = System.Windows.Forms.Screen.FromPoint(cursor);
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("ui", $"读取屏幕信息失败，退回主屏工作区: {ex.Message}");
+                var wa = SystemParameters.WorkArea;
+                Left = wa.Right - (ActualWidth > 0 ? ActualWidth : Width) - 10;
+                Top = wa.Bottom - (ActualHeight > 0 ? ActualHeight : 400) - 10;
+                return;
+            }
+
+            var work = screen.WorkingArea;
+            var bounds = screen.Bounds;
+
+            // 物理像素 → 逻辑像素的缩放系数
+            double scaleX = 1.0, scaleY = 1.0;
+            var source = PresentationSource.FromVisual(this);
+            if (source?.CompositionTarget != null)
+            {
+                var m = source.CompositionTarget.TransformFromDevice;
+                scaleX = m.M11;
+                scaleY = m.M22;
+            }
+            else
+            {
+                var dpi = VisualTreeHelper.GetDpi(this);
+                if (dpi.DpiScaleX > 0) scaleX = 1.0 / dpi.DpiScaleX;
+                if (dpi.DpiScaleY > 0) scaleY = 1.0 / dpi.DpiScaleY;
+            }
+
+            double w = ActualWidth > 0 ? ActualWidth : (double.IsNaN(Width) ? 330 : Width);
+            double h = ActualHeight > 0 ? ActualHeight : (double.IsNaN(Height) ? 400 : Height);
+
+            double waLeft = work.Left * scaleX;
+            double waTop = work.Top * scaleY;
+            double waRight = work.Right * scaleX;
+            double waBottom = work.Bottom * scaleY;
+            double cursorX = cursor.X * scaleX;
+            const double margin = 10;
+
+            double left, top;
+            if (work.Top > bounds.Top)
+            {
+                // 任务栏在顶部：贴着工作区上沿，水平跟随光标
+                left = cursorX - w / 2;
+                top = waTop + margin;
+            }
+            else if (work.Left > bounds.Left)
+            {
+                // 任务栏在左侧：托盘在任务栏底部，窗口贴工作区左下角
+                left = waLeft + margin;
+                top = waBottom - h - margin;
+            }
+            else if (work.Right < bounds.Right)
+            {
+                // 任务栏在右侧：窗口贴工作区右下角
+                left = waRight - w - margin;
+                top = waBottom - h - margin;
+            }
+            else
+            {
+                // 任务栏在底部（含自动隐藏 / 无任务栏）：贴工作区下沿，水平跟随光标
+                left = cursorX - w / 2;
+                top = waBottom - h - margin;
+            }
+
+            // 钳制在工作区内，避免超出屏幕边缘
+            left = Math.Max(waLeft + margin, Math.Min(left, waRight - w - margin));
+            top = Math.Max(waTop + margin, Math.Min(top, waBottom - h - margin));
+
+            Left = left;
+            Top = top;
         }
 
         private async void BtnRefresh_Click(object sender, RoutedEventArgs e)

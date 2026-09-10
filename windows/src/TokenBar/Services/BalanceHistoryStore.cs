@@ -48,7 +48,10 @@ namespace TokenBar.Services
                            ?? new Dictionary<string, List<BalancePoint>>();
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Log.Warn("balance", $"读取 balance_history.json 失败，按空历史处理: {ex.Message}");
+            }
             return new Dictionary<string, List<BalancePoint>>();
         }
 
@@ -59,7 +62,10 @@ namespace TokenBar.Services
                 var json = JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = false });
                 File.WriteAllText(FilePathLazy.Value, json);
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Log.Warn("balance", $"写入 balance_history.json 失败: {ex.Message}");
+            }
         }
 
         /// <summary>记录一次余额读数；同 provider 距上一条不足 30 分钟时覆盖上一条。</summary>

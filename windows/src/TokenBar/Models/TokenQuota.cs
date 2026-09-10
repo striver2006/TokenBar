@@ -108,12 +108,16 @@ namespace TokenBar.Models
 
     /// <summary>
     /// 额度窗口展示类型：Percentage 为时间窗口百分比（5小时/每周/速率等），
-    /// Balance 为纯扣费厂商的货币余额（DeepSeek/OpenRouter/Kimi 等）。
+    /// Balance 为纯扣费厂商的货币余额（DeepSeek/OpenRouter/Kimi 等），
+    /// Status 为「API 连接正常」「可用模型 (N)」这类没有真实额度数据的状态型窗口 ——
+    /// 卡片只渲染徽标 + 标题 + 绿色状态点，不渲染「剩余 x%」、进度条与倒计时。
+    /// 与 mac 端 TokenWindowKind 同名同义。
     /// </summary>
     public enum TokenWindowKind
     {
         Percentage,
-        Balance
+        Balance,
+        Status
     }
 
     public class TokenWindow
@@ -145,7 +149,7 @@ namespace TokenBar.Models
                     "TPM 速率配额" or "TPM 速率剩余" => "TPM Rate Limit",
                     "Token 速率配额" => "Token Rate Limit",
                     "5小时算力额度" => "5-Hour Compute Quota",
-                    "API 连接正常" or "接口连接正常" or "Anthropic 协议连接正常" or "Anthropic API 连接正常" or "DeepSeek 连接正常" or "KIMI 连接正常" or "接入点连接正常" or "API 连接状态" => "API Connected",
+                    "API 连接正常" or "接口连接正常" or "Anthropic 协议连接正常" or "Anthropic API 连接正常" or "DeepSeek 连接正常" or "KIMI 连接正常" or "OpenRouter 连接正常" or "接入点连接正常" or "API 连接状态" => "API Connected",
                     "AI Studio 配额" => "AI Studio Quota",
                     _ => Title
                 };
@@ -185,12 +189,27 @@ namespace TokenBar.Models
         }
 
         public double RemainingPercentage => Math.Max(0.0, 100.0 - UsedPercentage);
-        public bool IsExpired => !IsIdle && DateTime.Now >= EndTime;
+        public bool IsExpired => Kind != TokenWindowKind.Status && !IsIdle && DateTime.Now >= EndTime;
+
+        /// <summary>构造一个状态型窗口（无真实额度，仅表示连接 / 可用性）。</summary>
+        public static TokenWindow Status(string title) => new TokenWindow
+        {
+            Title = title,
+            Kind = TokenWindowKind.Status,
+            UsedPercentage = 0.0,
+            StartTime = DateTime.Now,
+            EndTime = DateTime.Now.AddDays(1),
+            Unit = "%",
+            IsIdle = true
+        };
 
         public SolidColorBrush StatusBrush
         {
             get
             {
+                if (Kind == TokenWindowKind.Status)
+                    return new SolidColorBrush(Color.FromRgb(34, 197, 94)); // Green：状态型窗口只表示连接正常
+
                 if (Kind == TokenWindowKind.Balance)
                 {
                     if (BalanceAmount.HasValue && CriticalThreshold.HasValue && BalanceAmount.Value < CriticalThreshold.Value)

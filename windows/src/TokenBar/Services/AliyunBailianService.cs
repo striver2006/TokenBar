@@ -29,8 +29,6 @@ namespace TokenBar.Services
     {
         public static AliyunBailianService Instance { get; } = new AliyunBailianService();
 
-        private static readonly HttpClient HttpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
-
         /// <summary>控制台网关上查询 Token Plan 用量的 API 名。</summary>
         public const string TokenPlanUsageApi = "zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/usage";
         /// <summary>用 AK/SK 换控制台令牌的 OpenAPI。</summary>
@@ -65,7 +63,10 @@ namespace TokenBar.Services
                     UseShellExecute = true
                 });
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Log.Warn("provider", $"无法打开终端运行 bl auth login: {ex.Message}");
+            }
         }
 
         // ---------- 通道编排 ----------
@@ -88,22 +89,28 @@ namespace TokenBar.Services
         }
 
         /// <summary>按优先级依次尝试各通道；全部失败时抛出聚合了每级失败原因的异常。</summary>
-        public async Task<AliyunQuotaResult> FetchQuotaAsync(AliyunCredentials credentials)
+        public async Task<AliyunQuotaResult> FetchQuotaAsync(AliyunCredentials credentials, CancellationToken ct = default)
         {
             var failures = new List<(AliyunChannel Channel, string Message)>();
 
             foreach (var channel in PlannedChannels(credentials))
             {
+                ct.ThrowIfCancellationRequested();
                 try
                 {
                     return channel switch
                     {
-                        AliyunChannel.AccessKey => await FetchViaAccessKeyAsync(credentials),
-                        AliyunChannel.ConsoleToken => await FetchViaConsoleTokenAsync(credentials),
-                        AliyunChannel.Cli => await FetchViaCliAsync(),
-                        AliyunChannel.Cookie => await FetchViaCookieAsync(credentials),
+                        AliyunChannel.AccessKey => await FetchViaAccessKeyAsync(credentials, ct),
+                        AliyunChannel.ConsoleToken => await FetchViaConsoleTokenAsync(credentials, ct),
+                        AliyunChannel.Cli => await FetchViaCliAsync(credentials.ConsoleRegion, credentials.ConsoleSite, ct),
+                        AliyunChannel.Cookie => await FetchViaCookieAsync(credentials, ct),
                         _ => throw new AliyunChannelException(AliyunErrorKind.MissingCredentials)
                     };
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    // 整轮预算耗尽：不再尝试后面的通道，交给 RefreshManager 收尾
+                    throw;
                 }
                 catch (Exception ex)
                 {
@@ -142,7 +149,7 @@ namespace TokenBar.Services
         /// 三重防失控：直线代码不自我调用（最多 2 次网关 + 2 次签名）；
         /// TokenCoordinator 串行化签发；签发失败后 30 秒内复用上次错误。
         /// </summary>
-        internal async Task<AliyunQuotaResult> FetchViaAccessKeyAsync(AliyunCredentials credentials)
+        internal async Task<AliyunQuotaResult> FetchViaAccessKeyAsync(AliyunCredentials credentials, CancellationToken ct = default)
         {
             var token = credentials.ConsoleAccessToken.Trim();
             string? refreshedToken = null;
@@ -150,14 +157,14 @@ namespace TokenBar.Services
 
             if (string.IsNullOrEmpty(token))
             {
-                token = await _tokens.IssueAsync(() => GenerateConsoleAccessTokenAsync(credentials));
+                token = await _tokens.IssueAsync(() => GenerateConsoleAccessTokenAsync(credentials, ct));
                 refreshedToken = token;
                 freshlyIssued = true;
             }
 
             try
             {
-                var result = await QueryTokenPlanAsync(token, credentials, AliyunChannel.AccessKey);
+                var result = await QueryTokenPlanAsync(token, credentials, AliyunChannel.AccessKey, ct);
                 result.RefreshedToken = refreshedToken;
                 return result;
             }
@@ -167,19 +174,19 @@ namespace TokenBar.Services
                 if (freshlyIssued) throw new AliyunChannelException(AliyunErrorKind.NotLoginedAfterRefresh);
 
                 var newToken = await _tokens.IssueAsync(
-                    () => GenerateConsoleAccessTokenAsync(credentials), force: true);
-                var result = await QueryTokenPlanAsync(newToken, credentials, AliyunChannel.AccessKey);
+                    () => GenerateConsoleAccessTokenAsync(credentials, ct), force: true);
+                var result = await QueryTokenPlanAsync(newToken, credentials, AliyunChannel.AccessKey, ct);
                 result.RefreshedToken = newToken;
                 return result;
             }
         }
 
         /// <summary>通道 2：只有现成令牌、没有 AK/SK —— 无法自愈，失败即降级。</summary>
-        internal Task<AliyunQuotaResult> FetchViaConsoleTokenAsync(AliyunCredentials credentials)
-            => QueryTokenPlanAsync(credentials.ConsoleAccessToken.Trim(), credentials, AliyunChannel.ConsoleToken);
+        internal Task<AliyunQuotaResult> FetchViaConsoleTokenAsync(AliyunCredentials credentials, CancellationToken ct = default)
+            => QueryTokenPlanAsync(credentials.ConsoleAccessToken.Trim(), credentials, AliyunChannel.ConsoleToken, ct);
 
         /// <summary>用 AK/SK 调 GenerateCLIAccessToken 换一枚控制台令牌。</summary>
-        internal async Task<string> GenerateConsoleAccessTokenAsync(AliyunCredentials credentials)
+        internal async Task<string> GenerateConsoleAccessTokenAsync(AliyunCredentials credentials, CancellationToken ct = default)
         {
             var host = OpenApiHost(credentials.ConsoleRegion);
             // 官方 CLI 在这里发的是空 body、空 query，签名必须完全一致
@@ -198,12 +205,24 @@ namespace TokenBar.Services
             string body;
             try
             {
-                resp = await HttpClient.SendAsync(req);
-                body = await resp.Content.ReadAsStringAsync();
+                resp = await Http.Shared.SendAsync(req, ct);
             }
+            catch (OperationCanceledException) { throw; }
             catch (Exception ex)
             {
                 throw new AliyunChannelException(AliyunErrorKind.Network, ex.Message);
+            }
+            using (resp)
+            {
+                try
+                {
+                    body = await resp.Content.ReadAsStringAsync(ct);
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    throw new AliyunChannelException(AliyunErrorKind.Network, ex.Message);
+                }
             }
 
             string? token = null, code = null, message = null;
@@ -221,7 +240,10 @@ namespace TokenBar.Services
                 if (root.TryGetProperty("Success", out var s) && s.ValueKind == JsonValueKind.False)
                     success = false;
             }
-            catch { }
+            catch (JsonException ex)
+            {
+                Log.Warn("provider", $"aliyun GenerateCLIAccessToken 响应不是 JSON: {ex.Message}");
+            }
 
             if (!string.IsNullOrEmpty(token) && resp.IsSuccessStatusCode && success) return token!;
             throw ClassifyOpenApiError((int)resp.StatusCode, code ?? "", message ?? "", body);
@@ -316,7 +338,7 @@ namespace TokenBar.Services
 
         /// <summary>以 Bearer 令牌调控制台网关查 Token Plan 用量。</summary>
         internal async Task<AliyunQuotaResult> QueryTokenPlanAsync(
-            string token, AliyunCredentials credentials, AliyunChannel channel)
+            string token, AliyunCredentials credentials, AliyunChannel channel, CancellationToken ct = default)
         {
             if (string.IsNullOrWhiteSpace(token))
                 throw new AliyunChannelException(AliyunErrorKind.NotLogined);
@@ -338,12 +360,24 @@ namespace TokenBar.Services
             string body;
             try
             {
-                resp = await HttpClient.SendAsync(req);
-                body = await resp.Content.ReadAsStringAsync();
+                resp = await Http.Shared.SendAsync(req, ct);
             }
+            catch (OperationCanceledException) { throw; }
             catch (Exception ex)
             {
                 throw new AliyunChannelException(AliyunErrorKind.Network, ex.Message);
+            }
+            using (resp)
+            {
+                try
+                {
+                    body = await resp.Content.ReadAsStringAsync(ct);
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    throw new AliyunChannelException(AliyunErrorKind.Network, ex.Message);
+                }
             }
 
             if (resp.StatusCode == HttpStatusCode.Unauthorized || resp.StatusCode == HttpStatusCode.Forbidden)
@@ -372,15 +406,23 @@ namespace TokenBar.Services
 
         // ---------- 通道 3：官方 CLI ----------
 
-        public async Task<AliyunQuotaResult> FetchViaCliAsync()
+        /// <summary>
+        /// 官方 bl CLI 子进程。region / site 从凭据透传（与 GatewayRoute 同源），
+        /// 以前写死 cn-beijing/domestic，国际站或新加坡区域的用户会查到空数据。
+        /// </summary>
+        public async Task<AliyunQuotaResult> FetchViaCliAsync(
+            string consoleRegion = "cn-beijing", string consoleSite = "domestic", CancellationToken ct = default)
         {
             var blPath = FindBlExecutable();
             if (blPath == null) throw new AliyunChannelException(AliyunErrorKind.CliNotFound);
 
+            var region = SanitizeCliArg(consoleRegion, "cn-beijing");
+            var site = SanitizeCliArg(consoleSite, "domestic");
+
             var psi = new ProcessStartInfo
             {
                 FileName = blPath,
-                Arguments = "usage token-plan --console-region cn-beijing --console-site domestic --output json",
+                Arguments = $"usage token-plan --console-region {region} --console-site {site} --output json",
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 // stdin 也重定向后立刻关闭：bl 未登录时可能等待交互输入而永远不退出
@@ -394,7 +436,8 @@ namespace TokenBar.Services
                 throw new AliyunChannelException(AliyunErrorKind.CliFailed,
                     IsZh ? "无法启动百炼 CLI 进程" : "Unable to launch the Bailian CLI process");
 
-            try { proc.StandardInput.Close(); } catch { }
+            try { proc.StandardInput.Close(); }
+            catch (Exception ex) { Log.Warn("provider", $"关闭 bl stdin 失败: {ex.Message}"); }
 
             // 先启动异步读取再等退出（顺序反了会在输出超过管道缓冲区时父子互等死锁），
             // 并且必须带超时：WaitForExitAsync 不加 token 的话 bl 一挂住就永久等待，
@@ -402,15 +445,19 @@ namespace TokenBar.Services
             var outputTask = proc.StandardOutput.ReadToEndAsync();
             var errorTask = proc.StandardError.ReadToEndAsync();
 
-            using var cliCts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            // 20s 本地上限与上层 provider 预算取并集：任一先到都要把子进程杀掉，不能留下孤儿进程
+            using var cliCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cliCts.CancelAfter(TimeSpan.FromSeconds(20));
             try
             {
                 await proc.WaitForExitAsync(cliCts.Token);
             }
             catch (OperationCanceledException)
             {
-                Log.Error("provider", "bl CLI 超时 20s，终止进程");
-                try { proc.Kill(entireProcessTree: true); } catch { }
+                Log.Error("provider", ct.IsCancellationRequested ? "bl CLI 被上层预算取消，终止进程" : "bl CLI 超时 20s，终止进程");
+                try { proc.Kill(entireProcessTree: true); }
+                catch (Exception ex) { Log.Warn("provider", $"终止 bl 进程失败: {ex.Message}"); }
+                if (ct.IsCancellationRequested) throw;
                 throw new AliyunChannelException(AliyunErrorKind.CliFailed,
                     IsZh ? "百炼 CLI 执行超时" : "Bailian CLI timed out");
             }
@@ -418,13 +465,28 @@ namespace TokenBar.Services
             var stdout = await outputTask;
             var stderr = await errorTask;
 
-            var label = IsZh ? "百炼 CLI (cn-beijing)" : "Bailian CLI (cn-beijing)";
+            var label = IsZh ? $"百炼 CLI ({region})" : $"Bailian CLI ({region})";
             if (!string.IsNullOrWhiteSpace(stdout))
             {
                 return ParseTokenPlanResponse(stdout, label, AliyunChannel.Cli);
             }
             throw new AliyunChannelException(AliyunErrorKind.CliFailed,
                 string.IsNullOrWhiteSpace(stderr) ? "(no output)" : stderr.Trim());
+        }
+
+        /// <summary>
+        /// 命令行参数只允许 region/site 这类标识符字符：凭据里的值来自设置文件，
+        /// 不能让引号、空格或分隔符逃逸成额外参数。
+        /// </summary>
+        internal static string SanitizeCliArg(string? value, string fallback)
+        {
+            var trimmed = value?.Trim() ?? string.Empty;
+            if (trimmed.Length == 0 || trimmed.Length > 64) return fallback;
+            foreach (var c in trimmed)
+            {
+                if (!(char.IsAsciiLetterOrDigit(c) || c == '-' || c == '_')) return fallback;
+            }
+            return trimmed;
         }
 
         private static string? FindBlExecutable()
@@ -449,7 +511,11 @@ namespace TokenBar.Services
                         var full = Path.Combine(dir.Trim(), c);
                         if (File.Exists(full)) return full;
                     }
-                    catch { }
+                    catch (Exception ex)
+                    {
+                        // PATH 里可能有非法路径片段，跳过即可
+                        Log.Debug("provider", $"跳过 PATH 项 {dir}: {ex.Message}");
+                    }
                 }
             }
             return null;
@@ -457,16 +523,29 @@ namespace TokenBar.Services
 
         // ---------- 通道 4：控制台 Cookie（兜底） ----------
 
-        internal async Task<AliyunQuotaResult> FetchViaCookieAsync(AliyunCredentials credentials)
+        /// <summary>
+        /// Cookie 通道的网关 host / 控制台页面域名，从凭据里的 region/site 推导（与 GatewayRoute 同源）。
+        /// </summary>
+        internal static (string GatewayHost, string ConsoleDomain, string Action) CookieRoute(string region, string site)
         {
-            var url = "https://bailian-cs.console.aliyun.com/data/api.json?action=BroadScopeAspnGateway"
+            var route = GatewayRoute(region, site);
+            var isIntlSite = site?.Trim() == "international";
+            var consoleDomain = isIntlSite ? "bailian.console.alibabacloud.com" : "bailian.console.aliyun.com";
+            return (route.Host, consoleDomain, route.Action);
+        }
+
+        internal async Task<AliyunQuotaResult> FetchViaCookieAsync(AliyunCredentials credentials, CancellationToken ct = default)
+        {
+            var region = string.IsNullOrWhiteSpace(credentials.ConsoleRegion) ? "cn-beijing" : credentials.ConsoleRegion.Trim();
+            var (gatewayHost, consoleDomain, action) = CookieRoute(region, credentials.ConsoleSite);
+            var url = $"https://{gatewayHost}/data/api.json?action={action}"
                       + $"&product=sfm_bailian&api={AliyunSigner.PercentEncode(TokenPlanUsageApi)}&_v=undefined";
 
             using var req = new HttpRequestMessage(HttpMethod.Post, url);
             req.Headers.TryAddWithoutValidation("Accept", "application/json, text/plain, */*");
             req.Headers.TryAddWithoutValidation("Cookie", credentials.Cookie.Trim());
-            req.Headers.TryAddWithoutValidation("Origin", "https://bailian.console.aliyun.com");
-            req.Headers.TryAddWithoutValidation("Referer", "https://bailian.console.aliyun.com/cn-beijing?tab=plan");
+            req.Headers.TryAddWithoutValidation("Origin", $"https://{consoleDomain}");
+            req.Headers.TryAddWithoutValidation("Referer", $"https://{consoleDomain}/{region}?tab=plan");
             req.Headers.TryAddWithoutValidation("User-Agent",
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36");
             req.Headers.TryAddWithoutValidation("X-Requested-With", "XMLHttpRequest");
@@ -474,12 +553,12 @@ namespace TokenBar.Services
             var cornerstone = new Dictionary<string, object>
             {
                 ["feTraceId"] = Guid.NewGuid().ToString("N"),
-                ["feURL"] = "https://bailian.console.aliyun.com/cn-beijing?tab=plan#/efm/subscription/token-plan",
+                ["feURL"] = $"https://{consoleDomain}/{region}?tab=plan#/efm/subscription/token-plan",
                 ["protocol"] = "V2",
                 ["console"] = "ONE_CONSOLE",
                 ["productCode"] = "p_efm",
                 ["switchUserType"] = 3,
-                ["domain"] = "bailian.console.aliyun.com",
+                ["domain"] = consoleDomain,
                 ["consoleSite"] = "BAILIAN_ALIYUN",
                 ["userNickName"] = "",
                 ["userPrincipalName"] = "",
@@ -491,19 +570,31 @@ namespace TokenBar.Services
             req.Content = FormBody(new Dictionary<string, string>
             {
                 ["params"] = JsonSerializer.Serialize(cornerstone),
-                ["region"] = "cn-beijing"
+                ["region"] = region
             });
 
             HttpResponseMessage resp;
             string body;
             try
             {
-                resp = await HttpClient.SendAsync(req);
-                body = await resp.Content.ReadAsStringAsync();
+                resp = await Http.Shared.SendAsync(req, ct);
             }
+            catch (OperationCanceledException) { throw; }
             catch (Exception ex)
             {
                 throw new AliyunChannelException(AliyunErrorKind.Network, ex.Message);
+            }
+            using (resp)
+            {
+                try
+                {
+                    body = await resp.Content.ReadAsStringAsync(ct);
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    throw new AliyunChannelException(AliyunErrorKind.Network, ex.Message);
+                }
             }
 
             if (resp.StatusCode == HttpStatusCode.Unauthorized || resp.StatusCode == HttpStatusCode.Forbidden)

@@ -6,6 +6,7 @@ using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Threading;
 using System.Threading.Tasks;
 using TokenBar.I18n;
 using TokenBar.Models;
@@ -331,7 +332,7 @@ namespace TokenBar.Services
         /// 查询阿里云账户现金余额。
         /// 需要 RAM 权限 bss:DescribeAcccount（只读；官方文档就是这个拼写）。
         /// </summary>
-        public async Task<AliyunAccountBalance> FetchAccountBalanceAsync(AliyunCredentials credentials)
+        public async Task<AliyunAccountBalance> FetchAccountBalanceAsync(AliyunCredentials credentials, CancellationToken ct = default)
         {
             if (!credentials.HasAccessKey)
                 throw new AliyunChannelException(AliyunErrorKind.MissingCredentials);
@@ -351,12 +352,24 @@ namespace TokenBar.Services
             string body;
             try
             {
-                resp = await HttpClient.SendAsync(req);
-                body = await resp.Content.ReadAsStringAsync();
+                resp = await Http.Shared.SendAsync(req, ct);
             }
+            catch (OperationCanceledException) { throw; }
             catch (Exception ex)
             {
                 throw new AliyunChannelException(AliyunErrorKind.Network, ex.Message);
+            }
+            using (resp)
+            {
+                try
+                {
+                    body = await resp.Content.ReadAsStringAsync(ct);
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    throw new AliyunChannelException(AliyunErrorKind.Network, ex.Message);
+                }
             }
 
             if (!resp.IsSuccessStatusCode)
@@ -370,7 +383,10 @@ namespace TokenBar.Services
                         message = StringValue(errRoot["Message"]) ?? "";
                     }
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    Log.Warn("provider", $"aliyun 余额错误响应不是 JSON: {ex.Message}");
+                }
                 throw ClassifyOpenApiError((int)resp.StatusCode, code, message, body);
             }
 

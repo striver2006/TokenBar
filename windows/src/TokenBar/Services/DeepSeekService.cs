@@ -4,7 +4,9 @@ using System.Globalization;
 using System.Linq;
 using System.Net.Http;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
+using TokenBar.Helpers;
 using TokenBar.Models;
 
 namespace TokenBar.Services
@@ -13,15 +15,14 @@ namespace TokenBar.Services
     {
         public static DeepSeekService Instance { get; } = new DeepSeekService();
 
-        private static readonly HttpClient HttpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
-
         private DeepSeekService() { }
 
         public async Task<(TokenWindow? FiveHour, TokenWindow? Weekly, string? Account)> FetchQuotaAsync(
             string apiKey,
             string endpoint = "https://api.deepseek.com/v1",
             string model = "deepseek-chat",
-            decimal balanceAlertThreshold = 10)
+            decimal balanceAlertThreshold = 10,
+            CancellationToken ct = default)
         {
             var cleanKey = apiKey.Trim();
             if (string.IsNullOrEmpty(cleanKey))
@@ -36,7 +37,7 @@ namespace TokenBar.Services
             }
 
             // 1. Fetch user balance
-            var balance = await FetchBalanceAsync(cleanKey);
+            var balance = await FetchBalanceAsync(cleanKey, ct);
             string? balanceString = null;
             if (balance != null)
             {
@@ -53,8 +54,8 @@ namespace TokenBar.Services
             req.Headers.Add("Authorization", $"Bearer {cleanKey}");
             req.Headers.Add("Accept", "application/json");
 
-            var resp = await HttpClient.SendAsync(req);
-            var body = await resp.Content.ReadAsStringAsync();
+            using var resp = await Http.Shared.SendAsync(req, ct);
+            var body = await resp.Content.ReadAsStringAsync(ct);
 
             if (resp.StatusCode == System.Net.HttpStatusCode.Unauthorized)
             {
@@ -103,13 +104,13 @@ namespace TokenBar.Services
                 };
             }
 
-            if (double.TryParse(limitTokensStr, out var limitTokens) &&
-                double.TryParse(remainingTokensStr, out var remainingTokens) &&
+            if (double.TryParse(limitTokensStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var limitTokens) &&
+                double.TryParse(remainingTokensStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var remainingTokens) &&
                 limitTokens > 0)
             {
                 var used = Math.Max(0.0, limitTokens - remainingTokens);
                 var usedPct = Math.Clamp((used / limitTokens) * 100.0, 0.0, 100.0);
-                var duration = OpenAIService.Instance.ParseDurationString(resetTokensStr ?? "1s");
+                var duration = TimeSpan.FromSeconds(RateLimitReset.Parse(resetTokensStr) ?? 1);
                 var now = DateTime.Now;
 
                 primaryWindow = new TokenWindow
@@ -127,15 +128,7 @@ namespace TokenBar.Services
 
             if (primaryWindow == null && secondaryWindow == null)
             {
-                primaryWindow = new TokenWindow
-                {
-                    Title = "DeepSeek 连接正常",
-                    UsedPercentage = 0.0,
-                    StartTime = DateTime.Now,
-                    EndTime = DateTime.Now.AddDays(1),
-                    Unit = "%",
-                    IsIdle = true
-                };
+                primaryWindow = TokenWindow.Status("DeepSeek 连接正常");
             }
 
             var keySuffix = cleanKey.Length > 6 ? cleanKey[^4..] : cleanKey;
@@ -148,17 +141,17 @@ namespace TokenBar.Services
         }
 
         /// <summary>查询 DeepSeek 账户余额，返回 (金额, 币种)；失败返回 null。</summary>
-        public async Task<(decimal Amount, string Currency)?> FetchBalanceAsync(string apiKey)
+        public async Task<(decimal Amount, string Currency)?> FetchBalanceAsync(string apiKey, CancellationToken ct = default)
         {
             try
             {
                 using var req = new HttpRequestMessage(HttpMethod.Get, "https://api.deepseek.com/user/balance");
                 req.Headers.Add("Authorization", $"Bearer {apiKey}");
 
-                var resp = await HttpClient.SendAsync(req);
+                using var resp = await Http.Shared.SendAsync(req, ct);
                 if (!resp.IsSuccessStatusCode) return null;
 
-                var json = await resp.Content.ReadAsStringAsync();
+                var json = await resp.Content.ReadAsStringAsync(ct);
                 using var doc = JsonDocument.Parse(json);
                 if (doc.RootElement.TryGetProperty("balance_infos", out var infos) &&
                     infos.ValueKind == JsonValueKind.Array &&
@@ -178,7 +171,11 @@ namespace TokenBar.Services
                     }
                 }
             }
-            catch { }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                Log.Warn("provider", $"deepseek 余额查询失败: {ex.Message}");
+            }
 
             return null;
         }

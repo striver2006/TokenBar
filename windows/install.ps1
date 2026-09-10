@@ -107,7 +107,11 @@ if (-not (Test-Path $uninstallKey)) {
     New-Item -Path $uninstallKey -Force | Out-Null
 }
 Set-ItemProperty -Path $uninstallKey -Name "DisplayName" -Value "$appName - 模型额度监控"
-Set-ItemProperty -Path $uninstallKey -Name "DisplayVersion" -Value "1.1.1"
+# 版本号单源：从 exe 的 FileVersionInfo 读取（来自 TokenBar.csproj 的 <Version>），不再手写
+$versionInfo = (Get-Item $targetExe).VersionInfo
+$displayVersion = if ($versionInfo.ProductVersion) { ($versionInfo.ProductVersion -split '\+')[0] } else { $versionInfo.FileVersion }
+if (-not $displayVersion) { $displayVersion = "0.0.0" }
+Set-ItemProperty -Path $uninstallKey -Name "DisplayVersion" -Value $displayVersion
 Set-ItemProperty -Path $uninstallKey -Name "Publisher" -Value "TokenBar Team"
 Set-ItemProperty -Path $uninstallKey -Name "InstallLocation" -Value $installDir
 Set-ItemProperty -Path $uninstallKey -Name "DisplayIcon" -Value "$targetExe,0"
