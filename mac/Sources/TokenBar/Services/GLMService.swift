@@ -67,15 +67,16 @@ public final class GLMService {
                     if let tot = httpResp.value(forHTTPHeaderField: "x-ratelimit-limit-tokens"), let val = Double(tot) {
                         rateLimitTokensTotal = val
                     }
-                    if let rst = httpResp.value(forHTTPHeaderField: "x-ratelimit-reset-tokens"), let val = Double(rst) {
+                    if let rst = httpResp.value(forHTTPHeaderField: "x-ratelimit-reset-tokens"), let val = RateLimitReset.parse(rst) {
                         rateLimitResetDurationSec = val
                     }
-                }
-            } catch {
-                if (error as NSError).code == 1001 || (error as NSError).code == 401 {
-                    throw error
+                    if httpResp.statusCode >= 400 {
+                        throw NSError(domain: "GLMService", code: httpResp.statusCode, userInfo: [NSLocalizedDescriptionKey: isZh ? "GLM 接口返回 HTTP \(httpResp.statusCode)" : "GLM endpoint returned HTTP \(httpResp.statusCode)"])
+                    }
                 }
             }
+            // 以前这里只重抛 401/1001，把 403、超时、DNS、TLS 全部吞掉再走 fallback，
+            // 结果是断网也显示绿灯「已连接」。鉴权与网络错误必须上抛，让卡片如实显示错误。
         }
 
         // 2. Query BigModel Quota & 5-hour limit endpoint
@@ -109,11 +110,10 @@ public final class GLMService {
                         ?? (item["utilization"] as? NSNumber)?.doubleValue
                         ?? 0.0
 
+                    // 服务端可能给秒也可能给毫秒，按量级区分（> 1e12 视为毫秒）
                     let resetMs: Double
-                    if let ms = (item["nextResetTime"] as? NSNumber)?.doubleValue {
-                        resetMs = ms
-                    } else if let sec = (item["nextResetTime"] as? NSNumber)?.doubleValue {
-                        resetMs = sec * 1000
+                    if let raw = (item["nextResetTime"] as? NSNumber)?.doubleValue, raw > 0 {
+                        resetMs = raw > 1e12 ? raw : raw * 1000
                     } else {
                         resetMs = Date().addingTimeInterval(5 * 3600).timeIntervalSince1970 * 1000
                     }
@@ -149,40 +149,26 @@ public final class GLMService {
             }
         }
 
-        // 3. Fallback: if monitor endpoint returned no windows but OpenAI protocol validated
+        // 3. Fallback：监控接口没有给窗口时，只用 /models 的 rate limit 头构造 5 小时窗口。
+        // 拿不到头就退化为状态型窗口；每周额度没有任何数据来源，一律 nil——
+        // 以前这里用 usedPct * 0.6 编造过一条每周进度条，对额度监控工具是最坏的一类错误。
         if fiveHourWindow == nil {
-            let now = Date()
-            var usedPct = 0.0
-            var fiveHourEnd = now.addingTimeInterval(5 * 3600)
-
             if let remaining = rateLimitTokensRemaining, let total = rateLimitTokensTotal, total > 0 {
-                usedPct = max(0.0, min(100.0, (1.0 - (remaining / total)) * 100.0))
+                let now = Date()
+                let usedPct = max(0.0, min(100.0, (1.0 - (remaining / total)) * 100.0))
+                let fiveHourEnd = now.addingTimeInterval(rateLimitResetDurationSec ?? 5 * 3600)
+                fiveHourWindow = TokenWindow(
+                    title: "5小时额度",
+                    usedPercentage: usedPct,
+                    startTime: fiveHourEnd.addingTimeInterval(-5 * 3600),
+                    endTime: fiveHourEnd,
+                    usedAmount: total - remaining,
+                    totalLimit: total,
+                    unit: "Tokens"
+                )
+            } else {
+                fiveHourWindow = TokenWindow.status(title: "API 连接正常")
             }
-            if let resetSec = rateLimitResetDurationSec, resetSec > 0 {
-                fiveHourEnd = now.addingTimeInterval(resetSec)
-            }
-
-            fiveHourWindow = TokenWindow(
-                title: "5小时额度",
-                usedPercentage: usedPct,
-                startTime: fiveHourEnd.addingTimeInterval(-5 * 3600),
-                endTime: fiveHourEnd,
-                usedAmount: rateLimitTokensRemaining != nil && rateLimitTokensTotal != nil ? (rateLimitTokensTotal! - rateLimitTokensRemaining!) : nil,
-                totalLimit: rateLimitTokensTotal,
-                unit: rateLimitTokensTotal != nil ? "Tokens" : "%"
-            )
-
-            let calendar = Calendar.current
-            let weekStart = calendar.date(from: calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: now)) ?? now.addingTimeInterval(-3 * 86400)
-            let weekEnd = calendar.date(byAdding: .day, value: 7, to: weekStart) ?? now.addingTimeInterval(4 * 86400)
-
-            weeklyWindow = TokenWindow(
-                title: "每周额度",
-                usedPercentage: usedPct * 0.6,
-                startTime: weekStart,
-                endTime: weekEnd,
-                unit: "%"
-            )
         }
 
         return (fiveHourWindow, weeklyWindow, account)

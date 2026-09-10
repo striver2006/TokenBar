@@ -111,7 +111,7 @@ public struct CustomProviderCardView: View {
                     }
 
                     if let secondary = quota.secondaryWindow {
-                        WindowQuotaRow(window: secondary, badgeText: "RPM")
+                        WindowQuotaRow(window: secondary, badgeText: secondary.title.uppercased().contains("TPM") ? "TPM" : "RPM")
                     }
                 }
             }

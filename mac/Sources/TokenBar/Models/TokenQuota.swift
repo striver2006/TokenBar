@@ -72,10 +72,13 @@ public enum ProviderType: String, CaseIterable, Identifiable, Codable {
     }
 }
 
-/// 额度窗口展示类型：percentage 为时间窗口百分比，balance 为纯扣费厂商的货币余额
+/// 额度窗口展示类型：percentage 为时间窗口百分比，balance 为纯扣费厂商的货币余额，
+/// status 为「只探测到连通性、拿不到真实额度」的状态型窗口（只渲染标题与状态点，
+/// 不渲染「剩余 x%」、进度条与倒计时——那些数字没有数据来源，画出来就是假数据）。
 public enum TokenWindowKind: String, Codable {
     case percentage
     case balance
+    case status
 }
 
 public struct TokenWindow: Identifiable, Codable {
@@ -136,7 +139,15 @@ public struct TokenWindow: Identifiable, Codable {
         return w
     }
 
+    /// 便捷构造状态型窗口：只表达「接口连通」，没有任何额度数字
+    public static func status(title: String) -> TokenWindow {
+        var w = TokenWindow(title: title, usedPercentage: 0.0, startTime: Date(), endTime: Date().addingTimeInterval(86400), isIdle: true)
+        w.kind = .status
+        return w
+    }
+
     public var isBalance: Bool { kind == .balance }
+    public var isStatus: Bool { kind == .status }
 
     public var currencySymbol: String { currency == "USD" ? "$" : "¥" }
 

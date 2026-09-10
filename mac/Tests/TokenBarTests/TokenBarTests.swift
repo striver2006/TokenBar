@@ -1473,4 +1473,60 @@ final class TokenBarTests: XCTestCase {
     func testKeychainProbeExpiredCacheStillRespectsCooldown() {
         XCTAssertEqual(probeDecision(cachedAgo: 301, failedAgo: 5), .cooldown)
     }
+
+    // MARK: - 第 1 批：假数据与错误状态
+
+    func testRateLimitResetParsesGoDuration() {
+        XCTAssertEqual(RateLimitReset.parse("20ms")!, 0.02, accuracy: 0.0001)
+        XCTAssertEqual(RateLimitReset.parse("1s"), 1)
+        XCTAssertEqual(RateLimitReset.parse("6m0s"), 360)
+        XCTAssertEqual(RateLimitReset.parse("1h2m"), 3720)
+        XCTAssertEqual(RateLimitReset.parse(" 1.5s "), 1.5)
+    }
+
+    func testRateLimitResetParsesPlainSecondsAndTimestamps() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        XCTAssertEqual(RateLimitReset.parse("30", now: now), 30)
+        // unix 秒时间戳：距今 600 秒，而不是被当成 17 亿秒
+        XCTAssertEqual(RateLimitReset.parse("1700000600", now: now), 600)
+        // unix 毫秒时间戳
+        XCTAssertEqual(RateLimitReset.parse("1700000600000", now: now), 600)
+        // 过去的时间戳 clamp 到 0
+        XCTAssertEqual(RateLimitReset.parse("1600000000", now: now), 0)
+    }
+
+    func testRateLimitResetClampsAndRejectsGarbage() {
+        XCTAssertEqual(RateLimitReset.parse("999999"), RateLimitReset.maxSeconds)
+        XCTAssertEqual(RateLimitReset.parse("48h"), RateLimitReset.maxSeconds)
+        XCTAssertNil(RateLimitReset.parse(nil))
+        XCTAssertNil(RateLimitReset.parse(""))
+        XCTAssertNil(RateLimitReset.parse("abc"))
+        XCTAssertNil(RateLimitReset.parse("5x"))
+        XCTAssertNil(RateLimitReset.parse("1s2"))
+        // 兼容旧入口：解析失败按 1 秒兜底
+        XCTAssertEqual(OpenAIService.shared.parseDurationString("garbage"), 1.0)
+    }
+
+    func testStatusWindowIsNotAQuotaWindow() {
+        let w = TokenWindow.status(title: "API 连接正常")
+        XCTAssertTrue(w.isStatus)
+        XCTAssertFalse(w.isBalance)
+        XCTAssertTrue(w.isIdle)
+        withChineseUI {
+            XCTAssertEqual(w.localizedTitle, "API 连接正常")
+        }
+        // 菜单栏常驻额度不能挑到状态型窗口去显示「剩余 100%」
+        let selected = MenuBarStatus.selectWindows(primary: w, secondary: nil, balance: nil, metric: .quota)
+        XCTAssertTrue(selected.isEmpty)
+    }
+
+    func testStatusWindowKindDecodesFromLegacyJSON() throws {
+        // 旧版本持久化的窗口没有 kind 字段，必须仍能解码且不被当成状态型
+        let legacy = """
+        {"id":"\(UUID().uuidString)","title":"5小时额度","usedPercentage":40,"startTime":0,"endTime":18000,"unit":"%","isIdle":false}
+        """
+        let w = try JSONDecoder().decode(TokenWindow.self, from: Data(legacy.utf8))
+        XCTAssertFalse(w.isStatus)
+        XCTAssertEqual(w.remainingPercentage, 60)
+    }
 }

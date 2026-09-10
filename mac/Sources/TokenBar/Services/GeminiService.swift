@@ -769,35 +769,10 @@ public final class GeminiService {
             )
         }
 
-        let now = Date()
-        let calendar = Calendar.current
-        let currentHour = calendar.component(.hour, from: now)
-        let slotIndex = currentHour / 5
-        let startOfSlotHour = slotIndex * 5
-        let windowStart = calendar.date(bySettingHour: startOfSlotHour, minute: 0, second: 0, of: now) ?? now.addingTimeInterval(-2 * 3600)
-        let windowEnd = windowStart.addingTimeInterval(5 * 3600)
-
-        let fiveHour = rpmWindow ?? TokenWindow(
-            title: "API 连接正常",
-            usedPercentage: 0.0,
-            startTime: windowStart,
-            endTime: windowEnd,
-            unit: "%",
-            isIdle: true
-        )
-
-        let weekComponents = calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: now)
-        let weekStart = calendar.date(from: weekComponents) ?? now.addingTimeInterval(-3 * 86400)
-        let weekEnd = calendar.date(byAdding: .day, value: 7, to: weekStart) ?? now.addingTimeInterval(4 * 86400)
-
-        let weekly = TokenWindow(
-            title: modelCount > 0 ? "可用模型 (\(modelCount)个)" : "AI Studio 配额",
-            usedPercentage: 0.0,
-            startTime: weekStart,
-            endTime: weekEnd,
-            unit: "%",
-            isIdle: true
-        )
+        // API Key 模式只能探测连通性与模型清单，拿不到真实的 5 小时 / 每周额度。
+        // 以前用「当前小时 / 5」拼出 5 小时起止、再无条件给一条 0% 的每周窗口，都是没有数据来源的假数据。
+        let fiveHour = rpmWindow ?? TokenWindow.status(title: "API 连接正常")
+        let weekly = TokenWindow.status(title: modelCount > 0 ? "可用模型 (\(modelCount)个)" : "AI Studio 配额")
 
         let maskedKey: String
         if trimmedKey.count > 8 {

@@ -99,14 +99,7 @@ public final class VolcengineService: @unchecked Sendable {
         }
 
         if primaryWindow == nil {
-            primaryWindow = TokenWindow(
-                title: "接入点连接正常",
-                usedPercentage: 0.0,
-                startTime: Date(),
-                endTime: Date().addingTimeInterval(86400),
-                unit: "%",
-                isIdle: true
-            )
+            primaryWindow = TokenWindow.status(title: "接入点连接正常")
         }
 
         let keySuffix = cleanKey.count > 6 ? String(cleanKey.suffix(4)) : cleanKey

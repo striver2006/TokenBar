@@ -162,14 +162,7 @@ public final class OpenAIService: @unchecked Sendable {
         }
 
         if primaryWindow == nil {
-            primaryWindow = TokenWindow(
-                title: "API 连接状态",
-                usedPercentage: 0.0,
-                startTime: Date(),
-                endTime: Date().addingTimeInterval(86400),
-                unit: "%",
-                isIdle: true
-            )
+            primaryWindow = TokenWindow.status(title: "API 连接状态")
         }
 
         var accountInfo = orgHeader ?? organizationId
@@ -180,51 +173,9 @@ public final class OpenAIService: @unchecked Sendable {
         return (primaryWindow, secondaryWindow, accountInfo)
     }
 
-    /// Parse duration strings like "20ms", "500ms", "1s", "1m30s", "2m0s", "1h"
+    /// 兼容旧调用：委托给 `RateLimitReset.parse`，无法解析时按 1 秒兜底，
+    /// 最小 0.1 秒（毫秒级重置对倒计时没有意义，沿用旧下限）。
     public func parseDurationString(_ str: String) -> TimeInterval {
-        let clean = str.trimmingCharacters(in: .whitespacesAndNewlines)
-        if clean.isEmpty { return 1.0 }
-
-        if clean.hasSuffix("ms") {
-            let numStr = clean.replacingOccurrences(of: "ms", with: "")
-            if let ms = Double(numStr) {
-                return max(0.1, ms / 1000.0)
-            }
-        }
-
-        var totalSeconds: TimeInterval = 0.0
-        var currentNumber = ""
-
-        for char in clean {
-            if char.isNumber || char == "." {
-                currentNumber.append(char)
-            } else if char == "h" {
-                if let val = Double(currentNumber) {
-                    totalSeconds += val * 3600
-                }
-                currentNumber = ""
-            } else if char == "m" && !clean.contains("ms") {
-                if let val = Double(currentNumber) {
-                    totalSeconds += val * 60
-                }
-                currentNumber = ""
-            } else if char == "s" {
-                if let val = Double(currentNumber) {
-                    totalSeconds += val
-                }
-                currentNumber = ""
-            }
-        }
-
-        if totalSeconds > 0 {
-            return totalSeconds
-        }
-
-        // Fallback: parse direct double
-        if let direct = Double(clean) {
-            return direct
-        }
-
-        return 1.0
+        max(0.1, RateLimitReset.parse(str) ?? 1.0)
     }
 }

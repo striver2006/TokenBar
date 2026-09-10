@@ -208,14 +208,7 @@ public final class CustomProviderService: @unchecked Sendable {
         }
 
         if primaryWindow == nil {
-            primaryWindow = TokenWindow(
-                title: "接口连接正常",
-                usedPercentage: 0.0,
-                startTime: Date(),
-                endTime: Date().addingTimeInterval(86400),
-                unit: "%",
-                isIdle: true
-            )
+            primaryWindow = TokenWindow.status(title: "接口连接正常")
         }
 
         let combinedInfo: String?
@@ -345,14 +338,7 @@ public final class CustomProviderService: @unchecked Sendable {
         }
 
         if primaryWindow == nil {
-            primaryWindow = TokenWindow(
-                title: "Anthropic 协议连接正常",
-                usedPercentage: 0.0,
-                startTime: Date(),
-                endTime: Date().addingTimeInterval(86400),
-                unit: "%",
-                isIdle: true
-            )
+            primaryWindow = TokenWindow.status(title: "Anthropic 协议连接正常")
         }
 
         let account = modelCount > 0 ? (isZh ? "已接入 (模型数: \(modelCount))" : "Connected (\(modelCount) models)") : (isZh ? "Anthropic 兼容协议" : "Anthropic Compatible Protocol")

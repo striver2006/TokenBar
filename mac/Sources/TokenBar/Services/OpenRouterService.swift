@@ -108,14 +108,7 @@ public final class OpenRouterService: @unchecked Sendable {
         }
 
         if balanceWindow == nil {
-            balanceWindow = TokenWindow(
-                title: "OpenRouter 连接正常",
-                usedPercentage: 0.0,
-                startTime: Date(),
-                endTime: Date().addingTimeInterval(86400),
-                unit: "%",
-                isIdle: true
-            )
+            balanceWindow = TokenWindow.status(title: "OpenRouter 连接正常")
         }
 
         // 4. 卡片头部账号信息

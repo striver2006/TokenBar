@@ -35,7 +35,7 @@ public enum MenuBarStatus {
         balance: TokenWindow? = nil,
         metric: MenuBarMetric
     ) -> [TokenWindow] {
-        let quotaWindows = [primary, secondary].compactMap { $0 }.filter { !$0.isBalance }
+        let quotaWindows = [primary, secondary].compactMap { $0 }.filter { !$0.isBalance && !$0.isStatus }
         let resolvedBalance = balance ?? balanceWindow(primary: primary, secondary: secondary)
 
         switch metric {

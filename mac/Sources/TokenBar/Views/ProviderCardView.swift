@@ -147,7 +147,13 @@ struct WindowQuotaRow: View {
 
                 Spacer()
 
-                if window.isBalance {
+                if window.isStatus {
+                    // 状态型窗口：只有连通性，没有额度数字，显示一个状态点即可
+                    Circle()
+                        .fill(Color.green)
+                        .frame(width: 7, height: 7)
+                        .accessibilityLabel(I18n(.apiConnectedTitle))
+                } else if window.isBalance {
                     // 余额窗口：直接显示金额，而不是"剩余 X%"
                     Text(window.balanceFormatted)
                         .font(.system(size: 13, weight: .bold, design: .rounded))
@@ -164,7 +170,9 @@ struct WindowQuotaRow: View {
                 }
             }
 
-            if window.isBalance {
+            if window.isStatus {
+                EmptyView()
+            } else if window.isBalance {
                 // 余额窗口没有进度条与时间窗口概念：展示较上次变化与预计可用天数
                 HStack {
                     let deltaText = window.balanceDeltaFormatted

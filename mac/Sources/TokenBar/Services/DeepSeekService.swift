@@ -111,14 +111,7 @@ public final class DeepSeekService: @unchecked Sendable {
         }
 
         if primaryWindow == nil && secondaryWindow == nil {
-            primaryWindow = TokenWindow(
-                title: "DeepSeek 连接正常",
-                usedPercentage: 0.0,
-                startTime: Date(),
-                endTime: Date().addingTimeInterval(86400),
-                unit: "%",
-                isIdle: true
-            )
+            primaryWindow = TokenWindow.status(title: "DeepSeek 连接正常")
         }
 
         let keySuffix = cleanKey.count > 6 ? String(cleanKey.suffix(4)) : cleanKey
