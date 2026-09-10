@@ -26,9 +26,9 @@ jobs:
       matrix:
         rid: [win-x64, win-arm64]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 8.0.x
 
@@ -41,7 +41,7 @@ jobs:
           Move-Item publish/TokenBar.exe "TokenBar-$env:TAG_NAME-${{ matrix.rid }}.exe"
           Get-FileHash "TokenBar-$env:TAG_NAME-${{ matrix.rid }}.exe" -Algorithm SHA256 | Format-List
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: windows-artifact-${{ matrix.rid }}
           path: TokenBar-*-win-*.exe
@@ -51,7 +51,7 @@ jobs:
     name: Build macOS app (universal)
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Build TokenBar.app (arm64 + x86_64)
         run: bash mac/Scripts/build_app.sh
@@ -61,7 +61,7 @@ jobs:
           ditto -c -k --keepParent mac/build/TokenBar.app "TokenBar-$TAG_NAME-macOS-universal.zip"
           shasum -a 256 "TokenBar-$TAG_NAME-macOS-universal.zip"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: macos-artifact
           path: TokenBar-*-macOS-universal.zip
@@ -72,14 +72,14 @@ jobs:
     needs: [build-windows, build-macos]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           merge-multiple: true
 
       - name: Generate SHA256SUMS.txt
         run: sha256sum TokenBar-* | tee SHA256SUMS.txt
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.TAG_NAME }}
           generate_release_notes: true
