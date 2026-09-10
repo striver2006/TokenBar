@@ -1,7 +1,10 @@
 import Foundation
 import Combine
 import SwiftUI
-import UserNotifications
+// UserNotifications 的 UNUserNotificationCenter / UNNotificationRequest 至今未做 Sendable 审计，
+// 把它们传进 requestAuthorization 的回调是官方用法。@preconcurrency 是 Apple 对这类
+// 尚未标注的 SDK 模块给出的标准做法，而不是掩盖我们自己的并发问题。
+@preconcurrency import UserNotifications
 
 /// 一轮刷新的触发来源，只用于日志定位（"到底是定时器没响，还是每轮都失败"）
 public enum RefreshTrigger: String {

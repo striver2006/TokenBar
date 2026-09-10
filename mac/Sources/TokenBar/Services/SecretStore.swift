@@ -115,6 +115,17 @@ public struct SecretKey: Hashable, Sendable, CustomStringConvertible {
     }
 }
 
+/// 只暴露 `cancel()` 的一次性取消句柄。
+///
+/// `DispatchWorkItem` 对 `cancel()` 本身是线程安全的，但它没有标 `Sendable`，
+/// 直接被 `@Sendable` 闭包捕获会告警（Swift 6 语言模式下是错误）。用一个盒子把这条
+/// 保证显式写下来，与 `ResumeOnce` / `TimeoutFlag` 是同一路子。
+private final class CancelToken: @unchecked Sendable {
+    private let item: DispatchWorkItem
+    init(_ item: DispatchWorkItem) { self.item = item }
+    func cancel() { item.cancel() }
+}
+
 /// 基于 macOS 钥匙串（Security.framework）的实现。
 ///
 /// 签名与授权框：`mac/Scripts/build_app.sh` 已改用固定的开发者证书，designated
@@ -238,11 +249,13 @@ public struct KeychainSecretStore: SecretStoring, Sendable {
         let store = self
         return await withCheckedContinuation { (cont: CheckedContinuation<T, Never>) in
             let gate = ResumeOnce<T>(cont)
-            // 超时用可取消的 DispatchWorkItem：正常完成后立即撤掉，不留一个 5~10 秒后才醒的闭包
+            // 超时用可取消的 DispatchWorkItem：正常完成后立即撤掉，不留一个 5~10 秒后才醒的闭包。
+            // 队列闭包只拿得到 CancelToken，不直接捕获非 Sendable 的 DispatchWorkItem。
             let timeoutItem = DispatchWorkItem { gate.resume(timedOutValue) }
+            let canceller = CancelToken(timeoutItem)
             Self.queue.async {
                 gate.resume(work(store))
-                timeoutItem.cancel()
+                canceller.cancel()
             }
             DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: timeoutItem)
         }
