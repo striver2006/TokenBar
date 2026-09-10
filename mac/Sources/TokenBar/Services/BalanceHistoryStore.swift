@@ -3,7 +3,12 @@ import Foundation
 /// 纯本地余额历史记录：每次刷新成功后追加一条 (时间, 余额)，
 /// 用于估算日均消耗并给出"预计可用 X 天"。
 /// 文件位于 ~/Library/Application Support/TokenBar/balance_history.json，保留 30 天。
-public final class BalanceHistoryStore: @unchecked Sendable {
+///
+/// actor 而非 NSLock：以前 record / forecastDays 各自同步 load 一次全量 JSON、record 再
+/// atomic write 一次，全部跑在 MainActor 上且持锁跨越磁盘 IO——磁盘一慢，整条刷新链路
+/// 和 UI 一起冻结（与 ARCH 2.2.1 第 2 条同理）。现在内存里常驻一份，磁盘只在首次访问时
+/// 读一次、每次写入时落一次，都在 actor 自己的执行器上。
+public actor BalanceHistoryStore {
     public static let shared = BalanceHistoryStore()
 
     private struct BalancePoint: Codable {
@@ -11,10 +16,12 @@ public final class BalanceHistoryStore: @unchecked Sendable {
         var v: Double
     }
 
-    private let lock = NSLock()
     private let retentionDays = 30.0
     private let minSampleSpanDays = 1.0
     private let minSampleCount = 4
+
+    /// 内存副本；nil 表示还没从磁盘加载过
+    private var cache: [String: [BalancePoint]]?
 
     private var fileURL: URL? {
         guard let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
@@ -27,15 +34,19 @@ public final class BalanceHistoryStore: @unchecked Sendable {
 
     private init() {}
 
-    private func load() -> [String: [BalancePoint]] {
-        guard let url = fileURL, let data = try? Data(contentsOf: url),
-              let decoded = try? JSONDecoder().decode([String: [BalancePoint]].self, from: data) else {
-            return [:]
+    private func loaded() -> [String: [BalancePoint]] {
+        if let cache { return cache }
+        var data: [String: [BalancePoint]] = [:]
+        if let url = fileURL, let raw = try? Data(contentsOf: url),
+           let decoded = try? JSONDecoder().decode([String: [BalancePoint]].self, from: raw) {
+            data = decoded
         }
-        return decoded
+        cache = data
+        return data
     }
 
-    private func save(_ data: [String: [BalancePoint]]) {
+    private func persist(_ data: [String: [BalancePoint]]) {
+        cache = data
         guard let url = fileURL,
               let encoded = try? JSONEncoder().encode(data) else { return }
         try? encoded.write(to: url, options: .atomic)
@@ -44,10 +55,8 @@ public final class BalanceHistoryStore: @unchecked Sendable {
     /// 记录一次余额读数；同 provider 距上一条不足 30 分钟时覆盖上一条
     public func record(providerKey: String, value: Double) {
         guard !providerKey.isEmpty else { return }
-        lock.lock()
-        defer { lock.unlock() }
 
-        var data = load()
+        var data = loaded()
         let now = Date()
         var points = data[providerKey] ?? []
 
@@ -64,16 +73,14 @@ public final class BalanceHistoryStore: @unchecked Sendable {
         } else {
             data[providerKey] = points
         }
-        save(data)
+        persist(data)
     }
 
     /// 基于近 7 天历史估算日均消耗，结合当前余额推算可用天数；样本不足返回 nil
     public func forecastDays(providerKey: String, currentAmount: Double) -> Double? {
         guard !providerKey.isEmpty else { return nil }
-        lock.lock()
-        defer { lock.unlock() }
 
-        let points = load()[providerKey] ?? []
+        let points = loaded()[providerKey] ?? []
         guard points.count >= minSampleCount else { return nil }
 
         let windowStart = Date().addingTimeInterval(-7 * 86400)
@@ -94,16 +101,20 @@ public final class BalanceHistoryStore: @unchecked Sendable {
         return min(currentAmount / dailyBurn, 999)
     }
 
+    /// 记录读数并返回预计可用天数，一次 actor 跳转完成两件事
+    public func recordAndForecast(providerKey: String, value: Double) -> Double? {
+        record(providerKey: providerKey, value: value)
+        return forecastDays(providerKey: providerKey, currentAmount: value)
+    }
+
     /// 清除指定厂商（或全部）历史
     public func clear(providerKey: String? = nil) {
-        lock.lock()
-        defer { lock.unlock() }
-        var data = load()
+        var data = loaded()
         if let key = providerKey {
             data.removeValue(forKey: key)
         } else {
             data.removeAll()
         }
-        save(data)
+        persist(data)
     }
 }

@@ -16,6 +16,8 @@ public struct SettingsView: View {
     @ObservedObject private var i18n = LocalizationManager.shared
 
     @State private var selectedTab: SettingsTab = .openAI
+    /// 由 MenuBarController 持有；窗口复用时通过它接收切 tab / 重新加载请求
+    @ObservedObject private var request: SettingsWindowRequest
 
     // OpenAI State
     @State private var openAIKeyInput: String = ""
@@ -107,8 +109,9 @@ public struct SettingsView: View {
     }
 
     @MainActor
-    public init(refreshManager: RefreshManager, initialTab: SettingsTab = .openAI) {
+    public init(refreshManager: RefreshManager, initialTab: SettingsTab = .openAI, request: SettingsWindowRequest? = nil) {
         self.refreshManager = refreshManager
+        self.request = request ?? SettingsWindowRequest()
         _selectedTab = State(initialValue: initialTab)
         _openAIKeyInput = State(initialValue: refreshManager.settings.openAIApiKey)
         _openAIEndpointInput = State(initialValue: refreshManager.settings.openAIEndpoint)
@@ -221,16 +224,17 @@ public struct SettingsView: View {
             syncFromSettings()
             MenuBarController.shared.updateSettingsTitle(tab: selectedTab)
         }
-        .task {
+        .task(id: request.openCount) {
             // 钥匙串读取放 .task 而不是 onAppear 里再开 Task：随 view 生命周期自动取消，
-            // 不会在窗口已经关掉后回来写 @State。SwiftUI 保证 .onAppear 先于 .task 体执行，
-            // 所以 syncFromSettings() 一定已经把明文字段填好了，两者之间没有竞争。
+            // 不会在窗口已经关掉后回来写 @State。
             //
-            // 前提：MenuBarController.openSettings 每次都重建 NSHostingView
-            // （MenuBarController.swift:459/473），是全新 view identity，所以这个 .task
-            // 每次打开设置窗口都会重跑。若将来改成复用 hosting view 只做显隐，无 id: 的
-            // .task 只在首次插入时触发一次，第二次打开就读不到最新的 Secret —— 那时必须
-            // 换成 .task(id:) 或回到 .onAppear + Task。
+            // id 绑定 openCount：设置窗口的 hosting view 是复用的（MenuBarController.openSettings），
+            // 无 id 的 .task 只在首次插入时跑一次，第二次打开就读不到最新的 Secret。
+            // 每次打开窗口 openCount 递增，这里随之重跑；首次插入时 openCount 为初值也会跑一次。
+            if request.openCount > 0 {
+                syncFromSettings()
+                selectedTab = request.tab
+            }
             await loadAliyunSecretFromKeychain()
         }
         .onChange(of: selectedTab) { newTab in
@@ -621,12 +625,14 @@ public struct SettingsView: View {
                     .buttonStyle(.borderedProminent)
 
                     Button {
-                        if refreshManager.importClaudeFromLocal() {
-                            statusAlertMessage = I18n(.alertClaudeLocalSuccess)
-                        } else {
-                            statusAlertMessage = I18n(.alertClaudeLocalNotFound)
+                        Task {
+                            if await refreshManager.importClaudeFromLocal() {
+                                statusAlertMessage = I18n(.alertClaudeLocalSuccess)
+                            } else {
+                                statusAlertMessage = I18n(.alertClaudeLocalNotFound)
+                            }
+                            showStatusAlert = true
                         }
-                        showStatusAlert = true
                     } label: {
                         HStack {
                             Image(systemName: "terminal")

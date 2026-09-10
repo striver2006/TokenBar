@@ -1,6 +1,8 @@
 import Foundation
 
-public final class ClaudeService {
+/// `@unchecked Sendable`：仅有的存储属性是两个 ISO8601DateFormatter（Apple 文档保证线程安全），
+/// 需要它是为了把 `~/.claude.json` 的读取放到后台线程。
+public final class ClaudeService: @unchecked Sendable {
     public static let shared = ClaudeService()
 
     private let isoFormatter: ISO8601DateFormatter = {
@@ -22,8 +24,17 @@ public final class ClaudeService {
         return isoFormatterNoFrac.date(from: dateStr)
     }
 
-    /// Read locally cached usage and account info from ~/.claude.json if present
-    public func readLocalClaudeJson() -> (fiveHour: TokenWindow?, weekly: TokenWindow?, account: String?)? {
+    /// Read locally cached usage and account info from ~/.claude.json if present.
+    ///
+    /// async：重度 Claude Code 用户的 `~/.claude.json` 常有数 MB（history / projects），
+    /// 在 MainActor 上同步全量解析是每轮刷新都能感知的卡顿，与 GeminiService.readLocalGeminiFiles
+    /// 同样挪到后台线程。
+    public func readLocalClaudeJson() async -> (fiveHour: TokenWindow?, weekly: TokenWindow?, account: String?)? {
+        await Task.detached(priority: .userInitiated) { self.readLocalClaudeJsonSync() }.value
+    }
+
+    /// 同步实现，只应在后台线程调用
+    func readLocalClaudeJsonSync() -> (fiveHour: TokenWindow?, weekly: TokenWindow?, account: String?)? {
         let homeDir = FileManager.default.homeDirectoryForCurrentUser
         let claudeJsonUrl = homeDir.appendingPathComponent(".claude.json")
 

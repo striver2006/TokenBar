@@ -26,7 +26,11 @@ enum KeychainProbeDecision: Equatable {
     }
 }
 
-public final class GeminiService {
+/// actor：这里有 7 个可变缓存字段（token 缓存、候选 client 列表、钥匙串探测缓存与冷却），
+/// 以前是普通 class 且方法全是 nonisolated async——MainActor 上的 refreshGemini 与设置页
+/// 「测试」按钮可以并发进入，`antigravityClientCandidates` 的 removeAll / insert 就是数组的
+/// 并发读写。actor 让这些状态天然串行化，公开方法本来就都是 async，调用方无需改动。
+public actor GeminiService {
     public static let shared = GeminiService()
 
     private var googleClientId: String {
@@ -57,7 +61,7 @@ public final class GeminiService {
 
     private var antigravityClientCandidates: [(id: String, secret: String)]?
 
-    private func getAntigravityClientCandidates() -> [(id: String, secret: String)] {
+    private func getAntigravityClientCandidates() async -> [(id: String, secret: String)] {
         if let cached = antigravityClientCandidates {
             return cached
         }
@@ -78,6 +82,20 @@ public final class GeminiService {
             }
         }
 
+        // 扫描几百 MB 的二进制是重 IO，放到独立任务上跑，不占 actor 执行器
+        let scanned = await Task.detached(priority: .utility) { Self.scanInstalledBinaries() }.value
+        for id in scanned.ids {
+            for secret in scanned.secrets {
+                guard list.count < 8 else { break }
+                list.append((id, secret))
+            }
+        }
+
+        antigravityClientCandidates = list
+        return list
+    }
+
+    private static func scanInstalledBinaries() -> (ids: Set<String>, secrets: Set<String>) {
         var ids = Set<String>()
         var secrets = Set<String>()
         let home = FileManager.default.homeDirectoryForCurrentUser
@@ -98,19 +116,11 @@ public final class GeminiService {
                 scanFileForClientPatterns(target, ids: &ids, secrets: &secrets)
             }
         }
-        for id in ids {
-            for secret in secrets {
-                guard list.count < 8 else { break }
-                list.append((id, secret))
-            }
-        }
-
-        antigravityClientCandidates = list
-        return list
+        return (ids, secrets)
     }
 
     /// Scans a large binary in overlapping chunks for the embedded OAuth client patterns.
-    private func scanFileForClientPatterns(_ path: String, ids: inout Set<String>, secrets: inout Set<String>) {
+    private static func scanFileForClientPatterns(_ path: String, ids: inout Set<String>, secrets: inout Set<String>) {
         let chunkSize = 4 * 1024 * 1024
         let overlap = 1024
         guard let handle = FileHandle(forReadingAtPath: path) else { return }
@@ -422,7 +432,7 @@ public final class GeminiService {
         // 整个候选循环的硬预算：任何一个候选慢下来都不能让整轮刷新失控。
         let deadline = Date().addingTimeInterval(Self.tokenRefreshBudget)
 
-        for client in getAntigravityClientCandidates().prefix(Self.tokenClientCandidateLimit) {
+        for client in await getAntigravityClientCandidates().prefix(Self.tokenClientCandidateLimit) {
             if Date() >= deadline {
                 Log.provider.error("gemini token 刷新超出 \(Self.tokenRefreshBudget, format: .fixed(precision: 0))s 预算，放弃剩余候选")
                 break

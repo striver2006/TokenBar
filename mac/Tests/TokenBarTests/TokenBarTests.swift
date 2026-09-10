@@ -38,8 +38,8 @@ final class TokenBarTests: XCTestCase {
         XCTAssertEqual(window.timeRemainingFormatted, "已到重置时间 / 刷新中")
     }
 
-    func testClaudeLocalConfigParser() {
-        let local = ClaudeService.shared.readLocalClaudeJson()
+    func testClaudeLocalConfigParser() async {
+        let local = await ClaudeService.shared.readLocalClaudeJson()
         if let local = local {
             print("Detected Claude Account: \(String(describing: local.account))")
             XCTAssertNotNil(local.fiveHour, "Claude 5-hour window should ALWAYS be non-nil")
@@ -121,13 +121,19 @@ final class TokenBarTests: XCTestCase {
         XCTAssertEqual(delta.balanceDeltaFormatted, "+¥12.00")
     }
 
-    func testBalanceForecastStore() {
+    func testBalanceForecastStore() async {
         let key = "test-provider-\(UUID().uuidString)"
-        defer { BalanceHistoryStore.shared.clear(providerKey: key) }
+        let store = BalanceHistoryStore.shared
 
         // 样本不足：不给出预测
-        BalanceHistoryStore.shared.record(providerKey: key, value: 100)
-        XCTAssertNil(BalanceHistoryStore.shared.forecastDays(providerKey: key, currentAmount: 100))
+        await store.record(providerKey: key, value: 100)
+        let forecast = await store.forecastDays(providerKey: key, currentAmount: 100)
+        XCTAssertNil(forecast)
+        // 一次跳转完成记录 + 预测
+        let combined = await store.recordAndForecast(providerKey: key, value: 99)
+        XCTAssertNil(combined)
+
+        await store.clear(providerKey: key)
     }
 
     func testGLMOpenAIEndpoint() {

@@ -144,7 +144,7 @@ public final class RefreshManager: ObservableObject {
 
     private func setupInitialData() async {
         // Auto-detect local Claude if available
-        if let localClaude = ClaudeService.shared.readLocalClaudeJson() {
+        if let localClaude = await ClaudeService.shared.readLocalClaudeJson() {
             var quota = quotas[.claudeCode] ?? ProviderQuota(provider: .claudeCode)
             quota.isAuthorized = true
             quota.accountInfo = localClaude.account
@@ -276,6 +276,26 @@ public final class RefreshManager: ObservableObject {
         }
     }
 
+    /// 按轮次代数门控的写回：被闸门抢占的旧轮次在新轮次开始后仍会跑完，它的结果
+    /// （常常是失败态或过期数据）不能再覆盖新轮次刚写入的状态。`gen` 由各 refresh
+    /// 方法在入口处捕获；不在任何轮次内的独立刷新（设置页保存后触发）也走这里——
+    /// 若期间恰好开始了新一轮，丢弃它的写入是安全的，新一轮会重新刷到该厂商。
+    private func commit(_ quota: ProviderQuota, for type: ProviderType, gen: UInt64) {
+        guard gen == refreshGeneration else {
+            Log.refresh.debug("丢弃过期轮次结果 provider=\(type.rawValue, privacy: .public) gen=\(gen) current=\(self.refreshGeneration)")
+            return
+        }
+        quotas[type] = quota
+    }
+
+    private func commitCustom(_ quota: CustomProviderQuota, for id: UUID, gen: UInt64) {
+        guard gen == refreshGeneration else {
+            Log.refresh.debug("丢弃过期轮次结果 provider=custom gen=\(gen) current=\(self.refreshGeneration)")
+            return
+        }
+        customQuotas[id] = quota
+    }
+
     /// 定位一个厂商的额度条目，供超时收尾时把卡片从"加载中"拨回错误态
     private enum ProviderKey {
         case builtin(ProviderType)
@@ -362,13 +382,14 @@ public final class RefreshManager: ObservableObject {
     }
 
     public func refreshClaude() async {
+        let gen = refreshGeneration
         var quota = quotas[.claudeCode] ?? ProviderQuota(provider: .claudeCode)
         quota.isLoading = true
         quota.errorMessage = nil
-        quotas[.claudeCode] = quota
+        commit(quota, for: .claudeCode, gen: gen)
 
         let hasClaudeToken = !settings.claudeToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        let localClaude = ClaudeService.shared.readLocalClaudeJson()
+        let localClaude = await ClaudeService.shared.readLocalClaudeJson()
         let hasAnthropicKey = !settings.anthropicApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
 
         var foundAuth = false
@@ -444,14 +465,15 @@ public final class RefreshManager: ObservableObject {
             quota.lastUpdated = Date()
         }
         quota.isLoading = false
-        quotas[.claudeCode] = quota
+        commit(quota, for: .claudeCode, gen: gen)
     }
 
     public func refreshGemini() async {
+        let gen = refreshGeneration
         var quota = quotas[.gemini] ?? ProviderQuota(provider: .gemini)
         quota.isLoading = true
         quota.errorMessage = nil
-        quotas[.gemini] = quota
+        commit(quota, for: .gemini, gen: gen)
 
         let hasApiKey = !settings.geminiApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
 
@@ -468,7 +490,7 @@ public final class RefreshManager: ObservableObject {
                 quota.accountInfo = res.account
                 quota.lastUpdated = Date()
                 quota.isLoading = false
-                quotas[.gemini] = quota
+                commit(quota, for: .gemini, gen: gen)
                 return
             } catch {
                 // If API Key failed, only fall back to OAuth/local if available
@@ -479,7 +501,7 @@ public final class RefreshManager: ObservableObject {
                     quota.errorMessage = error.localizedDescription
                     Log.provider.error("provider=gemini failed: \(error.localizedDescription)")
                     quota.isLoading = false
-                    quotas[.gemini] = quota
+                    commit(quota, for: .gemini, gen: gen)
                     return
                 }
             }
@@ -500,20 +522,21 @@ public final class RefreshManager: ObservableObject {
         }
 
         quota.isLoading = false
-        quotas[.gemini] = quota
+        commit(quota, for: .gemini, gen: gen)
     }
 
     public func refreshGLM() async {
+        let gen = refreshGeneration
         var quota = quotas[.glm] ?? ProviderQuota(provider: .glm)
         quota.isLoading = true
         quota.errorMessage = nil
-        quotas[.glm] = quota
+        commit(quota, for: .glm, gen: gen)
 
         guard !settings.glmApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             quota.isAuthorized = false
             quota.errorMessage = I18n(.errMissingGLMKey)
             quota.isLoading = false
-            quotas[.glm] = quota
+            commit(quota, for: .glm, gen: gen)
             return
         }
 
@@ -533,14 +556,15 @@ public final class RefreshManager: ObservableObject {
         }
 
         quota.isLoading = false
-        quotas[.glm] = quota
+        commit(quota, for: .glm, gen: gen)
     }
 
     public func refreshAliyun() async {
+        let gen = refreshGeneration
         var quota = quotas[.aliyunBailian] ?? ProviderQuota(provider: .aliyunBailian)
         quota.isLoading = true
         quota.errorMessage = nil
-        quotas[.aliyunBailian] = quota
+        commit(quota, for: .aliyunBailian, gen: gen)
 
         do {
             // 钥匙串必须在后台线程读。同步的 SecItemCopyMatching 一旦在 MainActor 上
@@ -549,9 +573,15 @@ public final class RefreshManager: ObservableObject {
             let prefetched = await KeychainSecretStore.shared.prefetch(
                 [.aliyunAccessKeySecret, .aliyunConsoleAccessToken]
             )
+            // ~/.bailian/config.json 同样在后台读；传空配置而非 nil，避免 resolveCredentials
+            // 在主线程上再同步读一次盘
+            let cliConfig = settings.aliyunReuseCLIConfig
+                ? (await BailianCLIConfig.loadFromDiskAsync() ?? BailianCLIConfig())
+                : BailianCLIConfig()
             let credentials = AliyunBailianService.resolveCredentials(
                 settings: settings,
-                secretStore: prefetched
+                secretStore: prefetched,
+                cliConfig: cliConfig
             )
             let res = try await AliyunBailianService.shared.fetchQuota(credentials: credentials)
 
@@ -581,7 +611,7 @@ public final class RefreshManager: ObservableObject {
                     warningThreshold: settings.aliyunBalanceAlertThreshold,
                     criticalThreshold: settings.aliyunBalanceAlertThreshold / 2
                 )
-                quota.balanceWindow = processBalance(
+                quota.balanceWindow = await processBalance(
                     providerKey: "aliyun",
                     displayName: ProviderType.aliyunBailian.displayName,
                     window: window,
@@ -597,11 +627,11 @@ public final class RefreshManager: ObservableObject {
         }
 
         quota.isLoading = false
-        quotas[.aliyunBailian] = quota
+        commit(quota, for: .aliyunBailian, gen: gen)
     }
 
-    public func importClaudeFromLocal() -> Bool {
-        if let local = ClaudeService.shared.readLocalClaudeJson() {
+    public func importClaudeFromLocal() async -> Bool {
+        if let local = await ClaudeService.shared.readLocalClaudeJson() {
             var quota = quotas[.claudeCode] ?? ProviderQuota(provider: .claudeCode)
             quota.isAuthorized = true
             quota.accountInfo = local.account
@@ -628,16 +658,17 @@ public final class RefreshManager: ObservableObject {
     }
 
     public func refreshOpenAI() async {
+        let gen = refreshGeneration
         var quota = quotas[.openAI] ?? ProviderQuota(provider: .openAI)
         quota.isLoading = true
         quota.errorMessage = nil
-        quotas[.openAI] = quota
+        commit(quota, for: .openAI, gen: gen)
 
         guard !settings.openAIApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             quota.isAuthorized = false
             quota.errorMessage = I18n(.errMissingOpenAIKey)
             quota.isLoading = false
-            quotas[.openAI] = quota
+            commit(quota, for: .openAI, gen: gen)
             return
         }
 
@@ -659,20 +690,21 @@ public final class RefreshManager: ObservableObject {
         }
 
         quota.isLoading = false
-        quotas[.openAI] = quota
+        commit(quota, for: .openAI, gen: gen)
     }
 
     public func refreshDeepSeek() async {
+        let gen = refreshGeneration
         var quota = quotas[.deepseek] ?? ProviderQuota(provider: .deepseek)
         quota.isLoading = true
         quota.errorMessage = nil
-        quotas[.deepseek] = quota
+        commit(quota, for: .deepseek, gen: gen)
 
         guard !settings.deepseekApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             quota.isAuthorized = false
             quota.errorMessage = I18n(.errMissingDeepSeekKey)
             quota.isLoading = false
-            quotas[.deepseek] = quota
+            commit(quota, for: .deepseek, gen: gen)
             return
         }
 
@@ -689,7 +721,7 @@ public final class RefreshManager: ObservableObject {
             quota.isAuthorized = true
             quota.lastUpdated = Date()
 
-            quota.weeklyWindow = processBalance(
+            quota.weeklyWindow = await processBalance(
                 providerKey: "deepseek",
                 displayName: ProviderType.deepseek.displayName,
                 window: quota.weeklyWindow,
@@ -702,20 +734,21 @@ public final class RefreshManager: ObservableObject {
         }
 
         quota.isLoading = false
-        quotas[.deepseek] = quota
+        commit(quota, for: .deepseek, gen: gen)
     }
 
     public func refreshOpenRouter() async {
+        let gen = refreshGeneration
         var quota = quotas[.openRouter] ?? ProviderQuota(provider: .openRouter)
         quota.isLoading = true
         quota.errorMessage = nil
-        quotas[.openRouter] = quota
+        commit(quota, for: .openRouter, gen: gen)
 
         guard !settings.openRouterApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             quota.isAuthorized = false
             quota.errorMessage = I18n(.errMissingOpenRouterKey)
             quota.isLoading = false
-            quotas[.openRouter] = quota
+            commit(quota, for: .openRouter, gen: gen)
             return
         }
 
@@ -731,7 +764,7 @@ public final class RefreshManager: ObservableObject {
             quota.isAuthorized = true
             quota.lastUpdated = Date()
 
-            quota.fiveHourWindow = processBalance(
+            quota.fiveHourWindow = await processBalance(
                 providerKey: "openrouter",
                 displayName: ProviderType.openRouter.displayName,
                 window: quota.fiveHourWindow,
@@ -744,20 +777,21 @@ public final class RefreshManager: ObservableObject {
         }
 
         quota.isLoading = false
-        quotas[.openRouter] = quota
+        commit(quota, for: .openRouter, gen: gen)
     }
 
     public func refreshVolcengine() async {
+        let gen = refreshGeneration
         var quota = quotas[.volcengine] ?? ProviderQuota(provider: .volcengine)
         quota.isLoading = true
         quota.errorMessage = nil
-        quotas[.volcengine] = quota
+        commit(quota, for: .volcengine, gen: gen)
 
         guard !settings.volcengineApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             quota.isAuthorized = false
             quota.errorMessage = I18n(.errMissingVolcengineKey)
             quota.isLoading = false
-            quotas[.volcengine] = quota
+            commit(quota, for: .volcengine, gen: gen)
             return
         }
 
@@ -779,20 +813,21 @@ public final class RefreshManager: ObservableObject {
         }
 
         quota.isLoading = false
-        quotas[.volcengine] = quota
+        commit(quota, for: .volcengine, gen: gen)
     }
 
     public func refreshKimi() async {
+        let gen = refreshGeneration
         var quota = quotas[.kimi] ?? ProviderQuota(provider: .kimi)
         quota.isLoading = true
         quota.errorMessage = nil
-        quotas[.kimi] = quota
+        commit(quota, for: .kimi, gen: gen)
 
         guard !settings.kimiApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             quota.isAuthorized = false
             quota.errorMessage = I18n(.errMissingKimiKey)
             quota.isLoading = false
-            quotas[.kimi] = quota
+            commit(quota, for: .kimi, gen: gen)
             return
         }
 
@@ -809,7 +844,7 @@ public final class RefreshManager: ObservableObject {
             quota.isAuthorized = true
             quota.lastUpdated = Date()
 
-            quota.weeklyWindow = processBalance(
+            quota.weeklyWindow = await processBalance(
                 providerKey: "kimi",
                 displayName: ProviderType.kimi.displayName,
                 window: quota.weeklyWindow,
@@ -822,10 +857,11 @@ public final class RefreshManager: ObservableObject {
         }
 
         quota.isLoading = false
-        quotas[.kimi] = quota
+        commit(quota, for: .kimi, gen: gen)
     }
 
     public func refreshCustomProvider(config: CustomProviderConfig) async {
+        let gen = refreshGeneration
         var q = customQuotas[config.id] ?? CustomProviderQuota(
             configId: config.id,
             name: config.name,
@@ -834,13 +870,13 @@ public final class RefreshManager: ObservableObject {
         )
         q.isLoading = true
         q.errorMessage = nil
-        customQuotas[config.id] = q
+        commitCustom(q, for: config.id, gen: gen)
 
         guard !config.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             q.isAuthorized = false
             q.errorMessage = I18n(.errMissingCustomKey)
             q.isLoading = false
-            customQuotas[config.id] = q
+            commitCustom(q, for: config.id, gen: gen)
             return
         }
 
@@ -858,7 +894,7 @@ public final class RefreshManager: ObservableObject {
                 ? q.primaryWindow
                 : (q.secondaryWindow?.isBalance == true ? q.secondaryWindow : nil)
 
-            if let updated = processBalance(
+            if let updated = await processBalance(
                 providerKey: "custom:\(config.id.uuidString)",
                 displayName: config.name,
                 window: balanceWin,
@@ -877,7 +913,7 @@ public final class RefreshManager: ObservableObject {
         }
 
         q.isLoading = false
-        customQuotas[config.id] = q
+        commitCustom(q, for: config.id, gen: gen)
     }
 
     /// 余额窗口刷新成功后的统一处理：
@@ -885,7 +921,7 @@ public final class RefreshManager: ObservableObject {
     /// 3) 低余额时发送一次系统通知，恢复到阈值 1.2 倍以上后重新武装。
     /// TokenWindow 是值类型，返回修改后的窗口由调用方回写到 quota。
     @discardableResult
-    private func processBalance(providerKey: String, displayName: String, window: TokenWindow?, threshold: Double) -> TokenWindow? {
+    private func processBalance(providerKey: String, displayName: String, window: TokenWindow?, threshold: Double) async -> TokenWindow? {
         guard var window = window, window.isBalance, let amount = window.balanceAmount else {
             return window
         }
@@ -895,8 +931,8 @@ public final class RefreshManager: ObservableObject {
         }
         lastBalanceValues[providerKey] = amount
 
-        BalanceHistoryStore.shared.record(providerKey: providerKey, value: amount)
-        window.forecastDays = BalanceHistoryStore.shared.forecastDays(providerKey: providerKey, currentAmount: amount)
+        // 历史落盘与预测在 BalanceHistoryStore actor 上完成，不占主线程
+        window.forecastDays = await BalanceHistoryStore.shared.recordAndForecast(providerKey: providerKey, value: amount)
 
         guard threshold > 0 else { return window }
 
@@ -964,7 +1000,7 @@ public final class RefreshManager: ObservableObject {
         customQuotas.removeValue(forKey: id)
         lastBalanceValues.removeValue(forKey: "custom:\(id.uuidString)")
         balanceAlertedKeys.remove("custom:\(id.uuidString)")
-        BalanceHistoryStore.shared.clear(providerKey: "custom:\(id.uuidString)")
+        Task { await BalanceHistoryStore.shared.clear(providerKey: "custom:\(id.uuidString)") }
         saveSettings()
     }
 }

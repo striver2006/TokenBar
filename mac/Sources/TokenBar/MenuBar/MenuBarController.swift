@@ -58,12 +58,28 @@ public final class MenuBarController: NSObject {
     private var currentAnchorRect: NSRect?
     private var lastShowUsedFallback = false
     private var relayoutWorkItem: DispatchWorkItem?
+    /// 鼠标移动监听句柄，teardown 时必须移除；以前直接丢弃返回值，监听器随实例泄漏
+    private var mouseMonitor: Any?
+    /// 设置窗口的打开请求（切 tab / 重新读钥匙串），供复用的 SettingsView 观察
+    private let settingsRequest = SettingsWindowRequest()
 
-    public override init() {
+    /// 悬停展开 / 移出关闭的延迟，PRD 3.1
+    static let hoverOpenDelay: TimeInterval = 0.15
+    static let hoverCloseDelay: TimeInterval = 0.35
+
+    private override init() {
         super.init()
     }
 
+    deinit {
+        if let monitor = mouseMonitor {
+            NSEvent.removeMonitor(monitor)
+        }
+    }
+
     public func setup() {
+        // 幂等：重复 setup 会重建状态项、再注册一份鼠标监听与通知订阅
+        guard statusItem == nil else { return }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.autosaveName = "TokenBarStatusItem"
 
@@ -132,7 +148,7 @@ public final class MenuBarController: NSObject {
         updateStatusItemTitle()
 
         // Mouse moved monitor to maintain hover when cursor is in popover or button
-        NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved]) { [weak self] event in
+        mouseMonitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved]) { [weak self] event in
             Task { @MainActor in
                 self?.handleMouseMoved(event)
             }
@@ -152,13 +168,11 @@ public final class MenuBarController: NSObject {
         }
 
         // Left Click toggle
-        hoverTimer?.invalidate()
-        hoverTimer = nil
+        cancelHoverTimer()
 
         if popover.isShown {
             if isPinnedByClick {
                 closePopover()
-                isPinnedByClick = false
             } else {
                 // If it was open by hover, click now pins it
                 isPinnedByClick = true
@@ -169,48 +183,68 @@ public final class MenuBarController: NSObject {
         }
     }
 
+    // MARK: - 悬停状态机
+
+    /// 悬停定时器只有一个，展开与关闭共用；注册到 .common mode，
+    /// 否则右键菜单 / 拖拽等 .eventTracking 期间会被暂停（与 RefreshManager 的定时器同理）。
+    private func scheduleHover(after delay: TimeInterval, _ action: @escaping @MainActor () -> Void) {
+        cancelHoverTimer()
+        let timer = Timer(timeInterval: delay, repeats: false) { _ in
+            Task { @MainActor in action() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        hoverTimer = timer
+    }
+
+    private func cancelHoverTimer() {
+        hoverTimer?.invalidate()
+        hoverTimer = nil
+    }
+
+    /// 鼠标已离开图标与浮窗，若未固定则延迟关闭
+    private func scheduleHoverClose() {
+        guard popover.isShown && !isPinnedByClick else { return }
+        scheduleHover(after: Self.hoverCloseDelay) { [weak self] in
+            guard let self, !self.isPinnedByClick else { return }
+            self.closePopover()
+        }
+    }
+
     public func handleHoverEntered() {
         guard RefreshManager.shared.settings.enableHover else { return }
-        guard !popover.isShown else { return }
-
-        hoverTimer?.invalidate()
+        if popover.isShown {
+            // 从浮窗回到图标：取消待执行的关闭
+            cancelHoverTimer()
+            return
+        }
         // Debounce before opening on hover
-        hoverTimer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: false) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                guard let self = self, !self.popover.isShown else { return }
-                self.isPinnedByClick = false
-                self.showPopover()
-            }
+        scheduleHover(after: Self.hoverOpenDelay) { [weak self] in
+            guard let self, !self.popover.isShown else { return }
+            self.isPinnedByClick = false
+            self.showPopover()
         }
     }
 
     public func handleHoverExited() {
-        hoverTimer?.invalidate()
-        hoverTimer = nil
-
-        // If not pinned by click, close after leaving with a delay
-        if popover.isShown && !isPinnedByClick {
-            hoverTimer = Timer.scheduledTimer(withTimeInterval: 0.35, repeats: false) { [weak self] _ in
-                Task { @MainActor [weak self] in
-                    guard let self = self, !self.isPinnedByClick else { return }
-                    self.closePopover()
-                }
-            }
-        }
+        cancelHoverTimer()
+        scheduleHoverClose()
     }
 
+    /// 鼠标在本进程窗口内移动时的命中判断。
+    /// 路径「图标 → 浮窗 → 桌面」：离开图标时安排了关闭，进入浮窗时取消它；再从浮窗移出到
+    /// 桌面后，NSTrackingArea 只覆盖状态栏按钮、不会再报 exited，所以必须在这里重新安排关闭，
+    /// 否则浮窗会一直挂着（以前正是缺了这个 else 分支）。
     private func handleMouseMoved(_ event: NSEvent) {
         guard popover.isShown && !isPinnedByClick else { return }
 
         let mouseLoc = NSEvent.mouseLocation
-        if let anchorRect = currentAnchorRect ?? cachedButtonScreenRect(), anchorRect.contains(mouseLoc) {
-            hoverTimer?.invalidate()
-            return
-        }
+        let inAnchor = (currentAnchorRect ?? cachedButtonScreenRect())?.contains(mouseLoc) ?? false
+        let inPopover = popover.contentViewController?.view.window?.frame.contains(mouseLoc) ?? false
 
-        if let popWindow = popover.contentViewController?.view.window, popWindow.frame.contains(mouseLoc) {
-            hoverTimer?.invalidate()
-            return
+        if inAnchor || inPopover {
+            cancelHoverTimer()
+        } else if hoverTimer == nil {
+            scheduleHoverClose()
         }
     }
 
@@ -455,8 +489,10 @@ public final class MenuBarController: NSObject {
         closePopover()
 
         if let existing = settingsWindow {
+            // 复用 hosting view：以前每次都重建整棵 SettingsView，用户未保存的输入被丢弃、
+            // 滚动位置重置。切 tab 与重新读钥匙串改为通过 settingsRequest 通知视图。
             existing.title = "TokenBar - \(tab.title)"
-            existing.contentView = NSHostingView(rootView: SettingsView(refreshManager: .shared, initialTab: tab))
+            settingsRequest.open(tab: tab)
             existing.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return
@@ -470,7 +506,8 @@ public final class MenuBarController: NSObject {
         )
         window.center()
         window.title = "TokenBar - \(tab.title)"
-        window.contentView = NSHostingView(rootView: SettingsView(refreshManager: .shared, initialTab: tab))
+        settingsRequest.tab = tab
+        window.contentView = NSHostingView(rootView: SettingsView(refreshManager: .shared, initialTab: tab, request: settingsRequest))
         window.isReleasedWhenClosed = false
 
         self.settingsWindow = window
@@ -479,10 +516,28 @@ public final class MenuBarController: NSObject {
     }
 }
 
+/// 设置窗口复用时，向已存在的 SettingsView 传递「切到哪个 tab」与「重新加载」请求
+@MainActor
+public final class SettingsWindowRequest: ObservableObject {
+    @Published public var tab: SettingsTab = .openAI
+    /// 每次打开窗口递增；SettingsView 用 .task(id:) 监听它重跑钥匙串读取
+    @Published public var openCount: Int = 0
+
+    public init() {}
+
+    func open(tab: SettingsTab) {
+        self.tab = tab
+        openCount += 1
+    }
+}
+
 // MARK: - NSPopoverDelegate
 
 extension MenuBarController: NSPopoverDelegate {
     public func popoverDidClose(_ notification: Notification) {
+        // .transient 点击外部关闭也会走到这里，状态必须在唯一出口复位
+        isPinnedByClick = false
+        cancelHoverTimer()
         // 弹窗是辅助面板的子窗口，只能在它关闭之后再回收面板
         anchorPanel?.orderOut(nil)
         currentAnchorRect = nil

@@ -51,12 +51,14 @@ public func withTimeout(
     return await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
         let gate = ResumeOnce<Bool>(cont)
 
-        Task {
-            await work.value
-            gate.resume(true)
-        }
-        Task {
-            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+        // 哨兵必须在正常完成时被取消：否则每轮每个厂商都会留下一个睡满 25~35 秒的 Task，
+        // 1 分钟刷新间隔下常驻十几个悬挂任务。Task.sleep 响应取消，cancel 后立即退出。
+        let sleeper = Task {
+            do {
+                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            } catch {
+                return // 被取消：操作已按时完成
+            }
             if !label.isEmpty {
                 let fired = Double(DispatchTime.now().uptimeNanoseconds - scheduled.uptimeNanoseconds) / 1_000_000
                 Log.provider.debug("provider=\(label, privacy: .public) 超时哨兵在 \(fired, format: .fixed(precision: 0))ms 触发")
@@ -64,6 +66,11 @@ public func withTimeout(
             guard !work.isCancelled else { return }
             work.cancel()
             gate.resume(false)
+        }
+        Task {
+            await work.value
+            sleeper.cancel()
+            gate.resume(true)
         }
     }
 }

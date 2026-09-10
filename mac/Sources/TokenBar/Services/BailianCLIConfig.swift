@@ -59,6 +59,13 @@ public struct BailianCLIConfig: Equatable {
         return parse(json: json)
     }
 
+    /// 后台线程读盘版本，供 MainActor 上的刷新链路使用（同步版会在主线程做文件 IO）。
+    public static func loadFromDiskAsync(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) async -> BailianCLIConfig? {
+        await Task.detached(priority: .userInitiated) { loadFromDisk(environment: environment) }.value
+    }
+
     /// 纯解析，不碰文件系统，便于单测。
     ///
     /// CLI 支持多 profile：顶层 `active_config` 指向某个 profile 名，该名对应的

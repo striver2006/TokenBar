@@ -207,10 +207,13 @@ public struct KeychainSecretStore: SecretStoring, Sendable {
         let store = self
         return await withCheckedContinuation { (cont: CheckedContinuation<T, Never>) in
             let gate = ResumeOnce<T>(cont)
-            Self.queue.async { gate.resume(work(store)) }
-            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
-                gate.resume(timedOutValue)
+            // 超时用可取消的 DispatchWorkItem：正常完成后立即撤掉，不留一个 5~10 秒后才醒的闭包
+            let timeoutItem = DispatchWorkItem { gate.resume(timedOutValue) }
+            Self.queue.async {
+                gate.resume(work(store))
+                timeoutItem.cancel()
             }
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: timeoutItem)
         }
     }
 
