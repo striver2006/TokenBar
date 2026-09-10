@@ -3,12 +3,11 @@ import Security
 
 /// 高敏凭证的存取抽象。
 ///
-/// 目前只托管阿里云 AccessKey Secret 与控制台 access_token —— 其余厂商的 API Key
-/// 维持原有的 AppSettings 明文存储不变，避免这次改动扩散成全局重构。
-///
-/// AccessKey Secret 是**阿里云账号级长期凭证**，落到 `~/Library/Preferences/*.plist`
-/// 里等于任何以该用户身份运行的进程都能明文读走，风险等级与普通 API Key 不是一档，
-/// 所以单独走系统钥匙串。
+/// 托管**全部**长期凭证：各厂商 API Key、Claude / Gemini 的 OAuth token、控制台 Cookie、
+/// 自定义厂商的 Key 与 Cookie，以及阿里云 AccessKey Secret / 控制台 access_token。
+/// 键目录见 `AppSecrets`。以前只有阿里云两项进钥匙串，其余明文躺在
+/// `~/Library/Preferences/*.plist` 里 —— 任何以该用户身份运行的进程都能读走，
+/// 与 PRD 4.2「所有密钥、Cookie、Token 保存在受保护介质」不符。
 public protocol SecretStoring {
     /// 写入成功返回 true。钥匙串不可用时返回 false，由调用方决定是否退回明文。
     @discardableResult func set(_ value: String, for key: SecretKey) -> Bool
@@ -78,10 +77,42 @@ public enum SecretSaveAction: Equatable, Sendable {
     }
 }
 
-/// 钥匙串条目的 account 名。与 Windows 端的 TargetName 后缀保持同名。
-public enum SecretKey: String, CaseIterable {
-    case aliyunAccessKeySecret
-    case aliyunConsoleAccessToken
+/// 钥匙串条目的 account 名（service 固定为 "TokenBar"）。与 Windows 端的 TargetName 后缀保持同名。
+///
+/// struct 而非 enum：自定义厂商的键带 UUID，枚举表达不了。内置键以静态成员提供，
+/// 调用处写法（`.aliyunAccessKeySecret`）与以前一致。
+public struct SecretKey: Hashable, Sendable, CustomStringConvertible {
+    public let account: String
+
+    public init(account: String) { self.account = account }
+
+    public var description: String { account }
+
+    public static let aliyunAccessKeySecret = SecretKey(account: "aliyunAccessKeySecret")
+    public static let aliyunConsoleAccessToken = SecretKey(account: "aliyunConsoleAccessToken")
+
+    public static let openAIApiKey = SecretKey(account: "openAIApiKey")
+    public static let anthropicApiKey = SecretKey(account: "anthropicApiKey")
+    public static let claudeToken = SecretKey(account: "claudeToken")
+    public static let geminiApiKey = SecretKey(account: "geminiApiKey")
+    public static let geminiToken = SecretKey(account: "geminiToken")
+    public static let deepseekApiKey = SecretKey(account: "deepseekApiKey")
+    public static let volcengineApiKey = SecretKey(account: "volcengineApiKey")
+    public static let kimiApiKey = SecretKey(account: "kimiApiKey")
+    public static let openRouterApiKey = SecretKey(account: "openRouterApiKey")
+    public static let glmApiKey = SecretKey(account: "glmApiKey")
+    public static let aliyunApiKey = SecretKey(account: "aliyunApiKey")
+    public static let aliyunCookie = SecretKey(account: "aliyunCookie")
+
+    /// 自定义厂商的字段：`custom.<uuid>.apiKey` / `custom.<uuid>.consoleCookie`
+    public static func custom(_ id: UUID, _ field: CustomSecretField) -> SecretKey {
+        SecretKey(account: "custom.\(id.uuidString).\(field.rawValue)")
+    }
+
+    public enum CustomSecretField: String, CaseIterable, Sendable {
+        case apiKey
+        case consoleCookie
+    }
 }
 
 /// 基于 macOS 钥匙串（Security.framework）的实现。
@@ -106,7 +137,7 @@ public struct KeychainSecretStore: SecretStoring, Sendable {
         [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: key.rawValue
+            kSecAttrAccount as String: key.account
         ]
     }
 
@@ -148,7 +179,7 @@ public struct KeychainSecretStore: SecretStoring, Sendable {
                   let value = String(data: data, encoding: .utf8) else {
                 // 条目在、内容取不出来。归到「读不到」而不是「没有」——
                 // 宁可让调用方保守放弃，也不能诱导它去删一个存在的条目。
-                Log.lifecycle.error("keychain lookup 解码失败 account=\(key.rawValue, privacy: .public)")
+                Log.lifecycle.error("keychain lookup 解码失败 account=\(key.account, privacy: .public)")
                 return .unavailable
             }
             return value.isEmpty ? .absent : .found(value)
@@ -158,7 +189,7 @@ public struct KeychainSecretStore: SecretStoring, Sendable {
             // errSecAuthFailed / errSecInteractionNotAllowed / errSecUserCanceled /
             // errSecNotAvailable / errSecMissingEntitlement …… 一律「读不到」。
             Log.lifecycle.error(
-                "keychain lookup 失败 account=\(key.rawValue, privacy: .public) status=\(status, privacy: .public)")
+                "keychain lookup 失败 account=\(key.account, privacy: .public) status=\(status, privacy: .public)")
             return .unavailable
         }
     }
@@ -265,6 +296,19 @@ public struct KeychainSecretStore: SecretStoring, Sendable {
         let store = InMemorySecretStore()
         for (key, value) in values { store.set(value, for: key) }
         return store
+    }
+
+    /// 一次后台读取一批 secret，逐键保留三态。超时时**全部**记为 `.unavailable`，
+    /// 绝不把「没读到」伪装成「没有」—— 启动时的凭证加载 / 迁移靠它区分
+    /// 「钥匙串里确实没有，可以把旧明文迁进去」与「读不到，什么都别动」。
+    public func lookupAll(_ keys: [SecretKey], timeout: TimeInterval = 8) async -> [SecretKey: SecretLookup] {
+        guard !keys.isEmpty else { return [:] }
+        let unavailable = Dictionary(uniqueKeysWithValues: keys.map { ($0, SecretLookup.unavailable) })
+        return await runOnKeychainQueue(timeout: timeout, timedOutValue: unavailable) { store in
+            var out: [SecretKey: SecretLookup] = [:]
+            for key in keys { out[key] = store.lookup(key) }
+            return out
+        }
     }
 
     /// 后台写入，调用方不必等待。**只在不关心结果时用**；需要「写失败即中止」

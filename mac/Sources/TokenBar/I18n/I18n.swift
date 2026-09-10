@@ -223,6 +223,8 @@ public enum I18nKey: String {
     case alertAliyunSecretKeptUnreadable
     case hintAliyunSecretLoading
     case warnAliyunSecretUnreadable
+    case warnSecretStoreUnavailable
+    case warnSecretStoreWriteFailed
     case btnRetryReadKeychain
     // 方式二 / 方式三 的降级标题
     case aliyunMethodCLITitle
@@ -721,6 +723,10 @@ public final class LocalizationManager: ObservableObject {
             return isZh ? "读取不到系统钥匙串，已保留原有的 AccessKey Secret 不做改动（其余设置已保存）。若确实要清除 Secret，请先让钥匙串恢复可读再操作。" : "The system keychain could not be read, so the stored AccessKey Secret was left untouched. Your other settings were saved. To actually clear the Secret, restore keychain access first."
         case .hintAliyunSecretLoading:
             return isZh ? "正在从系统钥匙串读取…" : "Reading from the system keychain..."
+        case .warnSecretStoreUnavailable:
+            return isZh ? "启动时读取不到系统钥匙串，凭证暂以旧配置运行；在钥匙串恢复可读之前不会清除或迁移任何凭证。请在「钥匙串访问」中允许 TokenBar 后重启。" : "The system keychain could not be read at launch, so credentials are running from the previous configuration. Nothing will be cleared or migrated until the keychain is readable again. Allow TokenBar in Keychain Access and relaunch."
+        case .warnSecretStoreWriteFailed:
+            return isZh ? "无法把凭证写入系统钥匙串。本次输入仅保存在内存中，重启后会丢失 —— 请在「钥匙串访问」中允许 TokenBar 后重新保存。" : "Could not write credentials to the system keychain. What you entered is kept in memory only and will be lost after restart - allow TokenBar in Keychain Access and save again."
         case .warnAliyunSecretUnreadable:
             return isZh ? "读取系统钥匙串失败（超时或未授权）。输入框为空并不表示钥匙串里没有 Secret，保存时不会删除已存的 Secret。请在「钥匙串访问」中允许 TokenBar 后重试读取。" : "Could not read the system keychain (timed out or not authorized). An empty field here does not mean the keychain is empty, and saving will not delete the stored Secret. Allow TokenBar in Keychain Access, then retry."
         case .btnRetryReadKeychain:

@@ -34,6 +34,15 @@ public final class RefreshManager: ObservableObject {
     @Published public var lastAttemptDate: Date? = nil
     /// 最近一轮的结果
     @Published public var lastRoundOutcome: RefreshRoundOutcome = .none
+    /// 凭证写入 / 删除钥匙串失败时的提示（设置页横幅）；nil 表示一切正常
+    @Published public var secretStoreError: String? = nil
+
+    /// 上次与钥匙串对齐后的凭证快照：保存时据此算出哪些条目要写、哪些要删
+    private var persistedSecrets: [SecretKey: String] = [:]
+    /// 启动加载时读不到的键：保存时对它们的「空输入」只保留不删除（三态语义，见 SecretStore）
+    private var unreadableSecretKeys: Set<SecretKey> = []
+    /// 启动时的钥匙串加载是否已完成；未完成前 saveSettings 不会碰钥匙串
+    private var secretsLoaded = false
 
     private var refreshTimer: Timer?
     /// 当前定时器生效的间隔，用于判断设置变更是否真的需要重建定时器
@@ -85,15 +94,133 @@ public final class RefreshManager: ObservableObject {
         startPeriodicTimer()
 
         Task { @MainActor [weak self] in
+            // 凭证必须先于首刷从钥匙串读进内存，否则首轮全部厂商都会被判成未配置
+            await self?.loadSecretsFromKeychain()
             await self?.setupInitialData()
+        }
+    }
+
+    // MARK: - 凭证与钥匙串
+
+    /// 启动时把全部凭证从钥匙串读进 `settings`，并把 plist 里的旧明文一次性迁进钥匙串。
+    ///
+    /// 三态处理（`AppSecrets.loadAction`）：
+    /// - found：以钥匙串为准；
+    /// - absent + 旧明文非空：迁移（写入钥匙串）；
+    /// - unavailable：保留内存里的旧明文，什么都不写不删，`secretsInKeychain` 保持 false，
+    ///   这样接下来任何一次 saveSettings 仍会把明文写回 plist —— 在安全存储可用之前
+    ///   绝不丢用户凭证。全部键都可信且迁移都成功后才置 true 并重写 plist 把明文清掉。
+    public func loadSecretsFromKeychain() async {
+        let keys = AppSecrets.keys(for: settings)
+        let lookups = await KeychainSecretStore.shared.lookupAll(keys)
+        let legacy = AppSecrets.extract(from: settings)
+
+        var loaded: [SecretKey: String] = [:]
+        var toMigrate: [SecretKey: String] = [:]
+        var unreadable: Set<SecretKey> = []
+        for key in keys {
+            switch AppSecrets.loadAction(lookup: lookups[key] ?? .unavailable, legacy: legacy[key] ?? "") {
+            case .useStored(let v): loaded[key] = v
+            case .migrate(let v): toMigrate[key] = v
+            case .none: break
+            case .keepLegacy: unreadable.insert(key)
+            }
+        }
+
+        var migrationFailed = false
+        for (key, value) in toMigrate {
+            if await KeychainSecretStore.shared.setAsync(value, for: key) {
+                loaded[key] = value
+            } else {
+                migrationFailed = true
+                Log.lifecycle.error("凭证迁移写入钥匙串失败 account=\(key.account, privacy: .public)")
+            }
+        }
+
+        AppSecrets.apply(loaded, to: &settings)
+        persistedSecrets = loaded
+        unreadableSecretKeys = unreadable
+        secretsLoaded = true
+
+        let allTrustworthy = unreadable.isEmpty && !migrationFailed
+        if allTrustworthy != settings.secretsInKeychain || !toMigrate.isEmpty {
+            settings.secretsInKeychain = allTrustworthy
+            // 迁移成功后重写一次 plist，把明文清掉；失败则保持明文落盘，下次启动重试
+            persistSettingsToDefaults()
+        }
+        Log.lifecycle.notice("凭证加载完成：loaded=\(loaded.count) migrated=\(toMigrate.count) unreadable=\(unreadable.count) secretsInKeychain=\(allTrustworthy)")
+        if !allTrustworthy {
+            secretStoreError = I18n(.warnSecretStoreUnavailable)
+        }
+    }
+
+    /// 把内存里变更过的凭证同步到钥匙串。失败时不降级明文：保留内存值、置 `secretStoreError`
+    /// 提示用户，并把 `secretsInKeychain` 打回 false 让 plist 继续兜底，避免丢凭证。
+    private func syncSecretsToKeychain() {
+        guard secretsLoaded else { return }
+        let current = AppSecrets.extract(from: settings)
+        let keys = Set(current.keys).union(persistedSecrets.keys)
+
+        var writes: [SecretKey: String] = [:]
+        var deletes: Set<SecretKey> = []
+        for key in keys {
+            switch AppSecrets.saveAction(
+                current: current[key],
+                previous: persistedSecrets[key],
+                storeReadable: !unreadableSecretKeys.contains(key)
+            ) {
+            case .write(let v): writes[key] = v
+            case .delete: deletes.insert(key)
+            case .keepExisting, .unchanged: break
+            }
+        }
+        guard !writes.isEmpty || !deletes.isEmpty else { return }
+
+        Task { @MainActor in
+            var failed = false
+            for (key, value) in writes {
+                if await KeychainSecretStore.shared.setAsync(value, for: key) {
+                    persistedSecrets[key] = value
+                    unreadableSecretKeys.remove(key)
+                } else {
+                    failed = true
+                    Log.lifecycle.error("凭证写入钥匙串失败 account=\(key.account, privacy: .public)")
+                }
+            }
+            for key in deletes {
+                if await KeychainSecretStore.shared.deleteAsync(key) {
+                    persistedSecrets.removeValue(forKey: key)
+                } else {
+                    failed = true
+                    Log.lifecycle.error("凭证从钥匙串删除失败 account=\(key.account, privacy: .public)")
+                }
+            }
+            if failed {
+                secretStoreError = I18n(.warnSecretStoreWriteFailed)
+                if settings.secretsInKeychain {
+                    settings.secretsInKeychain = false
+                    persistSettingsToDefaults()
+                }
+            } else if secretStoreError != nil, unreadableSecretKeys.isEmpty {
+                secretStoreError = nil
+                if !settings.secretsInKeychain {
+                    settings.secretsInKeychain = true
+                    persistSettingsToDefaults()
+                }
+            }
+        }
+    }
+
+    private func persistSettingsToDefaults() {
+        if let encoded = try? JSONEncoder().encode(settings) {
+            UserDefaults.standard.set(encoded, forKey: userDefaultsKey)
         }
     }
 
     public func saveSettings() {
         LocalizationManager.shared.setLanguage(settings.appLanguage)
-        if let encoded = try? JSONEncoder().encode(settings) {
-            UserDefaults.standard.set(encoded, forKey: userDefaultsKey)
-        }
+        persistSettingsToDefaults()
+        syncSecretsToKeychain()
         // 只有间隔真的变了才重建定时器：设置页里切厂商开关、改语言等都会走到这里，
         // 每次都 invalidate 会把计时相位打回零，间隔较长时可能永远刷不到。
         if activeIntervalMinutes != settings.refreshIntervalMinutes {
@@ -997,6 +1124,7 @@ public final class RefreshManager: ObservableObject {
 
     public func removeCustomProvider(id: UUID) {
         settings.customProviders.removeAll(where: { $0.id == id })
+        // 厂商没了，它的钥匙串条目也一起清掉（saveSettings 的差异同步会看到这两个键从有变无）
         customQuotas.removeValue(forKey: id)
         lastBalanceValues.removeValue(forKey: "custom:\(id.uuidString)")
         balanceAlertedKeys.remove("custom:\(id.uuidString)")

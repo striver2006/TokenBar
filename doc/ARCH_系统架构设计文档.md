@@ -300,9 +300,18 @@ Windows 客户端采用轻量现代的 **.NET 8 WPF** 架构，利用 Windows �
 
 1. **本地存储隔离**：
    - 所有 API Key、OAuth Token 与用户设置均直接保存在用户本地电脑磁盘中，不上传至任何中心化云服务。
-   - 阿里云 AccessKey Secret 与控制台令牌属账号级长期凭证，**不落明文配置**：macOS 存入系统钥匙串
-     （Security.framework，service `TokenBar`），Windows 存入凭据管理器（`CredWriteW`，
-     TargetName `TokenBar/AliyunAccessKeySecret`）。安全存储不可用时**不降级为明文**，而是如实报错提示用户。
+   - **全部凭证不落明文配置**：各厂商 API Key、Claude / Gemini OAuth token、控制台 Cookie、自定义厂商的
+     Key 与 Cookie、阿里云 AccessKey Secret 与控制台令牌，macOS 一律存入系统钥匙串（Security.framework，
+     service `TokenBar`，account 名见 `SecretKey` / `AppSecrets`），Windows 存入凭据管理器（`CredWriteW`，
+     TargetName `TokenBar/<同名>`）。`AppSettings` 在内存里仍持有明文供刷新链路与设置页使用，
+     但 `encode(to:)` 在 `secretsInKeychain` 为 true 时不再把任何凭证写进 plist / settings.json。
+   - **迁移与三态**：启动时 `RefreshManager.loadSecretsFromKeychain` 用 `lookupAll` 逐键三态读取：
+     found → 以钥匙串为准；absent 且旧明文非空 → 迁入钥匙串；unavailable → 保留旧明文、什么都不写不删，
+     `secretsInKeychain` 保持 false 让明文继续落盘兜底。全部键可信且迁移成功后才置 true 并重写配置清掉明文。
+     保存时 `syncSecretsToKeychain` 按差异写 / 删，「输入为空且这轮没读到」只保留不删（`AppSecrets.saveAction`，
+     有单测）。安全存储不可用时**不降级为明文**，而是在设置页横幅如实报错。
+   - 网页授权窗口（`WebLoginWindowController`）使用非持久化 `WKWebsiteDataStore`，不把第三方整站登录态落进
+     App 容器；completion 只触发一次。`GeminiService` 不再写回 Antigravity 的 `~/.gemini/jetski-standalone-oauth-token`。
    - 本机 `~/.bailian/config.json`（百炼 CLI 的配置）只读复用，**绝不写回** —— CLI 用 tmp+rename
      原子替换整个文件，并发写会覆盖掉它的其他字段。
 2. **纯客户端通讯**：

@@ -628,6 +628,11 @@ public struct AppSettings: Codable {
     public var menuBarProviderKey: String
     public var menuBarMetric: MenuBarMetric
 
+    /// 凭证是否已经全部在钥匙串里。为 true 时 `encode(to:)` 不再把任何 Key / Token / Cookie
+    /// 写进 plist；为 false（首次启动、或钥匙串读不到 / 迁移失败）时照旧写明文，
+    /// 保证在安全存储可用之前**不会丢掉用户已经配好的凭证**。不参与编解码。
+    public var secretsInKeychain: Bool = false
+
     enum CodingKeys: String, CodingKey {
         case refreshIntervalMinutes
         case enableHover
@@ -863,7 +868,82 @@ public struct AppSettings: Codable {
         self.menuBarMetric = try container.decodeIfPresent(MenuBarMetric.self, forKey: .menuBarMetric) ?? .auto
     }
 
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(refreshIntervalMinutes, forKey: .refreshIntervalMinutes)
+        try c.encode(enableHover, forKey: .enableHover)
+        try c.encode(launchAtLogin, forKey: .launchAtLogin)
+        try c.encode(claudeEnabled, forKey: .claudeEnabled)
+        try c.encode(geminiEnabled, forKey: .geminiEnabled)
+        try c.encode(glmEnabled, forKey: .glmEnabled)
+        try c.encode(aliyunEnabled, forKey: .aliyunEnabled)
+        try c.encode(openAIEnabled, forKey: .openAIEnabled)
+        try c.encode(deepseekEnabled, forKey: .deepseekEnabled)
+        try c.encode(volcengineEnabled, forKey: .volcengineEnabled)
+        try c.encode(kimiEnabled, forKey: .kimiEnabled)
+        try c.encode(openRouterEnabled, forKey: .openRouterEnabled)
+
+        try c.encode(glmEndpoint, forKey: .glmEndpoint)
+        try c.encode(aliyunEndpoint, forKey: .aliyunEndpoint)
+        try c.encode(aliyunAccessKeyId, forKey: .aliyunAccessKeyId)
+        try c.encode(aliyunConsoleRegion, forKey: .aliyunConsoleRegion)
+        try c.encode(aliyunConsoleSite, forKey: .aliyunConsoleSite)
+        try c.encode(aliyunConsoleSwitchAgent, forKey: .aliyunConsoleSwitchAgent)
+        try c.encode(aliyunReuseCLIConfig, forKey: .aliyunReuseCLIConfig)
+        try c.encode(aliyunBalanceAlertThreshold, forKey: .aliyunBalanceAlertThreshold)
+        try c.encode(openAIEndpoint, forKey: .openAIEndpoint)
+        try c.encode(openAIOrgId, forKey: .openAIOrgId)
+        try c.encode(anthropicEndpoint, forKey: .anthropicEndpoint)
+        try c.encode(geminiEndpoint, forKey: .geminiEndpoint)
+        try c.encode(deepseekEndpoint, forKey: .deepseekEndpoint)
+        try c.encode(deepseekModel, forKey: .deepseekModel)
+        try c.encode(deepseekBalanceAlertThreshold, forKey: .deepseekBalanceAlertThreshold)
+        try c.encode(volcengineEndpoint, forKey: .volcengineEndpoint)
+        try c.encode(volcengineModel, forKey: .volcengineModel)
+        try c.encode(kimiEndpoint, forKey: .kimiEndpoint)
+        try c.encode(kimiModel, forKey: .kimiModel)
+        try c.encode(kimiBalanceAlertThreshold, forKey: .kimiBalanceAlertThreshold)
+        try c.encode(openRouterEndpoint, forKey: .openRouterEndpoint)
+        try c.encode(openRouterBalanceAlertThreshold, forKey: .openRouterBalanceAlertThreshold)
+        try c.encode(appLanguage, forKey: .appLanguage)
+        try c.encode(providerOrder, forKey: .providerOrder)
+        try c.encode(menuBarQuotaEnabled, forKey: .menuBarQuotaEnabled)
+        try c.encode(menuBarProviderKey, forKey: .menuBarProviderKey)
+        try c.encode(menuBarMetric, forKey: .menuBarMetric)
+
+        // 凭证字段：已进钥匙串则一律不落盘（写空串而不是省略键，便于 plist 里旧值被覆盖清掉）
+        if secretsInKeychain {
+            for field in AppSecrets.builtinFields {
+                try c.encode("", forKey: Self.codingKey(for: field.key))
+            }
+            try c.encode(customProviders.map { $0.strippingSecrets() }, forKey: .customProviders)
+        } else {
+            for field in AppSecrets.builtinFields {
+                try c.encode(field.get(self), forKey: Self.codingKey(for: field.key))
+            }
+            try c.encode(customProviders, forKey: .customProviders)
+        }
+    }
+
+    private static func codingKey(for key: SecretKey) -> CodingKeys {
+        // account 名与 CodingKeys 的 rawValue 刻意同名
+        guard let ck = CodingKeys(rawValue: key.account) else {
+            preconditionFailure("SecretKey \(key.account) 没有对应的 AppSettings 字段")
+        }
+        return ck
+    }
+
     public static let defaultSettings = AppSettings()
+}
+
+extension CustomProviderConfig {
+    /// 去掉凭证字段后的副本，供落盘用
+    public func strippingSecrets() -> CustomProviderConfig {
+        var copy = self
+        copy.apiKey = ""
+        copy.consoleCookie = ""
+        return copy
+    }
 }
 
 extension AppSettings {

@@ -321,7 +321,7 @@ public actor GeminiService {
     // MARK: - 本地凭证
 
     /// `~/.gemini` 下三个回退文件的解析结果
-    private struct LocalGeminiFiles {
+    struct LocalGeminiFiles {
         var jetskiToken: String?
         var jetskiRefreshToken: String?
         var jetskiExpiry: Date?
@@ -363,7 +363,14 @@ public actor GeminiService {
     private static func readLocalGeminiFiles() async -> LocalGeminiFiles {
         await withCheckedContinuation { (continuation: CheckedContinuation<LocalGeminiFiles, Never>) in
             DispatchQueue.global(qos: .userInitiated).async {
-                let homeDir = FileManager.default.homeDirectoryForCurrentUser
+                continuation.resume(returning: parseLocalGeminiFiles(homeDir: FileManager.default.homeDirectoryForCurrentUser))
+            }
+        }
+    }
+
+    /// 纯解析：给定 home 目录读三个文件。抽出来是为了让单测用临时目录喂 fixture，
+    /// 而不是依赖开发者机器上真实的 ~/.gemini。
+    static func parseLocalGeminiFiles(homeDir: URL) -> LocalGeminiFiles {
                 let jetskiTokenPath = homeDir.appendingPathComponent(".gemini/jetski-standalone-oauth-token")
                 let oauthCredsPath = homeDir.appendingPathComponent(".gemini/oauth_creds.json")
                 let accountsPath = homeDir.appendingPathComponent(".gemini/google_accounts.json")
@@ -396,9 +403,7 @@ public actor GeminiService {
                     }
                 }
 
-                continuation.resume(returning: result)
-            }
-        }
+                return result
     }
 
     /// Parses ISO-8601 strings (with or without fractional seconds) or epoch seconds into a Date.
@@ -465,8 +470,10 @@ public actor GeminiService {
                     cachedAccessToken = newAccessToken
                     cachedAccessTokenExpiry = Date().addingTimeInterval(max(60, expiresIn - 120))
                     lastTokenRefreshFailure = nil
-                    // Update local jetski cache if possible
-                    updateLocalAccessToken(newAccessToken)
+                    // 不再写回 ~/.gemini/jetski-standalone-oauth-token：那是 Antigravity 的文件，
+                    // 非原子写会在它并发写入时留下截断 JSON、还会把 0600 改成 umask 默认权限
+                    // （与 ARCH 5.1 对 ~/.bailian/config.json「只读不写回」是同一条规矩）。
+                    // 内存缓存 cachedAccessToken 已经覆盖了「下次刷新不用重签」的需求。
                     return newAccessToken
                 }
             } catch {
@@ -476,20 +483,6 @@ public actor GeminiService {
         lastTokenRefreshFailure = Date()
         Log.provider.error("gemini token 刷新失败：所有候选都没能换到 access token")
         return nil
-    }
-
-    private func updateLocalAccessToken(_ newToken: String) {
-        let homeDir = FileManager.default.homeDirectoryForCurrentUser
-        let jetskiTokenPath = homeDir.appendingPathComponent(".gemini/jetski-standalone-oauth-token")
-        guard FileManager.default.fileExists(atPath: jetskiTokenPath.path),
-              var dataDict = try? JSONSerialization.jsonObject(with: Data(contentsOf: jetskiTokenPath)) as? [String: Any],
-              var tokDict = dataDict["token"] as? [String: Any] else { return }
-
-        tokDict["access_token"] = newToken
-        dataDict["token"] = tokDict
-        if let newData = try? JSONSerialization.data(withJSONObject: dataDict, options: .prettyPrinted) {
-            try? newData.write(to: jetskiTokenPath)
-        }
     }
 
     /// Fetch Gemini usage quota and window limits from the Antigravity (Google Code Assist)

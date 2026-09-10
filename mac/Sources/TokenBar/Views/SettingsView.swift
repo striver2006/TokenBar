@@ -186,6 +186,24 @@ public struct SettingsView: View {
 
             Divider()
 
+            if let secretError = refreshManager.secretStoreError {
+                // 钥匙串不可用 / 写入失败：所有厂商的 Key 都受影响，横幅放在所有 tab 之上
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 11))
+                        .foregroundColor(.orange)
+                    Text(secretError)
+                        .font(.system(size: 11))
+                        .foregroundColor(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 8)
+                .background(Color.orange.opacity(0.12))
+                Divider()
+            }
+
             // Content Area
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 0) {

@@ -17,7 +17,9 @@ final class TokenBarTests: XCTestCase {
 
         XCTAssertEqual(window.remainingPercentage, 55.0, accuracy: 0.001)
         XCTAssertFalse(window.isExpired)
-        XCTAssertTrue(window.timeRemainingFormatted.contains("小时") || window.timeRemainingFormatted.contains("分"))
+        withChineseUI {
+            XCTAssertTrue(window.timeRemainingFormatted.contains("小时") || window.timeRemainingFormatted.contains("分"))
+        }
         XCTAssertFalse(window.timeRangeFormatted.isEmpty)
     }
 
@@ -35,41 +37,56 @@ final class TokenBarTests: XCTestCase {
 
         XCTAssertEqual(window.remainingPercentage, 5.0, accuracy: 0.001)
         XCTAssertTrue(window.isExpired)
-        XCTAssertEqual(window.timeRemainingFormatted, "已到重置时间 / 刷新中")
+        withChineseUI {
+            XCTAssertEqual(window.timeRemainingFormatted, "已到重置时间 / 刷新中")
+        }
     }
 
-    func testClaudeLocalConfigParser() async {
-        let local = await ClaudeService.shared.readLocalClaudeJson()
-        if let local = local {
-            print("Detected Claude Account: \(String(describing: local.account))")
-            XCTAssertNotNil(local.fiveHour, "Claude 5-hour window should ALWAYS be non-nil")
-            if let fiveHour = local.fiveHour {
-                XCTAssertFalse(fiveHour.title.isEmpty)
-                XCTAssertGreaterThanOrEqual(fiveHour.usedPercentage, 0.0)
-                XCTAssertLessThanOrEqual(fiveHour.usedPercentage, 100.0)
-                print("Claude 5h:", fiveHour.timeRangeFormatted, fiveHour.timeRemainingFormatted, "Remaining:", fiveHour.remainingPercentage)
-            }
-            XCTAssertNotNil(local.weekly, "Claude weekly window should be non-nil")
-            if let weekly = local.weekly {
-                XCTAssertFalse(weekly.title.isEmpty)
-                XCTAssertGreaterThanOrEqual(weekly.usedPercentage, 0.0)
-                XCTAssertLessThanOrEqual(weekly.usedPercentage, 100.0)
-                print("Claude weekly:", weekly.timeRangeFormatted, weekly.timeRemainingFormatted, "Remaining:", weekly.remainingPercentage)
-            }
-        }
+    func testClaudeLocalConfigParserFromFixture() throws {
+        // 固定 fixture，不读开发者机器上的 ~/.claude.json
+        let resetsAt = ISO8601DateFormatter().string(from: Date().addingTimeInterval(2 * 3600))
+        let weeklyReset = ISO8601DateFormatter().string(from: Date().addingTimeInterval(3 * 86400))
+        let json: [String: Any] = [
+            "oauthAccount": ["emailAddress": "someone@example.com"],
+            "cachedUsageUtilization": [
+                "utilization": [
+                    "five_hour": ["utilization": 37.5, "resets_at": resetsAt],
+                    "limits": [["kind": "weekly_all", "percent": 12, "resets_at": weeklyReset]]
+                ]
+            ]
+        ]
+        let parsed = ClaudeService.shared.parseLocalClaudeJson(json)
+        XCTAssertEqual(parsed.account, "someone@example.com")
+        let fiveHour = try XCTUnwrap(parsed.fiveHour)
+        XCTAssertEqual(fiveHour.usedPercentage, 37.5, accuracy: 0.001)
+        XCTAssertFalse(fiveHour.isIdle)
+        XCTAssertEqual(fiveHour.endTime.timeIntervalSince(fiveHour.startTime), 5 * 3600, accuracy: 1)
+        let weekly = try XCTUnwrap(parsed.weekly)
+        XCTAssertEqual(weekly.usedPercentage, 12, accuracy: 0.001)
+    }
+
+    func testClaudeLocalConfigParserWithoutCachedUsage() {
+        // 登录了但还没有缓存用量：应给出干净的 5 小时窗口，而不是 nil
+        let parsed = ClaudeService.shared.parseLocalClaudeJson(["oauthAccount": ["displayName": "Bob"]])
+        XCTAssertEqual(parsed.account, "Bob")
+        XCTAssertNotNil(parsed.fiveHour)
+        XCTAssertTrue(parsed.fiveHour?.isIdle ?? false)
+        XCTAssertNil(parsed.weekly)
     }
 
     func testProviderTypes() {
         XCTAssertEqual(ProviderType.allCases.count, 9)
-        XCTAssertEqual(ProviderType.openAI.displayName, "OpenAI")
-        XCTAssertEqual(ProviderType.claudeCode.displayName, "Anthropic (Claude)")
-        XCTAssertEqual(ProviderType.gemini.displayName, "Google Gemini")
-        XCTAssertEqual(ProviderType.deepseek.displayName, "DeepSeek (深度求索)")
-        XCTAssertEqual(ProviderType.volcengine.displayName, "火山方舟 (字节跳动)")
-        XCTAssertEqual(ProviderType.kimi.displayName, "KIMI (月之暗面)")
-        XCTAssertEqual(ProviderType.openRouter.displayName, "OpenRouter")
-        XCTAssertEqual(ProviderType.glm.displayName, "GLM (智谱清言)")
-        XCTAssertEqual(ProviderType.aliyunBailian.displayName, "阿里云百炼 (Token Plan)")
+        withChineseUI {
+            XCTAssertEqual(ProviderType.openAI.displayName, "OpenAI")
+            XCTAssertEqual(ProviderType.claudeCode.displayName, "Anthropic (Claude)")
+            XCTAssertEqual(ProviderType.gemini.displayName, "Google Gemini")
+            XCTAssertEqual(ProviderType.deepseek.displayName, "DeepSeek (深度求索)")
+            XCTAssertEqual(ProviderType.volcengine.displayName, "火山方舟 (字节跳动)")
+            XCTAssertEqual(ProviderType.kimi.displayName, "KIMI (月之暗面)")
+            XCTAssertEqual(ProviderType.openRouter.displayName, "OpenRouter")
+            XCTAssertEqual(ProviderType.glm.displayName, "GLM (智谱清言)")
+            XCTAssertEqual(ProviderType.aliyunBailian.displayName, "阿里云百炼 (Token Plan)")
+        }
     }
 
     func testSettingsTabOrder() {
@@ -350,44 +367,29 @@ final class TokenBarTests: XCTestCase {
         LocalizationManager.shared.setLanguage(.system)
     }
 
-    func testGeminiLocalConfig() async {
-        let local = await GeminiService.shared.readLocalGeminiConfig()
-        // If antigravity/gemini CLI is present locally on developer machine, test that account and token are detected
-        if let localToken = local.token {
-            XCTAssertFalse(localToken.isEmpty)
-            print("Gemini Local Token detected, length:", localToken.count)
-        }
-        if let account = local.account {
-            XCTAssertFalse(account.isEmpty)
-            XCTAssertTrue(account.contains("@"), "Account should be a valid email if present")
-            print("Gemini Local Account detected:", account)
-        }
-    }
+    func testGeminiLocalFilesParserFromFixture() throws {
+        // 临时目录充当 home，三个文件全部用 fixture，不依赖本机 ~/.gemini
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("tokenbar-gemini-\(UUID().uuidString)")
+        let dir = home.appendingPathComponent(".gemini")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: home) }
 
-    func testGeminiFetchLiveQuota() async throws {
-        do {
-            let result = try await GeminiService.shared.fetchQuota(token: nil)
-            print("=== Live Gemini Fetch Result ===")
-            print("Account:", result.account ?? "nil")
-            XCTAssertEqual(result.account, "chenzhenbo@gmail.com")
-            if let weekly = result.weekly {
-                print("Weekly remaining: \(weekly.remainingPercentage)% | Reset: \(weekly.timeRemainingFormatted)")
-                XCTAssertGreaterThan(weekly.remainingPercentage, 0)
-                XCTAssertLessThanOrEqual(weekly.remainingPercentage, 100)
-            } else {
-                XCTFail("Weekly quota should not be nil")
-            }
-            if let fiveHour = result.fiveHour {
-                print("5-Hour remaining: \(fiveHour.remainingPercentage)% | Reset: \(fiveHour.timeRemainingFormatted)")
-                XCTAssertGreaterThan(fiveHour.remainingPercentage, 0)
-                XCTAssertLessThanOrEqual(fiveHour.remainingPercentage, 100)
-            } else {
-                XCTFail("5-Hour quota should not be nil")
-            }
-            print("================================")
-        } catch {
-            XCTFail("Fetch quota threw error: \(error)")
-        }
+        let jetski: [String: Any] = ["token": ["access_token": "ya29.jetski", "refresh_token": "1//refresh", "expiry": "2030-01-01T00:00:00Z"]]
+        try JSONSerialization.data(withJSONObject: jetski).write(to: dir.appendingPathComponent("jetski-standalone-oauth-token"))
+        try JSONSerialization.data(withJSONObject: ["access_token": "ya29.oauth", "refresh_token": "1//oauth"]).write(to: dir.appendingPathComponent("oauth_creds.json"))
+        try JSONSerialization.data(withJSONObject: ["active": "user@example.com", "old": ["prev@example.com"]]).write(to: dir.appendingPathComponent("google_accounts.json"))
+
+        let files = GeminiService.parseLocalGeminiFiles(homeDir: home)
+        XCTAssertEqual(files.jetskiToken, "ya29.jetski")
+        XCTAssertEqual(files.jetskiRefreshToken, "1//refresh")
+        XCTAssertNotNil(files.jetskiExpiry)
+        XCTAssertEqual(files.oauthToken, "ya29.oauth")
+        XCTAssertEqual(files.account, "user@example.com")
+
+        // 目录不存在：全部为 nil，不崩
+        let empty = GeminiService.parseLocalGeminiFiles(homeDir: home.appendingPathComponent("missing"))
+        XCTAssertNil(empty.jetskiToken)
+        XCTAssertNil(empty.account)
     }
 
     // MARK: - 菜单栏额度摘要
@@ -1534,5 +1536,85 @@ final class TokenBarTests: XCTestCase {
         let w = try JSONDecoder().decode(TokenWindow.self, from: Data(legacy.utf8))
         XCTAssertFalse(w.isStatus)
         XCTAssertEqual(w.remainingPercentage, 60)
+    }
+
+    // MARK: - 第 3 批：全部凭证进钥匙串
+
+    func testAppSecretsExtractAndApplyRoundTrip() {
+        var settings = AppSettings.defaultSettings
+        settings.openAIApiKey = " sk-openai "
+        settings.claudeToken = "sk-ant-oat"
+        settings.aliyunCookie = "login_aliyunid=1"
+        let custom = CustomProviderConfig(name: "MiMo", apiKey: "mimo-key", consoleCookie: "c=1")
+        settings.customProviders = [custom]
+
+        let extracted = AppSecrets.extract(from: settings)
+        XCTAssertEqual(extracted[.openAIApiKey], "sk-openai")
+        XCTAssertEqual(extracted[.claudeToken], "sk-ant-oat")
+        XCTAssertEqual(extracted[.aliyunCookie], "login_aliyunid=1")
+        XCTAssertEqual(extracted[.custom(custom.id, .apiKey)], "mimo-key")
+        XCTAssertEqual(extracted[.custom(custom.id, .consoleCookie)], "c=1")
+        XCTAssertNil(extracted[.geminiApiKey], "空字段不应出现在提取结果里")
+
+        var blank = AppSettings.defaultSettings
+        blank.customProviders = [CustomProviderConfig(id: custom.id, name: "MiMo")]
+        AppSecrets.apply(extracted, to: &blank)
+        XCTAssertEqual(blank.openAIApiKey, "sk-openai")
+        XCTAssertEqual(blank.claudeToken, "sk-ant-oat")
+        XCTAssertEqual(blank.customProviders[0].apiKey, "mimo-key")
+        XCTAssertEqual(blank.customProviders[0].consoleCookie, "c=1")
+
+        // 键目录覆盖内置 12 项 + 每个自定义厂商 2 项
+        XCTAssertEqual(AppSecrets.keys(for: settings).count, AppSecrets.builtinFields.count + 2)
+        XCTAssertEqual(SecretKey.custom(custom.id, .apiKey).account, "custom.\(custom.id.uuidString).apiKey")
+    }
+
+    func testAppSettingsEncodingOmitsSecretsOnlyWhenInKeychain() throws {
+        var settings = AppSettings.defaultSettings
+        settings.openAIApiKey = "sk-openai"
+        settings.geminiToken = "ya29.x"
+        settings.customProviders = [CustomProviderConfig(name: "X", apiKey: "custom-key", consoleCookie: "ck")]
+
+        // 未迁移：明文照旧落盘（钥匙串可用之前绝不丢凭证）
+        settings.secretsInKeychain = false
+        let plain = String(decoding: try JSONEncoder().encode(settings), as: UTF8.self)
+        XCTAssertTrue(plain.contains("sk-openai"))
+        XCTAssertTrue(plain.contains("custom-key"))
+
+        // 已迁移：任何凭证都不得出现在 plist 内容里
+        settings.secretsInKeychain = true
+        let data = try JSONEncoder().encode(settings)
+        let stripped = String(decoding: data, as: UTF8.self)
+        XCTAssertFalse(stripped.contains("sk-openai"))
+        XCTAssertFalse(stripped.contains("ya29.x"))
+        XCTAssertFalse(stripped.contains("custom-key"))
+        XCTAssertFalse(stripped.contains("\"ck\""))
+
+        // 非密字段与自定义厂商结构完整保留，且能解码回来
+        let decoded = try JSONDecoder().decode(AppSettings.self, from: data)
+        XCTAssertEqual(decoded.customProviders.count, 1)
+        XCTAssertEqual(decoded.customProviders[0].name, "X")
+        XCTAssertEqual(decoded.customProviders[0].apiKey, "")
+        XCTAssertEqual(decoded.openAIApiKey, "")
+        XCTAssertFalse(decoded.secretsInKeychain, "标志不参与编解码，启动后由钥匙串加载结果决定")
+    }
+
+    func testSecretLoadActionThreeStates() {
+        XCTAssertEqual(AppSecrets.loadAction(lookup: .found("K"), legacy: "OLD"), .useStored("K"))
+        XCTAssertEqual(AppSecrets.loadAction(lookup: .absent, legacy: " OLD "), .migrate("OLD"))
+        XCTAssertEqual(AppSecrets.loadAction(lookup: .absent, legacy: ""), .none)
+        // 读不到时绝不迁移、绝不清空：保留旧明文
+        XCTAssertEqual(AppSecrets.loadAction(lookup: .unavailable, legacy: "OLD"), .keepLegacy)
+        XCTAssertEqual(AppSecrets.loadAction(lookup: .unavailable, legacy: ""), .keepLegacy)
+    }
+
+    func testSecretSaveActionDiffAndThreeStates() {
+        XCTAssertEqual(AppSecrets.saveAction(current: "A", previous: "A", storeReadable: true), .unchanged)
+        XCTAssertEqual(AppSecrets.saveAction(current: nil, previous: nil, storeReadable: true), .unchanged)
+        XCTAssertEqual(AppSecrets.saveAction(current: " B ", previous: "A", storeReadable: true), .write("B"))
+        XCTAssertEqual(AppSecrets.saveAction(current: "", previous: "A", storeReadable: true), .delete)
+        // 输入为空、钥匙串这轮没读到 → 不能删
+        XCTAssertEqual(AppSecrets.saveAction(current: "", previous: "A", storeReadable: false), .keepExisting)
+        XCTAssertEqual(AppSecrets.saveAction(current: "NEW", previous: nil, storeReadable: false), .write("NEW"))
     }
 }

@@ -47,7 +47,14 @@ public final class ClaudeService: @unchecked Sendable {
             guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 return nil
             }
+            return parseLocalClaudeJson(json)
+        } catch {
+            return nil
+        }
+    }
 
+    /// 纯解析 `~/.claude.json` 的内容，不碰文件系统，便于用 fixture 单测
+    public func parseLocalClaudeJson(_ json: [String: Any]) -> (fiveHour: TokenWindow?, weekly: TokenWindow?, account: String?) {
             var accountEmail: String? = nil
             if let oauthAccount = json["oauthAccount"] as? [String: Any] {
                 accountEmail = oauthAccount["emailAddress"] as? String ?? oauthAccount["displayName"] as? String
@@ -178,9 +185,6 @@ public final class ClaudeService: @unchecked Sendable {
             }
 
             return (fiveHourWindow, weeklyWindow, accountEmail)
-        } catch {
-            return nil
-        }
     }
 
     /// Fetch latest usage statistics from Anthropic OAuth usage API
