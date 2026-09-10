@@ -60,7 +60,13 @@ macOS 客户端采用纯 Swift 打造，支持 macOS 13 (Ventura) 及以上系�
 ### 2.1 表现层 (Presentation Layer)
 - **`MenuBarController`**：
   - 维护系统状态栏 `NSStatusItem`，通过 `HoverTrackingView`（基于 `NSTrackingArea`）监听鼠标悬浮与移出事件。
-  - 支持“鼠标悬停快速展开”与“点击固定（Pin）”双重交互模型。
+  - 支持“鼠标悬停快速展开”与“点击固定（Pin）”双重交互模型。悬停 0.15s 展开、移出 0.35s 关闭
+    （`hoverOpenDelay` / `hoverCloseDelay`），定时器注册到 `.common` mode。`NSTrackingArea` 只覆盖
+    状态栏按钮，鼠标「图标 → 浮窗 → 桌面」后不会再收到 exited，因此 `handleMouseMoved` 在鼠标既不在
+    图标也不在浮窗内时必须重新安排关闭；`popoverDidClose` 是状态复位的唯一出口（`.transient`
+    点击外部关闭也走它）。
+  - 设置窗口的 `NSHostingView` 复用不重建；切 tab 与重新读钥匙串通过 `SettingsWindowRequest`
+    通知视图（`.task(id: openCount)`），用户未保存的输入不会因为再次打开而丢失。
   - 绑定 `NSPopover`，将其根视图托管至 SwiftUI `TokenSummaryPopoverView`。
   - 订阅 `RefreshManager.objectWillChange`，按用户配置把某个厂商的剩余额度 / 余额渲染到 `NSStatusItem` 标题（文案由纯函数 `MenuBarStatus` 计算，便于单测）。
   - 弹窗定位两层防护（macOS 26 起状态项托管在系统进程，本进程缓存的状态栏窗口坐标在显示器熄屏/唤醒后可能过期，会把 `NSPopover` 定位到屏幕中央）：
@@ -83,7 +89,14 @@ macOS 客户端采用纯 Swift 打造，支持 macOS 13 (Ventura) 及以上系�
     上一轮超过 90 秒未结束时新一轮强制抢占。以前只是 `guard !isRefreshing else { return }`，
     一轮卡死就会让之后每一次 tick 和手动刷新都被静默丢弃。
   - **单厂商超时隔离**：每个 provider 经 `withTimeout`（`TaskTimeout.swift`）套独立预算
-    （百炼 35s / Gemini 30s / 其余 25s），单个厂商挂起不拖垮整轮。
+    （百炼 35s / Gemini 30s / 其余 25s），单个厂商挂起不拖垮整轮。超时哨兵在操作按时完成时
+    会被取消，不会每轮每厂商留下一个睡满预算的悬挂 Task。
+  - **轮次门控写回**：各 `refreshXxx` 在入口捕获 `refreshGeneration`，结果经 `commit(_:for:gen:)`
+    写回；被闸门抢占的旧轮次跑完后其结果直接丢弃，不会用失败态覆盖新轮次刚写入的数据。
+  - **状态型窗口**：`TokenWindowKind.status` 表示「只探测到连通性、拿不到真实额度」，卡片只画
+    标题与状态点。各厂商 Service **不得**在拿不到数据时伪造进度条（GLM 曾用 `usedPct * 0.6`
+    编造每周额度、Gemini API Key 模式曾用「当前小时 / 5」拼 5 小时窗口，均已删除）；
+    `x-ratelimit-reset-*` 统一走 `RateLimitReset.parse`（Go duration / 秒 / unix 秒·毫秒时间戳）。
 
 #### 2.2.1 刷新链路的三条硬约束
 
@@ -125,6 +138,17 @@ macOS 客户端采用纯 Swift 打造，支持 macOS 13 (Ventura) 及以上系�
 3. **`Process` 子进程要先读 pipe 再 `waitUntilExit`**，并配超时 kill 与
    `standardInput = FileHandle.nullDevice`。反序会在输出超过 64KB pipe 缓冲区时形成
    父子互等死锁；`withTimeout` 救不了子进程（不响应 Task 取消），必须自己兜。
+
+   第 2 条的精神同样适用于**文件 IO**：`~/.claude.json`（重度用户数 MB）、`~/.bailian/config.json`、
+   余额历史 `balance_history.json` 都不得在 MainActor 上同步读写。对应入口是
+   `ClaudeService.readLocalClaudeJson()`（async）、`BailianCLIConfig.loadFromDiskAsync()`、
+   `BalanceHistoryStore`（actor，内存常驻一份，磁盘只在首次访问读一次）。
+
+   **有可变缓存的 Service 必须是 actor**（`GeminiService`：token 缓存、client 候选、钥匙串探测缓存）。
+   普通 class 的 nonisolated async 方法从 MainActor `await` 进去后并不在主线程执行，刷新链路与
+   设置页「测试」按钮并发进入就是数据竞争。排查此类问题可临时开严格检查：
+   `swift build -Xswiftc -strict-concurrency=complete`（目前约 100 条警告，多为 Foundation
+   类型未标 Sendable 的噪音，故未固化进 Package.swift）。
 
 #### 2.2.2 可观测性与排查
 
