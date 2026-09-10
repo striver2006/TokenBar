@@ -91,6 +91,14 @@ macOS 客户端采用纯 Swift 打造，支持 macOS 13 (Ventura) 及以上系�
   - **单厂商超时隔离**：每个 provider 经 `withTimeout`（`TaskTimeout.swift`）套独立预算
     （百炼 35s / Gemini 30s / 其余 25s），单个厂商挂起不拖垮整轮。超时哨兵在操作按时完成时
     会被取消，不会每轮每厂商留下一个睡满预算的悬挂 Task。
+  - **设置项的保存必须发生在写入的那一刻**，不能挂在 SwiftUI 的 `.onChange` 副作用里。通用设置
+    里的 Picker / Toggle 一律走 `SettingsView.savingBinding(_:)`：setter 内写值并立即 `saveSettings()`。
+    曾经是「绑定 settings + 紧随其后的 `.onChange` 调 saveSettings」，而这些控件上还叠了
+    `.id(i18n.currentLanguage)`，视图标识重建会把 `onChange` 的基线重置成新值、通知被吞掉 ——
+    真实故障是刷新间隔改成 1 分钟后仍按 5 分钟跑了近 3 小时，日志里那段时间完全没有「定时器已创建」。
+  - **定时器自愈要比对间隔**：每轮结束走 `RefreshTimerHealth.needsRebuild`（Windows 端为同语义的内联判断），
+    除「定时器是否失效」外还比对生效中的间隔与设置值。这是「设置改了却没生效」的最后一道防线，
+    最迟一个旧周期自愈。间隔一致时**不得**重建 —— 每次重建都会把计时相位打回零。
   - **轮次门控写回**：各 `refreshXxx` 在入口捕获 `refreshGeneration`，结果经 `commit(_:for:gen:)`
     写回；被闸门抢占的旧轮次跑完后其结果直接丢弃，不会用失败态覆盖新轮次刚写入的数据。
   - **状态型窗口**：`TokenWindowKind.status` 表示「只探测到连通性、拿不到真实额度」，卡片只画

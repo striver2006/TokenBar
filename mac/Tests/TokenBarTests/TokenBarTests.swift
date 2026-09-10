@@ -1624,4 +1624,35 @@ final class TokenBarTests: XCTestCase {
         XCTAssertEqual(AppSecrets.saveAction(current: "", previous: "A", storeReadable: false), .keepExisting)
         XCTAssertEqual(AppSecrets.saveAction(current: "NEW", previous: nil, storeReadable: false), .write("NEW"))
     }
+
+    // MARK: - 定时器自愈（刷新间隔改了不生效）
+
+    func testTimerRebuildWhenTimerInvalidated() {
+        // 定时器失效：无论间隔是否一致都必须重建
+        XCTAssertTrue(RefreshTimerHealth.needsRebuild(
+            timerIsValid: false, activeIntervalMinutes: 5, desiredIntervalMinutes: 5))
+        XCTAssertTrue(RefreshTimerHealth.needsRebuild(
+            timerIsValid: false, activeIntervalMinutes: nil, desiredIntervalMinutes: 1))
+    }
+
+    func testTimerRebuildWhenIntervalDiffersFromSettings() {
+        // 真实故障：设置改成 1 分钟但保存副作用没触发，定时器还按 5 分钟跑。
+        // 只判「定时器是否有效」救不回来，必须比对间隔。
+        XCTAssertTrue(RefreshTimerHealth.needsRebuild(
+            timerIsValid: true, activeIntervalMinutes: 5, desiredIntervalMinutes: 1))
+        XCTAssertTrue(RefreshTimerHealth.needsRebuild(
+            timerIsValid: true, activeIntervalMinutes: 1, desiredIntervalMinutes: 60))
+        // 定时器还没建立过
+        XCTAssertTrue(RefreshTimerHealth.needsRebuild(
+            timerIsValid: true, activeIntervalMinutes: nil, desiredIntervalMinutes: 5))
+    }
+
+    func testTimerNotRebuiltWhenHealthy() {
+        // 间隔一致且定时器有效时不能重建：每次重建都会把计时相位打回零，
+        // 间隔较长时反复重建会导致永远刷不到。
+        XCTAssertFalse(RefreshTimerHealth.needsRebuild(
+            timerIsValid: true, activeIntervalMinutes: 5, desiredIntervalMinutes: 5))
+        XCTAssertFalse(RefreshTimerHealth.needsRebuild(
+            timerIsValid: true, activeIntervalMinutes: 1, desiredIntervalMinutes: 1))
+    }
 }

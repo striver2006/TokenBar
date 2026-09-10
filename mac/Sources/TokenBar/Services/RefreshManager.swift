@@ -19,6 +19,22 @@ public enum RefreshRoundOutcome: Equatable {
     case allFailed(count: Int)   // 参与的厂商全部没拿到新数据
 }
 
+/// 定时器是否需要重建。抽成纯函数是为了能单测：这条判断是「设置改了却没生效」的最后一道防线。
+///
+/// 除了「定时器已失效」，还要比对**当前生效的间隔与设置里的间隔**。曾经只判前者，于是任何
+/// 漏掉 `saveSettings()` 的路径（例如设置页把保存挂在 SwiftUI 的 `.onChange` 副作用里而它没触发）
+/// 都会让新间隔永远不生效，界面上毫无痕迹。加上后者之后，最迟一个旧周期就会自愈。
+public enum RefreshTimerHealth {
+    public static func needsRebuild(
+        timerIsValid: Bool,
+        activeIntervalMinutes: Int?,
+        desiredIntervalMinutes: Int
+    ) -> Bool {
+        if !timerIsValid { return true }
+        return activeIntervalMinutes != desiredIntervalMinutes
+    }
+}
+
 @MainActor
 public final class RefreshManager: ObservableObject {
     public static let shared = RefreshManager()
@@ -400,9 +416,17 @@ public final class RefreshManager: ObservableObject {
         let ms = Double(DispatchTime.now().uptimeNanoseconds - roundStart.uptimeNanoseconds) / 1_000_000
         Log.refresh.notice("round end in \(ms, format: .fixed(precision: 0))ms, advanced=\(advanced, privacy: .public)")
 
-        // 定时器自愈：Timer 被 invalidate 或从未建立时，这里是最后一道防线。
-        if refreshTimer?.isValid != true {
-            Log.timer.error("定时器已失效，重建")
+        // 定时器自愈：Timer 失效、或生效中的间隔与设置不一致时，这里是最后一道防线。
+        if RefreshTimerHealth.needsRebuild(
+            timerIsValid: refreshTimer?.isValid == true,
+            activeIntervalMinutes: activeIntervalMinutes,
+            desiredIntervalMinutes: settings.refreshIntervalMinutes
+        ) {
+            if refreshTimer?.isValid != true {
+                Log.timer.error("定时器已失效，重建")
+            } else {
+                Log.timer.error("定时器间隔与设置不符（生效 \(self.activeIntervalMinutes.map(String.init) ?? "nil", privacy: .public)min，设置 \(self.settings.refreshIntervalMinutes, privacy: .public)min），重建")
+            }
             startPeriodicTimer()
         }
     }

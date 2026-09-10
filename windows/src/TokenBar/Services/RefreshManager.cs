@@ -573,11 +573,18 @@ namespace TokenBar.Services
 
                 Log.Notice("refresh", $"round end in {roundStart.ElapsedMilliseconds}ms, advanced={advanced}");
 
-                // 定时器自愈：Dispose 后未重建或从未建立时，这里是最后一道防线
-                // （对应 mac RefreshManager.startPeriodicTimer 的 isValid 校验）。
+                // 定时器自愈：定时器不存在、或生效中的间隔与设置不一致时，这里是最后一道防线
+                // （与 mac RefreshTimerHealth.needsRebuild 同语义）。只判「定时器在不在」不够：
+                // 任何漏掉 SaveSettings 的路径都会让新间隔永远不生效且界面毫无痕迹。
                 if (_timer == null)
                 {
                     Log.Error("timer", "定时器不存在，重建");
+                    StartTimer();
+                }
+                else if (_activeIntervalMinutes != Settings.RefreshIntervalMinutes)
+                {
+                    Log.Error("timer",
+                        $"定时器间隔与设置不符（生效 {_activeIntervalMinutes}min，设置 {Settings.RefreshIntervalMinutes}min），重建");
                     StartTimer();
                 }
             }
