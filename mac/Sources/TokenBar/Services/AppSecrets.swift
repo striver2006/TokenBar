@@ -77,7 +77,9 @@ public enum AppSecrets {
     public static func loadAction(lookup: SecretLookup, legacy: String) -> LoadAction {
         let trimmed = legacy.trimmingCharacters(in: .whitespacesAndNewlines)
         switch lookup {
-        case .found(let v): return .useStored(v)
+        // 同样 trim：saveAction 的 current 来自 extract（已 trim），
+        // 这里不 trim 会让带空白的存量值每次保存都被判成「变更」而重复写入
+        case .found(let v): return .useStored(v.trimmingCharacters(in: .whitespacesAndNewlines))
         case .absent: return trimmed.isEmpty ? .none : .migrate(trimmed)
         case .unavailable: return .keepLegacy
         }

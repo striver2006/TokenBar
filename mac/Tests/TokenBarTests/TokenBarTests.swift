@@ -1606,6 +1606,8 @@ final class TokenBarTests: XCTestCase {
 
     func testSecretLoadActionThreeStates() {
         XCTAssertEqual(AppSecrets.loadAction(lookup: .found("K"), legacy: "OLD"), .useStored("K"))
+        // 存量值带空白时要 trim，否则与 saveAction 的已 trim 输入永远不相等，每次保存都重复写
+        XCTAssertEqual(AppSecrets.loadAction(lookup: .found(" K "), legacy: ""), .useStored("K"))
         XCTAssertEqual(AppSecrets.loadAction(lookup: .absent, legacy: " OLD "), .migrate("OLD"))
         XCTAssertEqual(AppSecrets.loadAction(lookup: .absent, legacy: ""), .none)
         // 读不到时绝不迁移、绝不清空：保留旧明文

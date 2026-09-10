@@ -149,8 +149,12 @@ public final class RefreshManager: ObservableObject {
             persistSettingsToDefaults()
         }
         Log.lifecycle.notice("凭证加载完成：loaded=\(loaded.count) migrated=\(toMigrate.count) unreadable=\(unreadable.count) secretsInKeychain=\(allTrustworthy)")
-        if !allTrustworthy {
+        // 读不到与写不进是两种故障，横幅文案不同：读不到时凭证仍以旧明文运行，
+        // 写不进时是迁移没能落地。两者同时出现时以「读不到」为准（更根本）。
+        if !unreadable.isEmpty {
             secretStoreError = I18n(.warnSecretStoreUnavailable)
+        } else if migrationFailed {
+            secretStoreError = I18n(.warnSecretStoreWriteFailed)
         }
     }
 
