@@ -694,9 +694,11 @@ namespace TokenBar.Views
         }
 
         /// <summary>
-        /// 把窗口贴到托盘所在屏幕的任务栏旁。
-        /// 以光标所在屏幕为准（托盘只会在被点击/悬停的那块屏上），比较 WorkingArea 与 Bounds
-        /// 判断任务栏在哪一侧；Screen 给的是物理像素，WPF 的 Left/Top 是逻辑像素，需要按 DPI 换算。
+        /// 把窗口固定在托盘所在屏幕工作区贴近任务栏的角落：任务栏在底部/右侧时贴右下角，
+        /// 在顶部时贴右上角，在左侧时贴左下角（即系统通知弹窗的位置）。
+        /// 不跟随光标定位——托盘图标（尤其是折叠进溢出区的图标）会被浮窗盖住。
+        /// 以光标所在屏幕为准（托盘只会在被点击/悬停的那块屏上）；
+        /// Screen 给的是物理像素，WPF 的 Left/Top 是逻辑像素，需要按 DPI 换算。
         /// </summary>
         private void PositionNearTray()
         {
@@ -742,33 +744,19 @@ namespace TokenBar.Views
             double waTop = work.Top * scaleY;
             double waRight = work.Right * scaleX;
             double waBottom = work.Bottom * scaleY;
-            double cursorX = cursor.X * scaleX;
             const double margin = 10;
 
-            double left, top;
-            if (work.Top > bounds.Top)
+            double left = waRight - w - margin;
+            double top = waBottom - h - margin;
+            if (work.Left > bounds.Left)
             {
-                // 任务栏在顶部：贴着工作区上沿，水平跟随光标
-                left = cursorX - w / 2;
-                top = waTop + margin;
-            }
-            else if (work.Left > bounds.Left)
-            {
-                // 任务栏在左侧：托盘在任务栏底部，窗口贴工作区左下角
+                // 任务栏在左侧：托盘在左下角，窗口贴工作区左下角
                 left = waLeft + margin;
-                top = waBottom - h - margin;
             }
-            else if (work.Right < bounds.Right)
+            else if (work.Top > bounds.Top)
             {
-                // 任务栏在右侧：窗口贴工作区右下角
-                left = waRight - w - margin;
-                top = waBottom - h - margin;
-            }
-            else
-            {
-                // 任务栏在底部（含自动隐藏 / 无任务栏）：贴工作区下沿，水平跟随光标
-                left = cursorX - w / 2;
-                top = waBottom - h - margin;
+                // 任务栏在顶部：托盘在右上角，窗口贴工作区右上角
+                top = waTop + margin;
             }
 
             // 钳制在工作区内，避免超出屏幕边缘
