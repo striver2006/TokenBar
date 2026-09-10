@@ -108,6 +108,7 @@ TokenBar 独家支持双重模式：
 - **火山方舟 (字节跳动)**：前往火山引擎大模型控制台获取 API Key，支持自定义 Endpoint。
 - **月之暗面 KIMI**：在 [platform.moonshot.cn](https://platform.moonshot.cn) 获取 Key，支持监测 RPM/TPM 限额与账户余额（同样支持余额提醒阈值）。
 - **智谱清言 GLM**：在 [open.bigmodel.cn](https://open.bigmodel.cn) 获取 API Key。
+    > ⚠️ **剩余额度获取条件**：智谱（BigModel）仅对支持 **OpenAI Response 协议**的端点返回套餐剩余额度数据，普通 Chat Completions 端点拿不到该信息。请确保设置中填写的 API 端点支持 OpenAI Response 协议；若端点不支持该协议，TokenBar 将无法获取剩余额度，卡片只能显示「API 连接正常」状态点，而不会出现 5 小时 / 每周额度进度条。
 
 ### 3.5 阿里云百炼 (Token Plan) 专属配置与多端同步
 
@@ -266,3 +267,6 @@ A：阿里云百炼的官方 API Key（包括兼容 OpenAI 的端点）仅用于
 
 **Q6：外接显示器休眠唤醒后，看板跑到了屏幕中央，或者悬停图标"没反应"？**  
 A：这是 macOS 26 状态项托管机制在显示器重配置后回传过期坐标造成的，两种表现是同一个问题（悬停其实弹出了看板，只是位置错了）。TokenBar 会在屏幕参数变化时主动刷新状态项布局，并在每次悬停/点击时按鼠标位置校验、纠正看板位置；若个别情况下仍异常，重启应用即可恢复。
+
+**Q7：为什么 GLM（智谱）卡片只显示绿色状态点，没有剩余额度进度条？**  
+A：智谱（BigModel）仅对支持 **OpenAI Response 协议**的端点返回套餐剩余额度数据。若设置中填写的 API 端点不支持该协议，TokenBar 将拿不到剩余额度，卡片只会显示「API 连接正常」状态。请确认所填端点为支持 OpenAI Response 协议的端点后重新保存并刷新。
