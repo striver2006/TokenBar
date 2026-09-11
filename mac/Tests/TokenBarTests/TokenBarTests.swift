@@ -1478,6 +1478,21 @@ final class TokenBarTests: XCTestCase {
         XCTAssertEqual(merged.expiry, fileExpiry)
     }
 
+    /// 钥匙串 ACL 被拒（-25293）与凭证真失效的恢复动作不同，
+    /// 文案必须把前者引向设置页重新授权，而不是去 Antigravity 重登（那样做无效）。
+    func testGeminiFailureMessageDistinguishesKeychainDenial() {
+        let denied = GeminiService.credentialsFailureMessage(keychainDenied: true, isZh: true)
+        XCTAssertTrue(denied.contains("读取本地 Gemini 配置"))
+        XCTAssertTrue(denied.contains("始终允许"))
+        XCTAssertFalse(denied.contains("在 Antigravity 中重新登录"))
+
+        let expired = GeminiService.credentialsFailureMessage(keychainDenied: false, isZh: true)
+        XCTAssertTrue(expired.contains("Antigravity"))
+
+        let deniedEn = GeminiService.credentialsFailureMessage(keychainDenied: true, isZh: false)
+        XCTAssertTrue(deniedEn.contains("Always Allow"))
+    }
+
     /// 钥匙串只有 refresh_token 没有 access_token 时，token/expiry 从文件补，refresh 仍用钥匙串的。
     func testGeminiMergeFillsMissingFieldsFromFile() {
         let fileExpiry = Date().addingTimeInterval(600)

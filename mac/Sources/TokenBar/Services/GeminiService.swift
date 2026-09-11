@@ -172,20 +172,23 @@ public actor GeminiService {
     /// 系统弹一次授权框、点「始终允许」后 TokenBar 进入该条目的 ACL，此后永久静默。
     /// 构建已固定开发者证书签名（Scripts/build_app.sh），ACL 按 designated requirement
     /// 匹配，重新编译不会失配。
-    private func readAntigravityKeychain(allowInteraction: Bool) async -> KeychainCredentials? {
+    private func readAntigravityKeychain(allowInteraction: Bool) async -> (credentials: KeychainCredentials?, denied: Bool) {
         let lookup = await KeychainSecretStore.shared.readForeignAsync(
             service: Self.antigravityKeychainService,
             account: Self.antigravityKeychainAccount,
             allowInteraction: allowInteraction
         )
         guard case .found(let raw) = lookup, let payload = Self.decodeKeychainPayload(raw) else {
-            return nil
+            // .unavailable：条目在、但被 ACL 拒（典型 status=-25293，钥匙串授权丢失）。
+            // 这个信号必须往上传——此时的恢复动作是去设置页重新授权，
+            // 与「凭证真失效、去 Antigravity 重登」完全不同，混用会把用户引向无效操作。
+            return (nil, lookup == .unavailable)
         }
-        return KeychainCredentials(
+        return (KeychainCredentials(
             token: payload["access_token"] as? String,
             refreshToken: payload["refresh_token"] as? String,
             expiry: Self.parseServerDate(payload["expiry"])
-        )
+        ), false)
     }
 
     /// 解 go-keyring 写入的值：JSON 外面再包一层 `go-keyring-base64:` 前缀的 base64。
@@ -247,12 +250,12 @@ public actor GeminiService {
     public func readLocalGeminiConfig(
         storedRefreshToken: String? = nil,
         allowKeychainInteraction: Bool = false
-    ) async -> (token: String?, refreshToken: String?, account: String?, expiry: Date?) {
+    ) async -> (token: String?, refreshToken: String?, account: String?, expiry: Date?, keychainDenied: Bool) {
         let keychain = await readAntigravityKeychain(allowInteraction: allowKeychainInteraction)
         let files = await Self.readLocalGeminiFiles()
-        let merged = Self.mergeCredentials(keychain: keychain, files: files, storedRefreshToken: storedRefreshToken)
-        Log.provider.debug("provider=gemini 凭证来源 keychain=\(keychain != nil, privacy: .public) file=\(files.jetskiToken != nil, privacy: .public)")
-        return (merged.token, merged.refreshToken, files.account, merged.expiry)
+        let merged = Self.mergeCredentials(keychain: keychain.credentials, files: files, storedRefreshToken: storedRefreshToken)
+        Log.provider.debug("provider=gemini 凭证来源 keychain=\(keychain.credentials != nil, privacy: .public) file=\(files.jetskiToken != nil, privacy: .public)")
+        return (merged.token, merged.refreshToken, files.account, merged.expiry, keychain.denied)
     }
 
     /// 在后台队列读 `~/.gemini` 下的三个文件。都是本地小文件，没有超时看门狗的必要，
@@ -382,6 +385,21 @@ public actor GeminiService {
         return nil
     }
 
+    /// 凭证拿不到时的用户文案，按恢复动作分流：
+    /// - 钥匙串授权被拒（-25293）：去设置页点「读取本地 Gemini 配置」→ 系统弹窗选「始终允许」，
+    ///   一次授权后永久静默。在 Antigravity 重新登录**无效**——重建的条目 ACL 依然不含 TokenBar。
+    /// - 其余情况才是凭证真失效/缺失，指引去 Antigravity 登录。
+    static func credentialsFailureMessage(keychainDenied: Bool, isZh: Bool) -> String {
+        if keychainDenied {
+            return isZh
+                ? "Gemini 钥匙串授权被拒：请到 设置 → Gemini 点「读取本地 Gemini 配置」，并在系统弹窗中选「始终允许」"
+                : "Gemini keychain access denied. Open Settings → Gemini, click \"Read Local Gemini Credentials\" and choose \"Always Allow\" in the system prompt"
+        }
+        return isZh
+            ? "Gemini 凭证已失效，请在 Antigravity 中重新登录，或在设置中填入 Token"
+            : "Gemini credentials expired. Log in again in Antigravity, or enter a token in Settings"
+    }
+
     /// Fetch Gemini usage quota and window limits from the Antigravity (Google Code Assist)
     /// quota API — the same source the Antigravity IDE's usage panel displays.
     /// 返回值里带上本轮用到的 refresh_token，调用方据此把它落进自有钥匙串条目做快照。
@@ -400,17 +418,19 @@ public actor GeminiService {
             accessToken = explicitToken
         } else if let refreshToken {
             guard let refreshed = await refreshGoogleAccessToken(refreshToken: refreshToken) else {
-                throw NSError(domain: "GeminiService", code: 401, userInfo: [NSLocalizedDescriptionKey: isZh ? "Gemini 凭证已失效，请在 Antigravity 中重新登录，或在设置中填入 Token" : "Gemini credentials expired. Log in again in Antigravity, or enter a token in Settings"])
+                throw NSError(domain: "GeminiService", code: 401, userInfo: [NSLocalizedDescriptionKey: Self.credentialsFailureMessage(keychainDenied: local.keychainDenied, isZh: isZh)])
             }
             accessToken = refreshed
         } else if let stored = (token?.isEmpty == false ? token : local.token) {
             // No expiry info and no refresh token: try it, auth errors surface a clear message below.
             accessToken = stored
         } else {
-            throw NSError(domain: "GeminiService", code: 401, userInfo: [NSLocalizedDescriptionKey: isZh ? "未找到 Gemini 凭证，请在 Antigravity 中登录，或在设置中通过网站登录授权" : "No Gemini credentials found. Log in via Antigravity, or authorize via web login in Settings"])
+            throw NSError(domain: "GeminiService", code: 401, userInfo: [NSLocalizedDescriptionKey: local.keychainDenied
+                ? Self.credentialsFailureMessage(keychainDenied: true, isZh: isZh)
+                : (isZh ? "未找到 Gemini 凭证，请在 Antigravity 中登录，或在设置中通过网站登录授权" : "No Gemini credentials found. Log in via Antigravity, or authorize via web login in Settings")])
         }
 
-        let (fiveHour, weekly) = try await fetchQuotaWithAuthRetry(accessToken, refreshToken: refreshToken)
+        let (fiveHour, weekly) = try await fetchQuotaWithAuthRetry(accessToken, refreshToken: refreshToken, keychainDenied: local.keychainDenied)
 
         if detectedAccount == nil {
             detectedAccount = await fetchUserInfo(token: accessToken)
@@ -420,13 +440,15 @@ public actor GeminiService {
     }
 
     /// Fetches quota; on auth rejection refreshes the token (when possible) and retries once.
-    private func fetchQuotaWithAuthRetry(_ accessToken: String, refreshToken: String?) async throws -> (TokenWindow?, TokenWindow?) {
+    private func fetchQuotaWithAuthRetry(_ accessToken: String, refreshToken: String?, keychainDenied: Bool) async throws -> (fiveHour: TokenWindow?, weekly: TokenWindow?) {
         do {
             return try await fetchAntigravityQuota(accessToken: accessToken)
         } catch is QuotaAuthError {
             guard let refreshToken,
                   let refreshed = await refreshGoogleAccessToken(refreshToken: refreshToken) else {
-                throw NSError(domain: "GeminiService", code: 401, userInfo: [NSLocalizedDescriptionKey: isZh ? "Antigravity 凭证无效或已过期，请重新运行 agy 登录或在设置中更新凭证" : "Antigravity credentials are invalid or expired. Please log in again via agy or update credentials in Settings"])
+                throw NSError(domain: "GeminiService", code: 401, userInfo: [NSLocalizedDescriptionKey: keychainDenied
+                    ? Self.credentialsFailureMessage(keychainDenied: true, isZh: isZh)
+                    : (isZh ? "Antigravity 凭证无效或已过期，请重新运行 agy 登录或在设置中更新凭证" : "Antigravity credentials are invalid or expired. Please log in again via agy or update credentials in Settings")])
             }
             return try await fetchAntigravityQuota(accessToken: refreshed)
         }
