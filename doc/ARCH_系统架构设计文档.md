@@ -214,6 +214,13 @@ cdhash 匹配，而 cdhash 每次重新编译都变——于是每次构建后�
 `identifier "com.tokenbar.mac" and ... certificate leaf[subject.CN] = "..."`，
 重新编译不再反复授权。切换签名身份后第一次启动仍会问一次，点「始终允许」即可。
 
+**应用生命周期与单实例（`main.swift` / `AppDelegate`）**：`main` 入口在任何 UI 建立之前
+经 `SingleInstanceGuard` 以 `flock` 文件锁（`~/Library/Application Support/TokenBar/singleton.lock`）
+实现单实例——按文件加锁而不按 bundle ID 查询，是为了拦住「开发构建 + 正式安装版」以及
+直接执行二进制这类绕过 LaunchServices 的双开。第二实例退出前经分布式通知唤醒首实例弹出
+面板（与 Windows 端 Mutex + `EventWaitHandle` 行为对齐）；锁随进程退出（含崩溃）由内核
+自动释放，不存在残留死锁。
+
 ### 2.3 国际化与本地化架构 (`I18n.swift`)
 - **设计策略**：
   - 采用强类型枚举 `I18nKey` 管理所有中英文字符串键值。
