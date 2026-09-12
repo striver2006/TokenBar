@@ -24,7 +24,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
         Log.lifecycle.notice("TokenBar 启动，refreshInterval=\(RefreshManager.shared.settings.refreshIntervalMinutes, privacy: .public)min")
 
-        // 用户再次启动 TokenBar 时，第二个实例退出前会发该通知，这里弹出面板示意"我在这"
+        // 用户再次启动 TokenBar 时，第二个实例退出前会发该通知，这里弹出面板示意"我在这"。
+        // 弹窗限时自动收回：唤醒示意没有自然关闭时机，pin 着一直开会持续吃 CPU；
+        // 用户点按状态项接管则不收（MenuBarController 内部处理）。
         DistributedNotificationCenter.default().addObserver(
             forName: Notification.Name(SingleInstanceGuard.activateNotificationName),
             object: Bundle.main.bundleIdentifier,
@@ -32,7 +34,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         ) { _ in
             Log.lifecycle.notice("收到第二实例启动通知，弹出面板")
             Task { @MainActor in
-                MenuBarController.shared.togglePopoverOrOpenWindow()
+                MenuBarController.shared.togglePopoverOrOpenWindow(autoDismiss: 5)
             }
         }
 

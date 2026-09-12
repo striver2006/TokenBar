@@ -64,7 +64,9 @@ macOS 客户端采用纯 Swift 打造，支持 macOS 13 (Ventura) 及以上系�
     （`hoverOpenDelay` / `hoverCloseDelay`），定时器注册到 `.common` mode。`NSTrackingArea` 只覆盖
     状态栏按钮，鼠标「图标 → 浮窗 → 桌面」后不会再收到 exited，因此 `handleMouseMoved` 在鼠标既不在
     图标也不在浮窗内时必须重新安排关闭；`popoverDidClose` 是状态复位的唯一出口（`.transient`
-    点击外部关闭也走它）。
+    点击外部关闭也走它）。承载 `handleMouseMoved` 的本地 `mouseMoved` 监听器只在「悬停展开、
+    未 pin」期间按需安装，pin 或关闭即卸载——常驻安装时每个鼠标事件都要分配一个 Task 才能早退，
+    被唤醒的长跑弹窗会持续白白消耗 CPU。
   - 设置窗口的 `NSHostingView` 复用不重建；切 tab 与重新读钥匙串通过 `SettingsWindowRequest`
     通知视图（`.task(id: openCount)`），用户未保存的输入不会因为再次打开而丢失。
   - 绑定 `NSPopover`，将其根视图托管至 SwiftUI `TokenSummaryPopoverView`。
@@ -219,7 +221,11 @@ cdhash 匹配，而 cdhash 每次重新编译都变——于是每次构建后�
 实现单实例——按文件加锁而不按 bundle ID 查询，是为了拦住「开发构建 + 正式安装版」以及
 直接执行二进制这类绕过 LaunchServices 的双开。第二实例退出前经分布式通知唤醒首实例弹出
 面板（与 Windows 端 Mutex + `EventWaitHandle` 行为对齐）；锁随进程退出（含崩溃）由内核
-自动释放，不存在残留死锁。
+自动释放，不存在残留死锁。唤醒弹出的面板 5 秒后自动收回（唤醒示意没有自然关闭时机，
+`.transient` 只在用户点击其他应用时关闭，pin 着不关会把弹窗打开期间的每帧成本拉长为
+无限期），用户点按状态项即接管、不收；Dock / Finder reopen 路径用户在场，不自动收回。
+锁文件创建失败（目录不可写等）时降级放行作主实例，只有 `flock` 明确被占才判定已有实例——
+此前该场景会被误判成已有实例而 `exit(0)`，应用永远起不来。
 
 ### 2.3 国际化与本地化架构 (`I18n.swift`)
 - **设计策略**：

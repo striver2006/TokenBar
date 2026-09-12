@@ -11,15 +11,21 @@ import Foundation
 /// 由内核自动释放，不存在残留死锁。
 final class ProcessSingletonLock {
     private var fd: Int32 = -1
+    /// 连锁文件都创建不了（目录不可写、沙盒拒绝等）时为 true。
+    /// 此前这种情况会让 isLocked 为 false，实例被误判成「已有实例」而 exit(0)——
+    /// 连锁文件都建不了时应用永远起不来，与注释声明的降级语义相反。
+    private var degraded = false
 
     /// 在指定目录下尝试获取 `fileName` 的排他锁。
-    /// - Returns: false 表示锁已被另一个进程持有。fd 由本对象持有到进程结束，无需显式解锁。
+    /// - Returns: false 表示锁已被另一个进程明确持有（flock 被占）。
+    ///   open 失败时按降级处理返回 true（不拦截）；fd 由本对象持有到进程结束，无需显式解锁。
     init(directory: URL, fileName: String) {
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let path = directory.appendingPathComponent(fileName).path
         let newFD = open(path, O_RDWR | O_CREAT, 0o644)
         guard newFD >= 0 else {
             // 连锁文件都建不了（目录不可写等），退化为不拦截，别让应用起不来
+            degraded = true
             return
         }
         if flock(newFD, LOCK_EX | LOCK_NB) == 0 {
@@ -29,7 +35,7 @@ final class ProcessSingletonLock {
         }
     }
 
-    var isLocked: Bool { fd >= 0 }
+    var isLocked: Bool { fd >= 0 || degraded }
 
     deinit {
         if fd >= 0 { close(fd) }

@@ -88,9 +88,15 @@ public final class RefreshManager: ObservableObject {
     private var balanceAlertedKeys: Set<String> = []
 
     public init() {
-        if let savedData = UserDefaults.standard.data(forKey: userDefaultsKey),
-           let decoded = try? JSONDecoder().decode(AppSettings.self, from: savedData) {
-            self.settings = decoded
+        if let savedData = UserDefaults.standard.data(forKey: userDefaultsKey) {
+            do {
+                self.settings = try JSONDecoder().decode(AppSettings.self, from: savedData)
+            } catch {
+                // 回退默认值会静默关掉菜单栏摘要等用户开关（表现为"图标文字突然消失"），
+                // 必须留下能事后 log show 回溯的痕迹；错误详情可能含设置字段值，保持 private
+                Log.lifecycle.error("AppSettings 解码失败，回退默认设置：\(error.localizedDescription)")
+                self.settings = AppSettings.defaultSettings
+            }
         } else {
             self.settings = AppSettings.defaultSettings
         }

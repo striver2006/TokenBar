@@ -47,6 +47,10 @@ public final class MenuBarController: NSObject {
     private var statusItem: NSStatusItem!
     private var popover: NSPopover!
     private var hoverTimer: Timer?
+    /// 唤醒示意弹窗的自动收回定时器（一次性）；用户点按状态项接管后取消
+    private var autoDismissTimer: Timer?
+    /// 状态项内容心跳定时器，teardown 场景需与悬停定时器同样对待
+    private var statusItemHeartbeat: Timer?
     private var isPinnedByClick: Bool = false
     private var settingsWindow: NSWindow?
     private var trackingView: HoverTrackingView?
@@ -67,6 +71,9 @@ public final class MenuBarController: NSObject {
     static let hoverOpenDelay: TimeInterval = 0.15
     static let hoverCloseDelay: TimeInterval = 0.35
 
+    /// 状态项内容自愈心跳间隔：太久会放大空白时长，太短则频繁无谓重布局
+    static let statusItemHeartbeatInterval: TimeInterval = 300
+
     private override init() {
         super.init()
     }
@@ -84,17 +91,8 @@ public final class MenuBarController: NSObject {
         statusItem.autosaveName = "TokenBarStatusItem"
 
         if let button = statusItem.button {
-            let config = NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
-            if let image = NSImage(systemSymbolName: "gauge.with.dots.needle.bottom.50percent", accessibilityDescription: "TokenBar")?.withSymbolConfiguration(config) {
-                image.isTemplate = true
-                button.image = image
-            } else if let fallbackImage = NSImage(systemSymbolName: "chart.bar.fill", accessibilityDescription: "TokenBar") {
-                fallbackImage.isTemplate = true
-                button.image = fallbackImage
-            }
-
-            // 等宽数字，避免额度百分比跳动时菜单栏宽度抖动
-            button.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+            let iconApplied = applyStatusItemContent()
+            Log.lifecycle.notice("状态项已创建：图标赋值=\(iconApplied ? "成功" : "失败", privacy: .public)")
             button.target = self
             button.action = #selector(statusBarButtonClicked(_:))
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
@@ -115,6 +113,8 @@ public final class MenuBarController: NSObject {
 
             button.addSubview(tracker, positioned: .below, relativeTo: nil)
             self.trackingView = tracker
+        } else {
+            Log.lifecycle.error("setup 时状态项按钮为 nil，图标与字体未配置；待心跳路径重刷恢复")
         }
 
         // Setup Popover
@@ -147,16 +147,9 @@ public final class MenuBarController: NSObject {
             .store(in: &cancellables)
         updateStatusItemTitle()
 
-        // Mouse moved monitor to maintain hover when cursor is in popover or button
-        mouseMonitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved]) { [weak self] event in
-            Task { @MainActor in
-                self?.handleMouseMoved(event)
-            }
-            return event
-        }
-
         if Self.screenRelayoutEnabled {
             observeScreenChanges()
+            observeStatusItemHealth()
         }
     }
 
@@ -169,6 +162,8 @@ public final class MenuBarController: NSObject {
 
         // Left Click toggle
         cancelHoverTimer()
+        // 用户点按图标即接管弹窗，不再按唤醒示意的节奏自动收回
+        cancelAutoDismissTimer()
 
         if popover.isShown {
             if isPinnedByClick {
@@ -176,6 +171,7 @@ public final class MenuBarController: NSObject {
             } else {
                 // If it was open by hover, click now pins it
                 isPinnedByClick = true
+                removeMouseMonitor()
             }
         } else {
             isPinnedByClick = true
@@ -230,6 +226,26 @@ public final class MenuBarController: NSObject {
         scheduleHoverClose()
     }
 
+    /// 悬停态专用：光标在「图标 → 浮窗 → 桌面」路径上移动时的 mouseMoved 命中监听。
+    /// 只在未 pin 的弹窗展开期间存在；pinned / 关闭态装着它纯属浪费 —— 每个事件
+    /// 都要分配一个 Task 才能在守卫处早退，被第二实例唤醒的长跑弹窗会持续白白吃 CPU。
+    private func installMouseMonitorIfNeeded() {
+        guard mouseMonitor == nil else { return }
+        mouseMonitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved]) { [weak self] event in
+            Task { @MainActor in
+                self?.handleMouseMoved(event)
+            }
+            return event
+        }
+    }
+
+    private func removeMouseMonitor() {
+        if let monitor = mouseMonitor {
+            NSEvent.removeMonitor(monitor)
+            mouseMonitor = nil
+        }
+    }
+
     /// 鼠标在本进程窗口内移动时的命中判断。
     /// 路径「图标 → 浮窗 → 桌面」：离开图标时安排了关闭，进入浮窗时取消它；再从浮窗移出到
     /// 桌面后，NSTrackingArea 只覆盖状态栏按钮、不会再报 exited，所以必须在这里重新安排关闭，
@@ -246,6 +262,36 @@ public final class MenuBarController: NSObject {
         } else if hoverTimer == nil {
             scheduleHoverClose()
         }
+    }
+
+    /// 幂等地重刷状态项按钮的全部视觉内容（图标、字体、标题）。
+    ///
+    /// macOS 26 起状态项由系统进程托管渲染，长跑实例的按钮内容可能凭空丢失：
+    /// 位置仍保留、仍可点击，但图标与文字不再绘制（表现为菜单栏一块空白）。
+    /// setup() 的一次性赋值没有自愈能力，这里每次都重新构造 SF Symbol 并推一遍；
+    /// 相同取值对系统侧幂等，无可见副作用。
+    @discardableResult
+    private func applyStatusItemContent() -> Bool {
+        guard let button = statusItem?.button else {
+            Log.lifecycle.error("状态项按钮不可用，内容重刷跳过")
+            return false
+        }
+
+        let config = NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
+        if let image = NSImage(systemSymbolName: "gauge.with.dots.needle.bottom.50percent", accessibilityDescription: "TokenBar")?.withSymbolConfiguration(config) {
+            image.isTemplate = true
+            button.image = image
+        } else if let fallbackImage = NSImage(systemSymbolName: "chart.bar.fill", accessibilityDescription: "TokenBar") {
+            fallbackImage.isTemplate = true
+            button.image = fallbackImage
+        } else {
+            Log.lifecycle.error("SF Symbol 加载失败：gauge 与 chart.bar.fill 均不可用，图标缺失")
+        }
+
+        // 等宽数字，避免额度百分比跳动时菜单栏宽度抖动
+        button.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        updateStatusItemTitle()
+        return button.image != nil
     }
 
     /// 依据设置刷新菜单栏图标旁的额度摘要；未开启时只保留图标。
@@ -334,6 +380,13 @@ public final class MenuBarController: NSObject {
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         }
         popover.contentViewController?.view.window?.makeKey()
+
+        if popover.isShown, !isPinnedByClick {
+            installMouseMonitorIfNeeded()
+        } else {
+            // 展开失败或 pinned 场景：监听器没有存在的必要，装了就回收
+            removeMouseMonitor()
+        }
     }
 
     /// 透明、穿透点击、贴在菜单栏上的辅助面板，仅在缓存坐标不可信时作为 NSPopover 的定位视图。
@@ -373,7 +426,31 @@ public final class MenuBarController: NSObject {
         isPinnedByClick = false
     }
 
-    public func togglePopoverOrOpenWindow() {
+    /// 唤醒示意弹窗的自动收回：第二实例唤醒时弹出的面板没有自然关闭时机
+    /// （.transient 只在用户点击其他应用时关闭），pin 着一直开会把「弹窗打开期间」
+    /// 的每帧成本从秒级拉长为无限期。到点仍开着就收回。
+    private func scheduleAutoDismiss(after delay: TimeInterval) {
+        cancelAutoDismissTimer()
+        let timer = Timer(timeInterval: delay, repeats: false) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.popover.isShown else { return }
+                Log.lifecycle.debug("唤醒弹窗到期自动收回")
+                self.closePopover()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        autoDismissTimer = timer
+    }
+
+    private func cancelAutoDismissTimer() {
+        autoDismissTimer?.invalidate()
+        autoDismissTimer = nil
+    }
+
+    /// - Parameter autoDismiss: 非 nil 时（第二实例唤醒路径）弹窗在指定秒数后自动收回；
+    ///   Dock / Finder reopen 是用户主动行为、用户在场，传 nil 保持原样。
+    public func togglePopoverOrOpenWindow(autoDismiss: TimeInterval? = nil) {
+        cancelAutoDismissTimer()
         if popover.isShown {
             closePopover()
         } else {
@@ -382,6 +459,8 @@ public final class MenuBarController: NSObject {
             showPopover(anchor: .cached)
             if !popover.isShown {
                 openSettings(tab: .openAI)
+            } else if let autoDismiss {
+                scheduleAutoDismiss(after: autoDismiss)
             }
         }
     }
@@ -412,6 +491,28 @@ public final class MenuBarController: NSObject {
         }
     }
 
+    /// 状态项内容自愈。macOS 26 托管渲染可能在进程长跑期间丢掉按钮内容
+    /// （位置保留、可点击，但图标与文字不再绘制）；唤醒/显示器变化由
+    /// observeScreenChanges 覆盖，这里补 App 激活与低频心跳两条路径。
+    private func observeStatusItemHealth() {
+        NotificationCenter.default
+            .publisher(for: NSApplication.didBecomeActiveNotification)
+            .sink { [weak self] _ in
+                Task { @MainActor in self?.scheduleStatusItemRelayout(delay: 0.2) }
+            }
+            .store(in: &cancellables)
+
+        // 与悬停定时器同样注册到 .common mode，事件跟踪期间不被挂起
+        let heartbeat = Timer(timeInterval: Self.statusItemHeartbeatInterval, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.nudgeStatusItemLayout()
+                Log.lifecycle.debug("状态项心跳：内容已幂等重刷")
+            }
+        }
+        RunLoop.main.add(heartbeat, forMode: .common)
+        statusItemHeartbeat = heartbeat
+    }
+
     /// 睡眠期间定时器不 fire，唤醒后数据可能已经过期若干个周期，这里补刷一次。
     /// 两个唤醒通知会先后到达，靠 refreshIfStale 的时间判断 + refreshAll 的 isRefreshing 闸门去重。
     private func refreshAfterWake() async {
@@ -432,8 +533,10 @@ public final class MenuBarController: NSObject {
 
     /// 用"定长 → 变长"轻推状态项，迫使 NSStatusBar 重新布局并同步托管窗口 frame。
     /// 净宽度不变，因此不产生可见跳动；弹窗打开时跳过（布局变化会让 NSPopover 重定位）。
+    /// 轻推前先幂等重刷按钮内容：macOS 26 托管渲染丢失内容时，单纯重布局不足以重画图标与文字。
     private func nudgeStatusItemLayout() {
         guard let statusItem = statusItem, let button = statusItem.button, !popover.isShown else { return }
+        applyStatusItemContent()
         let width = button.bounds.width
         guard width > 0 else { return }
         statusItem.length = width
@@ -538,15 +641,16 @@ extension MenuBarController: NSPopoverDelegate {
         // .transient 点击外部关闭也会走到这里，状态必须在唯一出口复位
         isPinnedByClick = false
         cancelHoverTimer()
+        removeMouseMonitor()
+        cancelAutoDismissTimer()
         // 弹窗是辅助面板的子窗口，只能在它关闭之后再回收面板
         anchorPanel?.orderOut(nil)
         currentAnchorRect = nil
-        if lastShowUsedFallback {
-            lastShowUsedFallback = false
-            // 刚刚证实缓存坐标过期，趁弹窗关闭轻推一次，争取下次回到正常路径
-            if Self.screenRelayoutEnabled {
-                scheduleStatusItemRelayout(delay: 0.3)
-            }
+        // 轻推一次：lastShowUsedFallback 时争取下次回到正常锚点路径；
+        // 同时幂等重刷按钮内容（macOS 26 托管渲染可能在弹窗期间丢内容）
+        if Self.screenRelayoutEnabled {
+            scheduleStatusItemRelayout(delay: 0.3)
         }
+        lastShowUsedFallback = false
     }
 }
