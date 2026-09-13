@@ -804,7 +804,7 @@ namespace TokenBar.Services
                     quota.FiveHourWindow = fiveHour;
                     quota.WeeklyWindow = weekly;
                     // 远端若暂未下发 scoped 周额度，回落本地缓存，任一路有数据即可显示
-                    quota.ScopedWeeklyWindow = scopedWeekly ?? localClaude?.Value.ScopedWeekly;
+                    quota.ScopedWeeklyWindow = scopedWeekly ?? localClaude?.ScopedWeekly;
                     quota.IsAuthorized = true;
                     if (account != null) quota.AccountInfo = account;
                     foundAuth = true;
