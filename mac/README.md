@@ -43,15 +43,46 @@ open build/TokenBar.app
 
 ---
 
-## 🔐 首次启动与 Gatekeeper
+## 📦 分发构建：Developer ID 签名 + 公证（本机出包）
 
-本仓库的构建产物**未做开发者签名与公证**，首次双击运行可能被 macOS 拦截，
+日常开发用上面的默认构建（Apple Development 证书，钥匙串授权稳定）；
+**要分发给别人**时用分发流程，产物通过公证、双击即可打开，无 Gatekeeper 拦截：
+
+```bash
+# 1) Developer ID Application + Hardened Runtime 签名 → build/dist/TokenBar.app
+./Scripts/build_app.sh --distribute
+
+# 2) 提交公证 → 落票 → 打出发布 zip（TokenBar-v<版本>-macOS-universal.zip）
+./Scripts/notarize_app.sh
+```
+
+公证凭据是一次性配置（App Store Connect API Key 存进钥匙串）：
+
+```bash
+# appstoreconnect.apple.com → 用户和访问 → 集成 → 密钥：创建后下载 .p8
+xcrun notarytool store-credentials TokenBar-notary \
+  --key-id <KeyID> --issuer <IssuerID> --key </path/to/AuthKey_XXXX.p8>
+```
+
+说明：
+- 公证只接受 **Developer ID Application** 证书 + **Hardened Runtime** 签名；
+  `--distribute` 找不到证书会直接报错，绝不静默降级。
+- 分发版与开发版是**两个签名身份**：分发版的钥匙串条目授权互不通用
+  （装分发版后 API Key 等需要重新录入一次）；Gemini 的「Google 账号登录」
+  也需在新身份下重登一次，此后不再依赖任何钥匙串授权。
+- 发布 zip 命名与 CI 一致，可直接作为 GitHub Release 附件替换 CI 的未签名产物。
+
+---
+
+## 🔐 首次启动与 Gatekeeper（未签名/CI 构建产物）
+
+CI 与 ad-hoc 构建的产物**未做开发者签名与公证**，首次双击运行可能被 macOS 拦截，
 任选其一放行：
 
 - 系统设置 -> 隐私与安全性 -> 点击「仍要打开」；
 - 或对 .app 执行 `xattr -dr com.apple.quarantine build/TokenBar.app`。
 
-如需分发给其他用户，建议自行配置签名（`codesign`）与公证（`notarytool`）。
+需要免拦截的分发版请用上一节的「Developer ID 签名 + 公证」流程。
 
 ---
 

@@ -1,6 +1,23 @@
 #!/bin/bash
 set -e
 
+# 用法: ./Scripts/build_app.sh [--distribute]
+#   默认        : Apple Development 证书签名 → build/TokenBar.app（日常开发/自用）
+#   --distribute : Developer ID Application 证书 + Hardened Runtime 签名
+#                  → build/dist/TokenBar.app（可提交公证的分发版，见 Scripts/notarize_app.sh）
+#
+# 为什么分发版必须单独一条路：公证只接受 Developer ID 证书 + Hardened Runtime，
+# 而日常开发必须坚持同一张 Apple Development 证书（钥匙串 ACL 的 designated
+# requirement 绑定签名身份，换身份 = 已授权的钥匙串条目全部要重新授权一轮）。
+# 因此 --distribute 产物输出到独立目录，且身份缺失时直接报错退出，绝不静默降级。
+DISTRIBUTE=0
+for arg in "$@"; do
+    case "$arg" in
+        --distribute) DISTRIBUTE=1 ;;
+        *) echo "未知参数: $arg（可用: --distribute）" >&2; exit 1 ;;
+    esac
+done
+
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_DIR"
 
@@ -8,7 +25,11 @@ echo "==> 编译 TokenBar (Release, universal: arm64 + x86_64)..."
 swift build -c release --arch arm64 --arch x86_64
 
 APP_NAME="TokenBar"
-BUILD_DIR="$PROJECT_DIR/build"
+if [ "$DISTRIBUTE" -eq 1 ]; then
+    BUILD_DIR="$PROJECT_DIR/build/dist"
+else
+    BUILD_DIR="$PROJECT_DIR/build"
+fi
 APP_BUNDLE="$BUILD_DIR/$APP_NAME.app"
 MACOS_DIR="$APP_BUNDLE/Contents/MacOS"
 RESOURCES_DIR="$APP_BUNDLE/Contents/Resources"
@@ -68,26 +89,48 @@ echo -n "APPL????" > "$APP_BUNDLE/Contents/PkgInfo"
 #   2. Scripts/signing.local.env（未跟踪，见同目录 signing.local.env.example）
 #   3. 都没有则退回 ad-hoc
 SIGNING_ENV="$PROJECT_DIR/Scripts/signing.local.env"
-if [ -z "$CODESIGN_IDENTITY" ] && [ -f "$SIGNING_ENV" ]; then
+if [ -z "$CODESIGN_IDENTITY" ] && [ -z "$CODESIGN_DISTRIBUTION_IDENTITY" ] && [ -f "$SIGNING_ENV" ]; then
     # shellcheck source=/dev/null
     . "$SIGNING_ENV"
 fi
-CODESIGN_IDENTITY="${CODESIGN_IDENTITY:--}"
 
-if [ "$CODESIGN_IDENTITY" = "-" ]; then
-    echo "==> 执行 ad-hoc 签名（钥匙串会反复要求授权）..."
-    echo "    如需固定签名身份：cp Scripts/signing.local.env.example Scripts/signing.local.env 并填入" >&2
-    echo "    security find-identity -v -p codesigning 里的 SHA-1 哈希" >&2
-    codesign --force --deep --sign - "$APP_BUNDLE"
-elif security find-identity -v -p codesigning | grep -q "$CODESIGN_IDENTITY"; then
-    echo "==> 使用开发者证书签名: $CODESIGN_IDENTITY"
-    codesign --force --deep --sign "$CODESIGN_IDENTITY" "$APP_BUNDLE"
+if [ "$DISTRIBUTE" -eq 1 ]; then
+    # ---- 分发签名：Developer ID Application + Hardened Runtime（公证的硬性要求）----
+    # 身份优先级：CODESIGN_DISTRIBUTION_IDENTITY 环境变量 → signing.local.env
+    #            → 钥匙串里自动探测第一张 "Developer ID Application" 证书。
+    # 找不到就报错退出：发布产物绝不能静默降级成开发签名或 ad-hoc。
+    # find-identity 输出形如 `   5) <SHA-1哈希> "Developer ID Application: ..."`，哈希在第 2 列
+    CODESIGN_DISTRIBUTION_IDENTITY="${CODESIGN_DISTRIBUTION_IDENTITY:-$(security find-identity -v -p codesigning | grep "Developer ID Application" | head -1 | awk '{print $2}')}"
+    if [ -z "$CODESIGN_DISTRIBUTION_IDENTITY" ] || \
+       ! security find-identity -v -p codesigning | grep -q "$CODESIGN_DISTRIBUTION_IDENTITY"; then
+        echo "错误：未找到可用的 Developer ID Application 证书，无法构建分发版。" >&2
+        echo "  - 确认已在 https://developer.apple.com 创建 Developer ID 证书并导入本机钥匙串" >&2
+        echo "  - 或在 Scripts/signing.local.env 里显式配置 CODESIGN_DISTRIBUTION_IDENTITY" >&2
+        exit 1
+    fi
+    echo "==> 使用 Developer ID 证书签名（Hardened Runtime）: $CODESIGN_DISTRIBUTION_IDENTITY"
+    codesign --force --deep --sign "$CODESIGN_DISTRIBUTION_IDENTITY" --options runtime --timestamp "$APP_BUNDLE"
+    echo "==> 构建完成！分发产物路径: $APP_BUNDLE"
+    echo "下一步：提交公证并落票："
+    echo "  ./Scripts/notarize_app.sh"
 else
-    echo "警告：签名身份 $CODESIGN_IDENTITY 不可用，退回 ad-hoc 签名" >&2
-    echo "      （钥匙串将反复要求授权；用 security find-identity -v -p codesigning 查看可用身份）" >&2
-    codesign --force --deep --sign - "$APP_BUNDLE"
-fi
+    CODESIGN_IDENTITY="${CODESIGN_IDENTITY:--}"
 
-echo "==> 构建完成！产物路径: $APP_BUNDLE"
-echo "可以通过以下命令启动测试："
-echo "open $APP_BUNDLE"
+    if [ "$CODESIGN_IDENTITY" = "-" ]; then
+        echo "==> 执行 ad-hoc 签名（钥匙串会反复要求授权）..."
+        echo "    如需固定签名身份：cp Scripts/signing.local.env.example Scripts/signing.local.env 并填入" >&2
+        echo "    security find-identity -v -p codesigning 里的 SHA-1 哈希" >&2
+        codesign --force --deep --sign - "$APP_BUNDLE"
+    elif security find-identity -v -p codesigning | grep -q "$CODESIGN_IDENTITY"; then
+        echo "==> 使用开发者证书签名: $CODESIGN_IDENTITY"
+        codesign --force --deep --sign "$CODESIGN_IDENTITY" "$APP_BUNDLE"
+    else
+        echo "警告：签名身份 $CODESIGN_IDENTITY 不可用，退回 ad-hoc 签名" >&2
+        echo "      （钥匙串将反复要求授权；用 security find-identity -v -p codesigning 查看可用身份）" >&2
+        codesign --force --deep --sign - "$APP_BUNDLE"
+    fi
+
+    echo "==> 构建完成！产物路径: $APP_BUNDLE"
+    echo "可以通过以下命令启动测试："
+    echo "open $APP_BUNDLE"
+fi
