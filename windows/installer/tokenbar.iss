@@ -1,14 +1,10 @@
 ; TokenBar Windows 安装包脚本（Inno Setup 6.3+）
 ;
 ; CI 调用（release.yml 的 build-windows 矩阵任务）：
-;   ISCC.exe /DAppVersion=x.y.z /DArch=x64|arm64 /DSourceExe="pack\TokenBar.exe" tokenbar.iss
-; 本地调用（需先 dotnet publish 单文件 exe）：
-;   ISCC.exe /DAppVersion=1.3.0 /DArch=x64 tokenbar.iss   （SourceExe 缺省 pack\TokenBar.exe）
-;
-; 设计约定：
-;   - 按用户安装（PrivilegesRequired=lowest，装进 {localappdata}\Programs\TokenBar），
-;     与 windows/install.ps1 的安装目录一致，无需管理员权限、不弹 UAC
-;   - 中文为缺省向导语言（ChineseSimplified.isl 随仓库分发，来自 issrc 官方语言包）
+;   ISCC.exe /DAppVersion=x.y.z /DArch=x64|arm64 /DSourceExe="<绝对路径>\pack\TokenBar.exe" tokenbar.iss
+;   注意：Source 路径相对 .iss 脚本目录解析，非工作目录——本地手动调用请传绝对路径。
+; 本地调用（需先 dotnet publish 单文件 exe 到 windows\pack\TokenBar.exe）：
+;   ISCC.exe /DAppVersion=1.3.0 /DArch=x64 tokenbar.iss
 
 #ifndef AppVersion
 #define AppVersion "0.0.0"
@@ -19,8 +15,13 @@
 #endif
 
 #ifndef SourceExe
-#define SourceExe "pack\TokenBar.exe"
+#define SourceExe "..\pack\TokenBar.exe"
 #endif
+
+; 设计约定：
+;   - 按用户安装（PrivilegesRequired=lowest，装进 {localappdata}\Programs\TokenBar），
+;     与 windows/install.ps1 的安装目录一致，无需管理员权限、不弹 UAC
+;   - 中文为缺省向导语言（ChineseSimplified.isl 随仓库分发，来自 issrc 官方语言包）
 
 #define AppName "TokenBar"
 #define AppPublisher "TokenBar Team"

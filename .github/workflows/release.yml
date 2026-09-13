@@ -49,7 +49,7 @@ jobs:
           Copy-Item "TokenBar-$env:TAG_NAME-${{ matrix.rid }}.exe" "pack\TokenBar.exe"
           $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) { $iscc = (Get-Command iscc).Source }
-          & $iscc /DAppVersion=$version /DArch=${{ matrix.rid }} /DSourceExe="pack\TokenBar.exe" "windows\installer\tokenbar.iss"
+          & $iscc /DAppVersion=$version /DArch=${{ matrix.rid }} /DSourceExe="$(Resolve-Path "pack\TokenBar.exe")" "windows\installer\tokenbar.iss"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Move-Item "windows\installer\Output\*.exe" .
 
