@@ -19,13 +19,14 @@
 ### 1.2 Windows 系统
 1. **系统要求**：Windows 10 (1809 及以上) 或 Windows 11。
 2. **运行时环境**：已安装 [.NET 8.0 Runtime](https://dotnet.microsoft.com/download/dotnet/8.0)（若使用独立打包的 Self-contained 单文件版本则无需手动安装）。
-3. **启动应用**：
-   - 双击运行 `TokenBar.exe`。
-   - 启动后，TokenBar 会自动常驻在右下角任务栏通知区域（系统托盘）中。
+3. **安装方式（二选一）**：
+   - **安装包（推荐）**：从 Releases 下载 `TokenBar-vX.Y.Z-win-x64-setup.exe`（Intel/AMD）或 `TokenBar-vX.Y.Z-win-arm64-setup.exe`（ARM 设备），双击安装——按用户安装到 `%LOCALAPPDATA%\Programs\TokenBar\`（无需管理员权限），自动创建开始菜单快捷方式并注册系统卸载项（「设置 → 应用」可卸载）。
+   - **便携版**：下载 `TokenBar-vX.Y.Z-win-x64.exe` / `-win-arm64.exe` 单文件，双击直接运行，TokenBar 常驻右下角任务栏通知区域（系统托盘）；如需快捷方式与卸载项，见下方 install.ps1 流程。
 4. **从源码构建安装（可选）**：克隆仓库后在 `windows/` 目录执行
    `dotnet publish src/TokenBar/TokenBar.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish`，
    再运行 `powershell -ExecutionPolicy Bypass -File install.ps1` 即可一键安装/升级到本机
    （自动停止旧实例、复制 exe 至 `%LOCALAPPDATA%\Programs\TokenBar\` 并创建快捷方式）。
+   也可用 Inno Setup 编译 `windows/installer/tokenbar.iss` 生成与 Releases 一致的安装包。
    注意必须使用自包含单文件参数发布，否则安装后应用无法启动。
 
 ---
