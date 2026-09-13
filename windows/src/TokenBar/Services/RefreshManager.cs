@@ -347,6 +347,7 @@ namespace TokenBar.Services
                 q.AccountInfo = localClaude.Value.Account;
                 q.FiveHourWindow = localClaude.Value.FiveHour;
                 q.WeeklyWindow = localClaude.Value.Weekly;
+                q.ScopedWeeklyWindow = localClaude.Value.ScopedWeekly;
                 q.LastUpdated = DateTime.Now;
             }
 
@@ -798,10 +799,12 @@ namespace TokenBar.Services
             {
                 try
                 {
-                    var (fiveHour, weekly, account) = await ClaudeService.Instance.FetchRemoteUsageAsync(Settings.ClaudeToken, ct);
+                    var (fiveHour, weekly, scopedWeekly, account) = await ClaudeService.Instance.FetchRemoteUsageAsync(Settings.ClaudeToken, ct);
                     if (IsStaleGeneration(generation, "claude")) return;
                     quota.FiveHourWindow = fiveHour;
                     quota.WeeklyWindow = weekly;
+                    // 远端若暂未下发 scoped 周额度，回落本地缓存，任一路有数据即可显示
+                    quota.ScopedWeeklyWindow = scopedWeekly ?? localClaude?.Value.ScopedWeekly;
                     quota.IsAuthorized = true;
                     if (account != null) quota.AccountInfo = account;
                     foundAuth = true;
@@ -815,6 +818,7 @@ namespace TokenBar.Services
                     {
                         quota.FiveHourWindow = localClaude.Value.FiveHour;
                         quota.WeeklyWindow = localClaude.Value.Weekly;
+                        quota.ScopedWeeklyWindow = localClaude.Value.ScopedWeekly;
                         quota.IsAuthorized = true;
                         if (localClaude.Value.Account != null) quota.AccountInfo = localClaude.Value.Account;
                         foundAuth = true;
@@ -825,6 +829,7 @@ namespace TokenBar.Services
             {
                 quota.FiveHourWindow = localClaude.Value.FiveHour;
                 quota.WeeklyWindow = localClaude.Value.Weekly;
+                quota.ScopedWeeklyWindow = localClaude.Value.ScopedWeekly;
                 quota.IsAuthorized = true;
                 if (localClaude.Value.Account != null) quota.AccountInfo = localClaude.Value.Account;
                 foundAuth = true;
@@ -1399,6 +1404,7 @@ namespace TokenBar.Services
                 quota.AccountInfo = local.Value.Account;
                 quota.FiveHourWindow = local.Value.FiveHour;
                 quota.WeeklyWindow = local.Value.Weekly;
+                quota.ScopedWeeklyWindow = local.Value.ScopedWeekly;
                 quota.LastUpdated = DateTime.Now;
                 NotifyQuotasUpdated();
                 return true;

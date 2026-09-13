@@ -29,12 +29,12 @@ public final class ClaudeService: @unchecked Sendable {
     /// async：重度 Claude Code 用户的 `~/.claude.json` 常有数 MB（history / projects），
     /// 在 MainActor 上同步全量解析是每轮刷新都能感知的卡顿，与 GeminiService.readLocalGeminiFiles
     /// 同样挪到后台线程。
-    public func readLocalClaudeJson() async -> (fiveHour: TokenWindow?, weekly: TokenWindow?, account: String?)? {
+    public func readLocalClaudeJson() async -> (fiveHour: TokenWindow?, weekly: TokenWindow?, scopedWeekly: TokenWindow?, account: String?)? {
         await Task.detached(priority: .userInitiated) { self.readLocalClaudeJsonSync() }.value
     }
 
     /// 同步实现，只应在后台线程调用
-    func readLocalClaudeJsonSync() -> (fiveHour: TokenWindow?, weekly: TokenWindow?, account: String?)? {
+    func readLocalClaudeJsonSync() -> (fiveHour: TokenWindow?, weekly: TokenWindow?, scopedWeekly: TokenWindow?, account: String?)? {
         let homeDir = FileManager.default.homeDirectoryForCurrentUser
         let claudeJsonUrl = homeDir.appendingPathComponent(".claude.json")
 
@@ -53,8 +53,34 @@ public final class ClaudeService: @unchecked Sendable {
         }
     }
 
+    /// 从 limits[] 里解析按模型圈定的周额度（如 Fable / Opus 专属周额度）。
+    /// 条目形如 {kind: "weekly_scoped", percent: 42, resets_at: ..., scope: {model: {display_name: "Fable"}}}。
+    /// display_name 缺失的条目给不出有意义的标题，跳过；取第一条匹配。
+    private func parseScopedWeeklyLimit(_ limits: [[String: Any]]) -> TokenWindow? {
+        for limit in limits where (limit["kind"] as? String) == "weekly_scoped" {
+            guard let scope = limit["scope"] as? [String: Any],
+                  let model = scope["model"] as? [String: Any],
+                  let displayName = model["display_name"] as? String,
+                  !displayName.isEmpty else {
+                continue
+            }
+            let pct = (limit["percent"] as? NSNumber)?.doubleValue ?? 0.0
+            let now = Date()
+            let resetsAt = (limit["resets_at"] as? String).flatMap { parseDate($0) } ?? now.addingTimeInterval(7 * 86400)
+            return TokenWindow(
+                title: displayName,
+                usedPercentage: pct,
+                startTime: resetsAt.addingTimeInterval(-7 * 86400),
+                endTime: resetsAt,
+                unit: "%",
+                isIdle: false
+            )
+        }
+        return nil
+    }
+
     /// 纯解析 `~/.claude.json` 的内容，不碰文件系统，便于用 fixture 单测
-    public func parseLocalClaudeJson(_ json: [String: Any]) -> (fiveHour: TokenWindow?, weekly: TokenWindow?, account: String?) {
+    public func parseLocalClaudeJson(_ json: [String: Any]) -> (fiveHour: TokenWindow?, weekly: TokenWindow?, scopedWeekly: TokenWindow?, account: String?) {
             var accountEmail: String? = nil
             if let oauthAccount = json["oauthAccount"] as? [String: Any] {
                 accountEmail = oauthAccount["emailAddress"] as? String ?? oauthAccount["displayName"] as? String
@@ -72,11 +98,12 @@ public final class ClaudeService: @unchecked Sendable {
                     unit: "%",
                     isIdle: true
                 )
-                return (fiveHour, nil, accountEmail)
+                return (fiveHour, nil, nil, accountEmail)
             }
 
             var fiveHourWindow: TokenWindow? = nil
             var weeklyWindow: TokenWindow? = nil
+            var scopedWeeklyWindow: TokenWindow? = nil
 
             // 1. Parse 5-hour session window
             if let fiveHour = utilization["five_hour"] as? [String: Any] {
@@ -184,11 +211,17 @@ public final class ClaudeService: @unchecked Sendable {
                 )
             }
 
-            return (fiveHourWindow, weeklyWindow, accountEmail)
+            // 3. 按模型圈定的周额度（如 Fable）：weekly fallback 取 first(group == "weekly")
+            // 仍命中 weekly_all，与此互不干扰
+            if let limits = utilization["limits"] as? [[String: Any]] {
+                scopedWeeklyWindow = parseScopedWeeklyLimit(limits)
+            }
+
+            return (fiveHourWindow, weeklyWindow, scopedWeeklyWindow, accountEmail)
     }
 
     /// Fetch latest usage statistics from Anthropic OAuth usage API
-    public func fetchRemoteUsage(token: String) async throws -> (fiveHour: TokenWindow?, weekly: TokenWindow?, account: String?) {
+    public func fetchRemoteUsage(token: String) async throws -> (fiveHour: TokenWindow?, weekly: TokenWindow?, scopedWeekly: TokenWindow?, account: String?) {
         guard let url = URL(string: "https://api.anthropic.com/api/oauth/usage") else {
             throw URLError(.badURL)
         }
@@ -288,7 +321,11 @@ public final class ClaudeService: @unchecked Sendable {
             }
         }
 
-        return (fiveHourWindow, weeklyWindow, nil)
+        // 3. 按模型圈定的周额度（如 Fable）：响应与 cachedUsageUtilization 同构，
+        // 若暂未下发 limits 字段则自然为 nil，由调用方回落本地缓存
+        let scopedWeeklyWindow = (json["limits"] as? [[String: Any]]).flatMap { parseScopedWeeklyLimit($0) }
+
+        return (fiveHourWindow, weeklyWindow, scopedWeeklyWindow, nil)
     }
 
     /// Fetch usage / rate limits using Anthropic API key via GET /v1/models

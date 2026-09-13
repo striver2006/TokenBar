@@ -51,7 +51,12 @@ final class TokenBarTests: XCTestCase {
             "cachedUsageUtilization": [
                 "utilization": [
                     "five_hour": ["utilization": 37.5, "resets_at": resetsAt],
-                    "limits": [["kind": "weekly_all", "percent": 12, "resets_at": weeklyReset]]
+                    "limits": [
+                        ["kind": "weekly_all", "percent": 12, "resets_at": weeklyReset],
+                        // Fable 专属周额度（weekly_scoped），取自真实缓存结构
+                        ["kind": "weekly_scoped", "percent": 42, "resets_at": weeklyReset,
+                         "scope": ["model": ["id": NSNull(), "display_name": "Fable"]]]
+                    ]
                 ]
             ]
         ]
@@ -62,7 +67,26 @@ final class TokenBarTests: XCTestCase {
         XCTAssertFalse(fiveHour.isIdle)
         XCTAssertEqual(fiveHour.endTime.timeIntervalSince(fiveHour.startTime), 5 * 3600, accuracy: 1)
         let weekly = try XCTUnwrap(parsed.weekly)
+        // weekly fallback 取 first(group == "weekly")，仍命中 weekly_all 而非 weekly_scoped
         XCTAssertEqual(weekly.usedPercentage, 12, accuracy: 0.001)
+        let scopedWeekly = try XCTUnwrap(parsed.scopedWeekly)
+        XCTAssertEqual(scopedWeekly.usedPercentage, 42, accuracy: 0.001)
+        XCTAssertEqual(scopedWeekly.title, "Fable")
+    }
+
+    func testClaudeScopedWeeklyWithoutModelName() {
+        // weekly_scoped 但缺 scope.model.display_name：给不出有意义的标题，应整体跳过
+        let json: [String: Any] = [
+            "cachedUsageUtilization": [
+                "utilization": [
+                    "five_hour": ["utilization": 10],
+                    "limits": [["kind": "weekly_scoped", "percent": 42]]
+                ]
+            ]
+        ]
+        let parsed = ClaudeService.shared.parseLocalClaudeJson(json)
+        XCTAssertNil(parsed.scopedWeekly)
+        XCTAssertNotNil(parsed.fiveHour)
     }
 
     func testClaudeLocalConfigParserWithoutCachedUsage() {
@@ -72,6 +96,7 @@ final class TokenBarTests: XCTestCase {
         XCTAssertNotNil(parsed.fiveHour)
         XCTAssertTrue(parsed.fiveHour?.isIdle ?? false)
         XCTAssertNil(parsed.weekly)
+        XCTAssertNil(parsed.scopedWeekly)
     }
 
     func testProviderTypes() {

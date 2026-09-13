@@ -338,6 +338,7 @@ public final class RefreshManager: ObservableObject {
             quota.accountInfo = localClaude.account
             quota.fiveHourWindow = localClaude.fiveHour
             quota.weeklyWindow = localClaude.weekly
+            quota.scopedWeeklyWindow = localClaude.scopedWeekly
             quota.lastUpdated = Date()
             quotas[.claudeCode] = quota
         }
@@ -596,6 +597,8 @@ public final class RefreshManager: ObservableObject {
                 let res = try await ClaudeService.shared.fetchRemoteUsage(token: settings.claudeToken)
                 quota.fiveHourWindow = res.fiveHour
                 quota.weeklyWindow = res.weekly
+                // 远端若暂未下发 scoped 周额度，回落本地缓存，任一路有数据即可显示
+                quota.scopedWeeklyWindow = res.scopedWeekly ?? localClaude?.scopedWeekly
                 quota.isAuthorized = true
                 if let acc = res.account { quota.accountInfo = acc }
                 foundAuth = true
@@ -603,6 +606,7 @@ public final class RefreshManager: ObservableObject {
                 if let local = localClaude {
                     quota.fiveHourWindow = local.fiveHour
                     quota.weeklyWindow = local.weekly
+                    quota.scopedWeeklyWindow = local.scopedWeekly
                     quota.isAuthorized = true
                     if let acc = local.account { quota.accountInfo = acc }
                     foundAuth = true
@@ -614,6 +618,7 @@ public final class RefreshManager: ObservableObject {
         } else if let local = localClaude {
             quota.fiveHourWindow = local.fiveHour
             quota.weeklyWindow = local.weekly
+            quota.scopedWeeklyWindow = local.scopedWeekly
             quota.isAuthorized = true
             if let acc = local.account { quota.accountInfo = acc }
             foundAuth = true
@@ -848,6 +853,7 @@ public final class RefreshManager: ObservableObject {
             quota.accountInfo = local.account
             quota.fiveHourWindow = local.fiveHour
             quota.weeklyWindow = local.weekly
+            quota.scopedWeeklyWindow = local.scopedWeekly
             quota.lastUpdated = Date()
             quotas[.claudeCode] = quota
             return true

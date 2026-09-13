@@ -292,7 +292,8 @@ namespace TokenBar.Views
                 errorDock.Children.Add(msgBlock);
                 stack.Children.Add(errorDock);
             }
-            else if (quota.FiveHourWindow == null && quota.WeeklyWindow == null && quota.BalanceWindow == null)
+            else if (quota.FiveHourWindow == null && quota.WeeklyWindow == null && quota.BalanceWindow == null
+                     && quota.ScopedWeeklyWindow == null)
             {
                 var syncBlock = new TextBlock
                 {
@@ -342,6 +343,17 @@ namespace TokenBar.Views
                 if (quota.WeeklyWindow != null)
                 {
                     stack.Children.Add(CreateWindowQuotaRow(quota.WeeklyWindow, LocalizationManager.Instance.WeeklyWindow));
+                }
+
+                if (quota.WeeklyWindow != null && quota.ScopedWeeklyWindow != null)
+                {
+                    stack.Children.Add(CreateSeparator());
+                }
+
+                // 按模型圈定的周额度（如 Fable）
+                if (quota.ScopedWeeklyWindow != null)
+                {
+                    stack.Children.Add(CreateWindowQuotaRow(quota.ScopedWeeklyWindow, LocalizationManager.Instance.WeeklyWindow));
                 }
             }
 

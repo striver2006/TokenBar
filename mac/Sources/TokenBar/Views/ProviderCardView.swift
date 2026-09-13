@@ -68,7 +68,8 @@ public struct ProviderCardView: View {
                 }
                 .padding(.vertical, 4)
             } else {
-                if quota.fiveHourWindow == nil && quota.weeklyWindow == nil && quota.balanceWindow == nil {
+                if quota.fiveHourWindow == nil && quota.weeklyWindow == nil && quota.balanceWindow == nil
+                    && quota.scopedWeeklyWindow == nil {
                     HStack {
                         Image(systemName: "hourglass")
                             .foregroundColor(.secondary)
@@ -108,6 +109,16 @@ public struct ProviderCardView: View {
                     // Weekly Window Section
                     if let weekly = quota.weeklyWindow {
                         WindowQuotaRow(window: weekly, badgeText: I18n(.weeklyWindow))
+                    }
+
+                    if quota.weeklyWindow != nil && quota.scopedWeeklyWindow != nil {
+                        Divider()
+                            .opacity(0.5)
+                    }
+
+                    // Scoped Weekly Section（按模型圈定的周额度，如 Fable）
+                    if let scoped = quota.scopedWeeklyWindow {
+                        WindowQuotaRow(window: scoped, badgeText: I18n(.weeklyWindow))
                     }
                 }
             }

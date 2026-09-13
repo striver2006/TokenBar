@@ -17,7 +17,7 @@ namespace TokenBar.Services
 
         private ClaudeService() { }
 
-        public (TokenWindow? FiveHour, TokenWindow? Weekly, string? Account)? ReadLocalClaudeJson()
+        public (TokenWindow? FiveHour, TokenWindow? Weekly, TokenWindow? ScopedWeekly, string? Account)? ReadLocalClaudeJson()
         {
             var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             var claudeJsonPath = Path.Combine(userProfile, ".claude.json");
@@ -60,7 +60,7 @@ namespace TokenBar.Services
                         Unit = "%",
                         IsIdle = true
                     };
-                    return (initialFiveHour, null, accountEmail);
+                    return (initialFiveHour, null, null, accountEmail);
                 }
 
                 TokenWindow? fiveHourWindow = null;
@@ -227,7 +227,11 @@ namespace TokenBar.Services
                     }
                 }
 
-                return (fiveHourWindow, weeklyWindow, accountEmail);
+                // 按模型圈定的周额度（如 Fable）：weekly fallback 取 first(group == "weekly")
+                // 仍命中 weekly_all 而非 weekly_scoped，互不干扰
+                var scopedWeeklyWindow = ParseScopedWeeklyLimit(utilization);
+
+                return (fiveHourWindow, weeklyWindow, scopedWeeklyWindow, accountEmail);
             }
             catch (Exception ex)
             {
@@ -253,7 +257,61 @@ namespace TokenBar.Services
             return false;
         }
 
-        public async Task<(TokenWindow? FiveHour, TokenWindow? Weekly, string? Account)> FetchRemoteUsageAsync(string token, CancellationToken ct = default)
+        /// <summary>
+        /// 从 limits[] 里解析按模型圈定的周额度（如 Fable / Opus 专属周额度）。
+        /// 条目形如 {kind: "weekly_scoped", percent: 42, resets_at: ..., scope: {model: {display_name: "Fable"}}}。
+        /// display_name 缺失的条目给不出有意义的标题，跳过；取第一条匹配。
+        /// </summary>
+        private static TokenWindow? ParseScopedWeeklyLimit(JsonElement parent)
+        {
+            if (!parent.TryGetProperty("limits", out var limits) || limits.ValueKind != JsonValueKind.Array)
+            {
+                return null;
+            }
+
+            foreach (var limit in limits.EnumerateArray())
+            {
+                if (!limit.TryGetProperty("kind", out var kind) || kind.GetString() != "weekly_scoped")
+                {
+                    continue;
+                }
+
+                if (!limit.TryGetProperty("scope", out var scope) ||
+                    !scope.TryGetProperty("model", out var model) ||
+                    !model.TryGetProperty("display_name", out var displayNameProp))
+                {
+                    continue;
+                }
+
+                var displayName = displayNameProp.GetString();
+                if (string.IsNullOrEmpty(displayName))
+                {
+                    continue;
+                }
+
+                var pct = limit.TryGetProperty("percent", out var pp) ? pp.GetDouble() : 0.0;
+                var resetsAtStr = limit.TryGetProperty("resets_at", out var rp) ? rp.GetString() : null;
+                var resetsAt = DateTime.Now.AddDays(7);
+                if (!string.IsNullOrEmpty(resetsAtStr) && TryParseUtc(resetsAtStr, out var parsedReset))
+                {
+                    resetsAt = parsedReset;
+                }
+
+                return new TokenWindow
+                {
+                    Title = displayName,
+                    UsedPercentage = pct,
+                    StartTime = resetsAt.AddDays(-7),
+                    EndTime = resetsAt,
+                    Unit = "%",
+                    IsIdle = false
+                };
+            }
+
+            return null;
+        }
+
+        public async Task<(TokenWindow? FiveHour, TokenWindow? Weekly, TokenWindow? ScopedWeekly, string? Account)> FetchRemoteUsageAsync(string token, CancellationToken ct = default)
         {
             var cleanToken = token.Trim();
             using var req = new HttpRequestMessage(HttpMethod.Get, "https://api.anthropic.com/api/oauth/usage");
@@ -357,7 +415,10 @@ namespace TokenBar.Services
                 }
             }
 
-            return (fiveHourWindow, weeklyWindow, null);
+            // 与 cachedUsageUtilization 同构；若暂未下发 limits 字段则自然为 null，由调用方回落本地缓存
+            var scopedWeeklyWindow = ParseScopedWeeklyLimit(root);
+
+            return (fiveHourWindow, weeklyWindow, scopedWeeklyWindow, null);
         }
 
         public async Task<(TokenWindow? Primary, TokenWindow? Secondary, string? Account)> FetchAnthropicQuotaAsync(

@@ -271,6 +271,10 @@ public struct ProviderQuota: Identifiable, Codable {
     public var accountInfo: String?
     public var fiveHourWindow: TokenWindow?
     public var weeklyWindow: TokenWindow?
+    /// 第四槽位：按模型圈定的周额度（如 Anthropic 订阅的 Fable/Opus 专属周额度，
+    /// 来自 ~/.claude.json limits[] 的 weekly_scoped 条目，title 即模型显示名）。
+    /// 没有这类额度的厂商保持 nil，卡片不会渲染这一行。
+    public var scopedWeeklyWindow: TokenWindow?
     /// 第三个槽位：与时间窗口额度并存的货币余额（目前用于阿里云百炼的账户现金余额）。
     /// 只用两个槽位的厂商保持 nil，卡片不会渲染这一行。
     public var balanceWindow: TokenWindow?
@@ -285,6 +289,7 @@ public struct ProviderQuota: Identifiable, Codable {
         accountInfo: String? = nil,
         fiveHourWindow: TokenWindow? = nil,
         weeklyWindow: TokenWindow? = nil,
+        scopedWeeklyWindow: TokenWindow? = nil,
         balanceWindow: TokenWindow? = nil,
         lastUpdated: Date? = nil,
         errorMessage: String? = nil,
@@ -296,6 +301,7 @@ public struct ProviderQuota: Identifiable, Codable {
         self.accountInfo = accountInfo
         self.fiveHourWindow = fiveHourWindow
         self.weeklyWindow = weeklyWindow
+        self.scopedWeeklyWindow = scopedWeeklyWindow
         self.balanceWindow = balanceWindow
         self.lastUpdated = lastUpdated
         self.errorMessage = errorMessage

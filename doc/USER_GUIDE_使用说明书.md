@@ -93,6 +93,7 @@ TokenBar 独家支持双重模式：
 - **方式二：Claude Code 订阅授权 (推荐)**：
   - **自动读取本地**：若您在终端中已登录过 Claude Code CLI，点击「读取本地 CLI 授权」按钮，TokenBar 将自动读取 `~/.claude.json` 中的会话凭据。
   - **网页登录授权**：点击「网站登录授权」，在弹出窗口完成登录即可完成绑定。
+  - **模型专属周额度**：若您的套餐包含某模型的独立周额度（如 Fable），Claude 卡片会在 5 小时 / 每周额度之外单独一行显示该模型的剩余比例与重置时间。
 
 ### 3.3 Google Gemini / Google One 配置
 - **方式一：Google AI Studio API Key (永久有效，推荐)**：
