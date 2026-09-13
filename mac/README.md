@@ -67,9 +67,10 @@ xcrun notarytool store-credentials TokenBar-notary \
 说明：
 - 公证只接受 **Developer ID Application** 证书 + **Hardened Runtime** 签名；
   `--distribute` 找不到证书会直接报错，绝不静默降级。
-- 分发版与开发版是**两个签名身份**：分发版的钥匙串条目授权互不通用
-  （装分发版后 API Key 等需要重新录入一次）；Gemini 的「Google 账号登录」
-  也需在新身份下重登一次，此后不再依赖任何钥匙串授权。
+- **推荐默认签名也用 Developer ID**（`signing.local.env` 的 `CODESIGN_IDENTITY`
+  填同一张证书）：全机单一签名身份，钥匙串授权只有一套，开发版/分发版互通。
+  从 Apple Development 切换过来的当天，旧钥匙串条目需要重新授权一轮
+  （弹框点「始终允许」或在设置里重录），此后长期稳定。
 - 发布 zip 命名与 CI 一致，可直接作为 GitHub Release 附件替换 CI 的未签名产物。
 
 ---

@@ -2,14 +2,15 @@
 set -e
 
 # 用法: ./Scripts/build_app.sh [--distribute]
-#   默认        : Apple Development 证书签名 → build/TokenBar.app（日常开发/自用）
+#   默认        : signing.local.env 配置的证书签名 → build/TokenBar.app（日常开发/自用）
 #   --distribute : Developer ID Application 证书 + Hardened Runtime 签名
 #                  → build/dist/TokenBar.app（可提交公证的分发版，见 Scripts/notarize_app.sh）
 #
-# 为什么分发版必须单独一条路：公证只接受 Developer ID 证书 + Hardened Runtime，
-# 而日常开发必须坚持同一张 Apple Development 证书（钥匙串 ACL 的 designated
-# requirement 绑定签名身份，换身份 = 已授权的钥匙串条目全部要重新授权一轮）。
-# 因此 --distribute 产物输出到独立目录，且身份缺失时直接报错退出，绝不静默降级。
+# 签名身份原则：钥匙串 ACL 的 designated requirement 绑定签名证书——日常构建必须
+# **始终用同一张证书**（换身份 = 已授权的钥匙串条目全部要重新授权一轮）。
+# 本机自 2026-09-13 起统一用 Developer ID Application（signing.local.env），
+# 默认构建与分发版同身份，钥匙串授权只有一套；两者区别只剩 Hardened Runtime、
+# 输出目录与是否走公证。--distribute 身份缺失时直接报错退出，绝不静默降级。
 DISTRIBUTE=0
 for arg in "$@"; do
     case "$arg" in
