@@ -56,6 +56,25 @@ public enum SecretLookup: Equatable, Sendable {
     public var isTrustworthy: Bool { self != .unavailable }
 }
 
+/// 外来条目一次读取的完整结果：三态 + Security.framework 的原始 OSStatus。
+///
+/// `status` 为 nil 表示失败不是 `SecItemCopyMatching` 报的（超时放弃等）。
+/// `isACLDenied` 只认 -25293 / -25308 —— 那两个码才代表「条目在、ACL 不放行」，
+/// 用户去设置页点一次「始终允许」就能永久恢复；其它 `.unavailable` 原因指这个动作没用。
+public struct ForeignLookup: Sendable {
+    public let lookup: SecretLookup
+    public let status: OSStatus?
+
+    public init(lookup: SecretLookup, status: OSStatus?) {
+        self.lookup = lookup
+        self.status = status
+    }
+
+    public var isACLDenied: Bool {
+        status == errSecAuthFailed || status == errSecInteractionNotAllowed
+    }
+}
+
 /// 保存一个 secret 输入框时该做什么。
 ///
 /// 抽成独立类型只有一个目的：这条分支判断错了就是用户凭证被删，必须能被单测覆盖，
@@ -200,6 +219,14 @@ public struct KeychainSecretStore: SecretStoring, Sendable {
     /// 的 ACL 提示走的是 securityd → SecurityAgent 那条老路，不确定它是否管得住；
     /// 后者是进程全局开关，所以只在钥匙串串行队列上成对切换，不会影响并发的其他调用。
     public func readForeign(service: String, account: String, allowInteraction: Bool) -> SecretLookup {
+        readForeignWithStatus(service: service, account: account, allowInteraction: allowInteraction).lookup
+    }
+
+    /// `readForeign` 的详细版：把 `SecItemCopyMatching` 的原始 OSStatus 一起带出来。
+    /// 只有 -25293（errSecAuthFailed）/ -25308（errSecInteractionNotAllowed）才意味着
+    /// 「条目在、ACL 不放行」；超时、securityd 异常、解码失败读到的也是 `.unavailable`，
+    /// 但那些故障的恢复动作不是「去重新授权」，混在一起会把用户引向无效操作。
+    func readForeignWithStatus(service: String, account: String, allowInteraction: Bool) -> ForeignLookup {
         Self.assertOffMain(#function)
 
         var query: [String: Any] = [
@@ -222,9 +249,9 @@ public struct KeychainSecretStore: SecretStoring, Sendable {
         let status = SecItemCopyMatching(query as CFDictionary, &item)
         if status == errSecInteractionNotAllowed {
             Log.lifecycle.notice("keychain readForeign 需要授权但已禁用交互 service=\(service, privacy: .public) account=\(account, privacy: .public)")
-            return .unavailable
+            return ForeignLookup(lookup: .unavailable, status: status)
         }
-        return Self.decodeLookup(status: status, item: item, label: "\(service)/\(account)")
+        return ForeignLookup(lookup: Self.decodeLookup(status: status, item: item, label: "\(service)/\(account)"), status: status)
     }
 
     private static func decodeLookup(status: OSStatus, item: CFTypeRef?, label: String) -> SecretLookup {
@@ -315,8 +342,18 @@ public struct KeychainSecretStore: SecretStoring, Sendable {
     public func readForeignAsync(
         service: String, account: String, allowInteraction: Bool
     ) async -> SecretLookup {
-        await runOnKeychainQueue(timeout: allowInteraction ? 120 : 5, timedOutValue: .unavailable) {
-            $0.readForeign(service: service, account: account, allowInteraction: allowInteraction)
+        await readForeignDetailedAsync(service: service, account: account, allowInteraction: allowInteraction).lookup
+    }
+
+    /// `readForeignAsync` 的详细版：区分「ACL 拒」与「其它读不到」，供错误归因用。
+    public func readForeignDetailedAsync(
+        service: String, account: String, allowInteraction: Bool
+    ) async -> ForeignLookup {
+        await runOnKeychainQueue(
+            timeout: allowInteraction ? 120 : 5,
+            timedOutValue: ForeignLookup(lookup: .unavailable, status: nil)
+        ) {
+            $0.readForeignWithStatus(service: service, account: account, allowInteraction: allowInteraction)
         }
     }
 

@@ -1478,19 +1478,58 @@ final class TokenBarTests: XCTestCase {
         XCTAssertEqual(merged.expiry, fileExpiry)
     }
 
-    /// 钥匙串 ACL 被拒（-25293）与凭证真失效的恢复动作不同，
-    /// 文案必须把前者引向设置页重新授权，而不是去 Antigravity 重登（那样做无效）。
-    func testGeminiFailureMessageDistinguishesKeychainDenial() {
-        let denied = GeminiService.credentialsFailureMessage(keychainDenied: true, isZh: true)
-        XCTAssertTrue(denied.contains("读取本地 Gemini 配置"))
-        XCTAssertTrue(denied.contains("始终允许"))
-        XCTAssertFalse(denied.contains("在 Antigravity 中重新登录"))
+    /// 各失败阶段的文案必须指向确实有效的恢复动作，阶段之间不能互相冒充：
+    /// - keychainACL → 设置页授权（去 Antigravity 重登无效）
+    /// - refreshTokenDead → Google 账号登录（重新授权也救不了被轮换的 token）
+    /// - ownLoginRevoked → 重新登录
+    /// 以前只有一个 keychainDenied 布尔：钥匙串读不到时任何环节失败都显示「授权被拒」，
+    /// 把 refresh_token 被轮换这类故障反复引向无效的重新授权——这正是本次修的 bug。
+    func testGeminiFailureMessagePerStage() {
+        let acl = GeminiService.credentialFailureMessage(.keychainACL, isZh: true)
+        XCTAssertTrue(acl.contains("读取本地 Gemini 配置"))
+        XCTAssertTrue(acl.contains("始终允许"))
 
-        let expired = GeminiService.credentialsFailureMessage(keychainDenied: false, isZh: true)
-        XCTAssertTrue(expired.contains("Antigravity"))
+        let dead = GeminiService.credentialFailureMessage(.refreshTokenDead, isZh: true)
+        XCTAssertTrue(dead.contains("Google 账号登录"))
+        XCTAssertFalse(dead.contains("始终允许"), "refresh_token 已被判死时，指引重新授权是无效动作")
 
-        let deniedEn = GeminiService.credentialsFailureMessage(keychainDenied: true, isZh: false)
-        XCTAssertTrue(deniedEn.contains("Always Allow"))
+        let revoked = GeminiService.credentialFailureMessage(.ownLoginRevoked, isZh: true)
+        XCTAssertTrue(revoked.contains("重新登录"))
+
+        let none = GeminiService.credentialFailureMessage(.noCredentials, isZh: true)
+        XCTAssertTrue(none.contains("未找到"))
+
+        let cooldown = GeminiService.credentialFailureMessage(.refreshTokenCooldown, isZh: true)
+        XCTAssertTrue(cooldown.contains("自动重试"))
+
+        let mismatch = GeminiService.credentialFailureMessage(.clientMismatch, isZh: true)
+        XCTAssertTrue(mismatch.contains("配对失效"))
+        XCTAssertFalse(mismatch.contains("检查网络"), "client 配对问题不是网络问题")
+
+        let aclEn = GeminiService.credentialFailureMessage(.keychainACL, isZh: false)
+        XCTAssertTrue(aclEn.contains("Always Allow"))
+    }
+
+    /// 「ACL 拒」只认 -25293/-25308：超时（status=nil）、其它 OSStatus、读取成功
+    /// 都不得触发「去重新授权」的指引。
+    func testForeignLookupACLDetection() {
+        XCTAssertTrue(ForeignLookup(lookup: .unavailable, status: errSecAuthFailed).isACLDenied)
+        XCTAssertTrue(ForeignLookup(lookup: .unavailable, status: errSecInteractionNotAllowed).isACLDenied)
+        XCTAssertFalse(ForeignLookup(lookup: .unavailable, status: nil).isACLDenied, "超时放弃不是 ACL 拒")
+        XCTAssertFalse(ForeignLookup(lookup: .unavailable, status: errSecItemNotFound).isACLDenied)
+        XCTAssertFalse(ForeignLookup(lookup: .found("x"), status: errSecSuccess).isACLDenied)
+    }
+
+    /// 自有登录的账号展示来自 Google id_token（JWT）：解 base64url payload 取 email。
+    func testGeminiEmailFromIDToken() {
+        let payload = Data(#"{"email":"user@example.com"}"#.utf8)
+            .base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        XCTAssertEqual(GeminiService.emailFromIDToken("h.\(payload).s"), "user@example.com")
+        XCTAssertNil(GeminiService.emailFromIDToken("not-a-jwt"))
+        XCTAssertNil(GeminiService.emailFromIDToken(nil))
     }
 
     /// 钥匙串只有 refresh_token 没有 access_token 时，token/expiry 从文件补，refresh 仍用钥匙串的。

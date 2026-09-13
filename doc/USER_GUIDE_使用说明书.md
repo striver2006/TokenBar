@@ -97,11 +97,12 @@ TokenBar 独家支持双重模式：
 ### 3.3 Google Gemini / Google One 配置
 - **方式一：Google AI Studio API Key (永久有效，推荐)**：
   - 前往 [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey) 获取免费密钥并填入，支持监控 Gemini 模型的 RPM 速率配额与连接状态。
-- **方式二：Google 账号授权 / 本地凭证 (Google One / Antigravity)**：
-  - **Google 网站登录授权**：点击设置页面的「Google 网站登录授权」按钮，若本地已登录 Google 账号将一键无缝绑定；若未检测到，将引导通过浏览器完成 OAuth 认证。
-  - **自动读取本地 / Antigravity 凭证**：
+- **方式二：Google 账号登录 / 本地凭证 (Google One / Antigravity)**：
+  - **使用 Google 账号登录（推荐，一劳永逸）**：点击设置页的「使用 Google 账号登录」按钮，在弹出的 Google 登录窗口中选择账号并同意授权即可。TokenBar 会拿到**属于自己的 refresh_token** 并存进自己的钥匙串条目——从此额度刷新**不依赖** Antigravity 的钥匙串授权与本地文件：Antigravity 重装、重登、更换组件都不影响 TokenBar，也永远不需要在系统弹窗里点「始终允许」。额度数据与 Antigravity 官方用量面板一致（Gemini Models 5 小时滚动额度 + 每周额度）。若日后凭证被 Google 判定失效（例如账号侧重新授权吊销），卡片会提示重新登录，再点一次按钮即可。
+  - **自动读取本地 / Antigravity 凭证**（备用通道，未做 Google 账号登录时自动生效）：
     - **Windows**：TokenBar 原生集成 Windows 凭据管理器（Credential Manager），可自动识别并提取 Antigravity CLI (`agy`) / Antigravity IDE 登录的 Google One PRO 凭据（`gemini:antigravity`），自动刷新访问令牌并调用 Google Code Assist 配额接口，呈现与 **Antigravity 官方用量面板一致** 的 Gemini Models **5小时滚动算力额度** 与 **每周额度**（真实剩余比例与重置时间）。同时兼容读取 `%USERPROFILE%\.gemini\` 下的本地凭证。
-    - **macOS**：读取 Antigravity 存在钥匙串里的凭证（这是唯一持续更新的来源），并以 `~/.gemini/` 下的凭证文件作回退，额度数据来源与 Windows 端一致。**首次需要授权一次**：在设置页点「读取本地 Gemini 配置」，系统弹出「TokenBar 想访问钥匙串」时选择 **「始终允许」**——此后自动刷新会静默读取，不再弹框。自动刷新本身永远不会弹授权框：未授权时它只会退回文件里的旧凭证。读到的 refresh_token 还会快照进 TokenBar 自己的钥匙串条目，即使 Antigravity 卸载也能继续续期。若 Antigravity 重新登录或重建了钥匙串条目，上述授权可能随之失效（卡片会提示「钥匙串授权被拒」），再次到设置页点一次「读取本地 Gemini 配置」并选「始终允许」即可恢复——在 Antigravity 里重新登录并不能找回 TokenBar 的授权。
+    - **macOS**：读取 Antigravity 存在钥匙串里的凭证（这是唯一持续更新的来源），并以 `~/.gemini/` 下的凭证文件与 TokenBar 自有快照作回退，额度数据来源与 Windows 端一致。**首次需要授权一次**：在设置页点「读取本地 Gemini 配置」，系统弹出「TokenBar 想访问钥匙串」时选择 **「始终允许」**——此后自动刷新会静默读取，不再弹框。自动刷新本身永远不会弹授权框：未授权时它只会退回文件里的旧凭证。读到的 refresh_token 还会快照进 TokenBar 自己的钥匙串条目，即使 Antigravity 卸载也能继续续期。若 Antigravity 重新登录或重建了钥匙串条目，上述授权可能随之失效，再次到设置页点一次「读取本地 Gemini 配置」并选「始终允许」即可恢复——在 Antigravity 里重新登录并不能找回 TokenBar 的授权。
+  - **错误提示按真实故障阶段显示**（2026-09 起）：「钥匙串授权被拒」→ 设置页授权一次；「凭证已失效（被轮换）」→ 改用 Google 账号登录；「本地 OAuth 客户端配对失效」→ 重启 TokenBar 重扫或改用账号登录；「无法连接 Google 账号服务」→ 检查网络。不再把任何失败一律误报成钥匙串授权问题。
 
 ### 3.4 国内主流厂商配置
 - **DeepSeek (深度求索)**：在 [platform.deepseek.com](https://platform.deepseek.com) 获取 API Key，填入后将自动同步账户可用余额。可在设置中配置「**余额提醒阈值**」：余额低于该值时托盘弹气泡提醒，看板金额变为橙/红色。

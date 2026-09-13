@@ -837,32 +837,50 @@ public struct SettingsView: View {
             .background(Color.primary.opacity(0.03))
             .cornerRadius(8)
 
-            // Method 2: OAuth Web Login / Local Credentials
+            // Method 2: Google Account Login (recommended) / Local Credentials
             VStack(alignment: .leading, spacing: 10) {
                 Text(I18n(.methodGeminiOAuth))
                     .font(.system(size: 13, weight: .bold))
 
-                HStack(spacing: 12) {
-                    Button {
-                        WebLoginWindowController.show(provider: .gemini) { token in
-                            if let token = token {
-                                refreshManager.settings.geminiToken = token
-                                refreshManager.saveSettings()
-                                Task {
-                                    await refreshManager.refreshGemini()
-                                    statusAlertMessage = I18n(.alertGeminiWebSuccess)
-                                    showStatusAlert = true
-                                }
+                // 首选：TokenBar 自己的 Google 账号登录。拿到的是存在自己钥匙串里的
+                // refresh_token，不依赖 Antigravity 的钥匙串条目/本地文件——ACL 授权丢失、
+                // Antigravity 重登轮换 token 都影响不到它。
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 12) {
+                        Button {
+                            startGeminiGoogleLogin()
+                        } label: {
+                            HStack {
+                                Image(systemName: "person.badge.key")
+                                Text(refreshManager.settings.geminiOwnAccount.isEmpty
+                                     ? I18n(.btnGoogleAccountLogin)
+                                     : I18n(.btnGoogleRelogin))
                             }
                         }
-                    } label: {
-                        HStack {
-                            Image(systemName: "globe")
-                            Text(I18n(.btnGoogleWebLogin))
+                        .buttonStyle(.borderedProminent)
+
+                        if !refreshManager.settings.geminiOwnAccount.isEmpty {
+                            Text("✓ \(refreshManager.settings.geminiOwnAccount)")
+                                .font(.system(size: 11))
+                                .foregroundColor(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+
+                            Button(I18n(.btnLogoutGemini)) {
+                                Task { await refreshManager.logoutGeminiOwnLogin() }
+                            }
+                            .buttonStyle(.bordered)
                         }
                     }
-                    .buttonStyle(.bordered)
+                    Text(I18n(.labelGoogleLoginHint))
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                }
 
+                Divider()
+
+                // 备用：本地 Antigravity 凭证（钥匙串条目 + ~/.gemini 文件）
+                HStack(spacing: 12) {
                     Button {
                         // 读本地凭证会碰钥匙串（可能弹授权框），必须异步，否则点一下按钮
                         // 就把主线程占住了
@@ -910,6 +928,26 @@ public struct SettingsView: View {
             .cornerRadius(8)
 
             Spacer()
+        }
+    }
+
+    /// 发起 TokenBar 自己的 Google 账号登录：生成 loopback 授权 URL → 弹登录窗 →
+    /// 拦截授权码 → 换 refresh_token 落自己的钥匙串条目。
+    private func startGeminiGoogleLogin() {
+        Task {
+            guard let plan = await refreshManager.geminiGoogleLoginPlan() else {
+                statusAlertMessage = I18n(.alertGeminiNoClient)
+                showStatusAlert = true
+                return
+            }
+            WebLoginWindowController.show(provider: .gemini, authorizeURL: plan.authorizeURL) { code in
+                guard let code, !code.isEmpty else { return }
+                Task { @MainActor in
+                    let ok = await refreshManager.completeGeminiGoogleLogin(code: code, redirectPort: plan.redirectPort)
+                    statusAlertMessage = ok ? I18n(.alertGeminiLoginSuccess) : I18n(.alertGeminiLoginFailed)
+                    showStatusAlert = true
+                }
+            }
         }
     }
 

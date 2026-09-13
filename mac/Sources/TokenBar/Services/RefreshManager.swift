@@ -715,10 +715,21 @@ public final class RefreshManager: ObservableObject {
             if let acc = res.account { quota.accountInfo = acc }
             quota.lastUpdated = Date()
             persistGeminiRefreshToken(res.refreshToken)
+            // 自有登录的 refresh_token 已被服务层自动清掉（被判 invalid_grant）时，
+            // 展示层的账号标记同步撤下，别让设置页显示一个实际已失效的登录。
+            if !settings.geminiOwnAccount.isEmpty, await GeminiService.shared.hasOwnLogin() == false {
+                settings.geminiOwnAccount = ""
+                saveSettings()
+            }
         } catch {
             quota.isAuthorized = false
             quota.errorMessage = error.localizedDescription
             Log.provider.error("provider=gemini failed: \(error.localizedDescription)")
+            if let credError = error as? GeminiService.CredentialError, credError.stage == .ownLoginRevoked,
+               !settings.geminiOwnAccount.isEmpty {
+                settings.geminiOwnAccount = ""
+                saveSettings()
+            }
         }
 
         quota.isLoading = false
@@ -868,6 +879,38 @@ public final class RefreshManager: ObservableObject {
         guard let refreshToken, !refreshToken.isEmpty, refreshToken != settings.geminiRefreshToken else { return }
         settings.geminiRefreshToken = refreshToken
         saveSettings()
+    }
+
+    // MARK: - Gemini 自有 Google 登录
+
+    /// 设置页「使用 Google 账号登录」的第一步：生成授权页 URL + loopback 端口。
+    /// 返回 nil 表示本地连一个 OAuth client 都找不到（agy / Antigravity 都没装）。
+    public func geminiGoogleLoginPlan() async -> GeminiService.GoogleLoginPlan? {
+        await GeminiService.shared.prepareGoogleLogin()
+    }
+
+    /// 登录窗口拿到授权码后的第二步：换 token、落钥匙串、立刻刷一轮。
+    /// 返回 false 时额度仍不可用，具体原因看 quotas[.gemini].errorMessage。
+    public func completeGeminiGoogleLogin(code: String, redirectPort: Int) async -> Bool {
+        do {
+            let res = try await GeminiService.shared.exchangeGoogleLoginCode(code: code, redirectPort: redirectPort)
+            settings.geminiOwnAccount = res.account
+            saveSettings()
+            await refreshGemini()
+            return quotas[.gemini]?.isAuthorized == true
+        } catch {
+            Log.provider.error("provider=gemini Google 登录交换失败: \(error.localizedDescription)")
+            await refreshGemini()
+            return false
+        }
+    }
+
+    /// 「退出登录」：清自有凭证，回到本地 Antigravity 凭证链路。
+    public func logoutGeminiOwnLogin() async {
+        await GeminiService.shared.clearOwnLogin()
+        settings.geminiOwnAccount = ""
+        saveSettings()
+        await refreshGemini()
     }
 
     public func refreshOpenAI() async {

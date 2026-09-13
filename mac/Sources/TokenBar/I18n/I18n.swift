@@ -175,7 +175,10 @@ public enum I18nKey: String {
     case labelRecommendedLifetime
     case labelGetKeyColon
     case methodGeminiOAuth
-    case btnGoogleWebLogin
+    case btnGoogleAccountLogin
+    case btnGoogleRelogin
+    case btnLogoutGemini
+    case labelGoogleLoginHint
     case btnReadLocalGeminiConfig
     case labelManualGeminiToken
     case placeholderGeminiToken
@@ -240,7 +243,9 @@ public enum I18nKey: String {
     case alertClaudeLocalNotFound
     case alertClaudeTokenSaved
     case alertGeminiSuccess
-    case alertGeminiWebSuccess
+    case alertGeminiLoginSuccess
+    case alertGeminiLoginFailed
+    case alertGeminiNoClient
     case alertGeminiLocalSuccess
     case alertGeminiLocalNotFound
     case alertGeminiTokenSaved
@@ -625,9 +630,15 @@ public final class LocalizationManager: ObservableObject {
         case .labelGetKeyColon:
             return isZh ? "获取密钥:" : "Get Key:"
         case .methodGeminiOAuth:
-            return isZh ? "方式二：Google 账号网页登录 / 本地凭证 (OAuth)" : "Method 2: Google Account Web Login / Local Credentials (OAuth)"
-        case .btnGoogleWebLogin:
-            return isZh ? "Google 网站登录授权" : "Google Web Login Authorization"
+            return isZh ? "方式二：Google 账号登录 / 本地凭证 (OAuth)" : "Method 2: Google Account Sign-in / Local Credentials (OAuth)"
+        case .btnGoogleAccountLogin:
+            return isZh ? "使用 Google 账号登录" : "Sign in with Google Account"
+        case .btnGoogleRelogin:
+            return isZh ? "重新登录" : "Sign in Again"
+        case .btnLogoutGemini:
+            return isZh ? "退出登录" : "Sign Out"
+        case .labelGoogleLoginHint:
+            return isZh ? "登录一次即长期有效：TokenBar 用自己的钥匙串保存凭证，不依赖 Antigravity 的授权与本地文件，额度刷新不再受其影响。" : "Sign in once and it lasts: TokenBar stores the credential in its own keychain, independent of Antigravity's authorization or local files."
         case .btnReadLocalGeminiConfig:
             return isZh ? "读取本地 Gemini 配置" : "Read Local Gemini Credentials"
         case .labelManualGeminiToken:
@@ -747,12 +758,16 @@ public final class LocalizationManager: ObservableObject {
             return isZh ? "Claude Token 已保存并刷新！" : "Claude Token saved and refreshed!"
         case .alertGeminiSuccess:
             return isZh ? "Google AI Studio API 连接成功！" : "Google AI Studio API connected successfully!"
-        case .alertGeminiWebSuccess:
-            return isZh ? "Gemini 网站登录授权成功！" : "Gemini web login authorization successful!"
+        case .alertGeminiLoginSuccess:
+            return isZh ? "Google 账号登录成功，Gemini 额度已切换到自有凭证！" : "Google account signed in; Gemini quota now runs on TokenBar's own credential!"
+        case .alertGeminiLoginFailed:
+            return isZh ? "Google 登录完成，但额度查询未成功，请查看卡片上的错误信息。" : "Google sign-in completed, but the quota query failed; check the error on the card."
+        case .alertGeminiNoClient:
+            return isZh ? "本地未找到可用的 Google OAuth client（需要已安装 Antigravity 或 agy CLI）。也可设置 ANTIGRAVITY_CLIENT_ID / ANTIGRAVITY_CLIENT_SECRET 环境变量后重启。" : "No Google OAuth client found locally (Antigravity or the agy CLI must be installed). You can also set ANTIGRAVITY_CLIENT_ID / ANTIGRAVITY_CLIENT_SECRET and relaunch."
         case .alertGeminiLocalSuccess:
             return isZh ? "已读取本地 Antigravity 凭证！若刚才在系统授权框中选择了「始终允许」，此后自动刷新将静默读取，不再弹框。" : "Local Antigravity credentials loaded. If you chose \"Always Allow\" in the system prompt, future refreshes will read silently."
         case .alertGeminiLocalNotFound:
-            return isZh ? "未读到本地 Antigravity 凭证：请确认 Antigravity 已登录，且在系统授权框中选择了「始终允许」；或改用网页登录授权。" : "No local Antigravity credentials found. Make sure Antigravity is signed in and you chose \"Always Allow\" in the system prompt, or use web login instead."
+            return isZh ? "未读到本地 Antigravity 凭证：请确认 Antigravity 已登录，且在系统授权框中选择了「始终允许」；或改用上方的 Google 账号登录。" : "No local Antigravity credentials found. Make sure Antigravity is signed in and you chose \"Always Allow\" in the system prompt, or use the Google account sign-in above instead."
         case .alertGeminiTokenSaved:
             return isZh ? "Gemini Token 已保存！" : "Gemini Token saved!"
         case .alertDeepSeekSuccess:

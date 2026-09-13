@@ -156,6 +156,26 @@ macOS 客户端采用纯 Swift 打造，支持 macOS 13 (Ventura) 及以上系�
    三层来源合并在 `GeminiService.mergeCredentials`（纯函数，有单测）：钥匙串 > 文件 >
    TokenBar 自有条目里的 `geminiRefreshToken` 快照（额度拉取成功后写入，Antigravity 卸载后
    仍能续期）。
+
+   **自有 Google 登录（2026-09 起的推荐主通道）：** 上述本地链路有两个绕不开的脆弱点——
+   外来条目 ACL 会被 Antigravity 重登重置、文件里的 refresh_token 会被 Antigravity 的后续
+   刷新轮换掉（2026-09-13 实测：`invalid_grant`）。`GeminiService` 因此增加了自己的 loopback
+   OAuth 登录：`prepareGoogleLogin()` 用扫描出的 client 构造授权 URL（redirect_uri 为随机端口
+   的 `http://localhost:<port>`，scope 与 Antigravity 凭证实测一致），`WebLoginWindowController`
+   在 `decidePolicyFor` 里**拦截**（而非真的监听）该重定向取 code，`exchangeGoogleLoginCode`
+   换出 refresh_token 存进自有条目 `geminiOwnRefreshToken`。`fetchQuota` 的凭证优先级变为
+   **自有登录 > 外来钥匙串 > 文件 > 快照**：自有凭证存在时完全不碰外来条目（日志里也不再
+   出现 -25293 噪音）；自有凭证被判 `invalid_grant` 时自动清除并当场落到本地链路。刷成功的
+   client 配对持久化在 `geminiAntigravityClient` 条目（`id|secret`），启动后不必重扫几百 MB
+   的二进制。
+
+   **错误归因按失败阶段分流（同批改造）：** 以前 `keychainDenied` 只是个选文案的布尔——钥匙串
+   读不到时，refresh_token 被轮换、配额接口 401、刷新冷却中统统显示成「钥匙串授权被拒」，
+   把用户反复引向无效的重新授权。现在 `KeychainSecretStore.readForeignWithStatus` 把原始
+   OSStatus 带出来（只有 -25293/-25308 才算 ACL 拒，见 `ForeignLookup.isACLDenied`），
+   `refreshGoogleAccessToken` 返回结构化的 `TokenRefreshOutcome`（invalidGrant / clientMismatch /
+   unreachable / cooldown / noCandidates），`fetchQuota` 按 `CredentialStage` 抛
+   `CredentialError`，每个阶段对应一条真正有效的恢复指引（有单测 `testGeminiFailureMessagePerStage`）。
 3. **`Process` 子进程要先读 pipe 再 `waitUntilExit`**，并配超时 kill 与
    `standardInput = FileHandle.nullDevice`。反序会在输出超过 64KB pipe 缓冲区时形成
    父子互等死锁；`withTimeout` 救不了子进程（不响应 Task 取消），必须自己兜。

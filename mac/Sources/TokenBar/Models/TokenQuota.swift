@@ -600,6 +600,9 @@ public struct AppSettings: Codable {
     /// 从 ~/.gemini 读到的 Antigravity refresh_token 快照，只存钥匙串。
     /// 文件被 Antigravity 清掉后仍能靠它续期 access_token。
     public var geminiRefreshToken: String
+    /// TokenBar 自己的 Google 账号登录绑定的邮箱（展示用；refresh_token 本体在钥匙串）。
+    /// 为空表示未用自有登录，走本地 Antigravity 凭证链路。
+    public var geminiOwnAccount: String
 
     public var deepseekApiKey: String
     public var deepseekEndpoint: String
@@ -673,6 +676,7 @@ public struct AppSettings: Codable {
         case geminiEndpoint
         case geminiToken
         case geminiRefreshToken
+        case geminiOwnAccount
 
         case deepseekApiKey
         case deepseekEndpoint
@@ -734,6 +738,7 @@ public struct AppSettings: Codable {
         geminiEndpoint: String = "https://generativelanguage.googleapis.com",
         geminiToken: String = "",
         geminiRefreshToken: String = "",
+        geminiOwnAccount: String = "",
         deepseekApiKey: String = "",
         deepseekEndpoint: String = "https://api.deepseek.com/v1",
         deepseekModel: String = "deepseek-chat",
@@ -788,6 +793,7 @@ public struct AppSettings: Codable {
         self.geminiEndpoint = geminiEndpoint
         self.geminiToken = geminiToken
         self.geminiRefreshToken = geminiRefreshToken
+        self.geminiOwnAccount = geminiOwnAccount
         self.deepseekApiKey = deepseekApiKey
         self.deepseekEndpoint = deepseekEndpoint
         self.deepseekModel = deepseekModel
@@ -848,6 +854,7 @@ public struct AppSettings: Codable {
         self.geminiEndpoint = try container.decodeIfPresent(String.self, forKey: .geminiEndpoint) ?? "https://generativelanguage.googleapis.com"
         self.geminiToken = try container.decodeIfPresent(String.self, forKey: .geminiToken) ?? ""
         self.geminiRefreshToken = try container.decodeIfPresent(String.self, forKey: .geminiRefreshToken) ?? ""
+        self.geminiOwnAccount = try container.decodeIfPresent(String.self, forKey: .geminiOwnAccount) ?? ""
 
         self.deepseekApiKey = try container.decodeIfPresent(String.self, forKey: .deepseekApiKey) ?? ""
         self.deepseekEndpoint = try container.decodeIfPresent(String.self, forKey: .deepseekEndpoint) ?? "https://api.deepseek.com/v1"
