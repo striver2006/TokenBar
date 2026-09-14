@@ -1,12 +1,18 @@
 # 菜单栏图标不显示：排查与解决方案
 
 > 症状：TokenBar 在运行、进程健康、额度刷新正常，但菜单栏上**看不到图标**。
-> 一句话结论：macOS 26 的 ControlCenter 把 `com.tokenbar.mac` 这个 bundle id 的状态项拉黑了
-> （日志特征 `Moving host to blocked list`）；**拉黑是按 bundle id 的粘性会话态**，
-> LaunchServices 死记录只是触发器之一，清除死记录是必要卫生、但不足以解除已存在的拉黑。
+> 一句话结论（2026-09-14 晚第三轮定案）：macOS 26 的 ControlCenter 在
+> `~/Library/Group Containers/group.com.apple.controlcenter/Library/Preferences/group.com.apple.controlcenter.plist`
+> 的 `trackedApplications` 里，把 `com.tokenbar.mac` 记成了 **VS Code（`com.microsoft.VSCode`）与
+> ZCode（`dev.zcode.app`）名下的菜单项**（曾从这些 IDE 的终端直接把 TokenBar 跑起来，系统按"负责进程"归属），
+> 而这两个应用在「系统设置 › 菜单栏 › 应用程序」里的开关是关的（`isAllowed=false`），名下所有菜单项连坐，
+> 于是 TokenBar 每个新 host 创建后 ~20ms 被 `Moving host to blocked list`。同机 VPSQuota、UniDrop 被拉黑同理
+> （挂在 VS Code / Antigravity 名下）。LaunchServices 死记录**不是**根因。
+> 解除：在「系统设置 › 菜单栏 › 应用程序」把 **Visual Studio Code、ZCode 的开关打开**（UniDrop 还要开 Antigravity），
+> 重启 TokenBar 即可；细节见第九节。
 >
-> 结论基于 2026-09-13/14 两轮受控实验，机制详录见
-> `ARCH_系统架构设计文档.md`「状态项健康自愈」一节；本文是面向排障的操作手册。
+> 第一、二、六、七节保留前两轮的过程记录（其中"LS 死记录是触发器"的判断已被第九节推翻，
+> 仅作历史参考）；机制详录见 `ARCH_系统架构设计文档.md`「状态项健康自愈」一节。
 
 ## 一、症状与快速定性
 
@@ -189,7 +195,115 @@ open -a TokenBar
       Claude 等卷），需重新挂载对应卷清理或全库重建时顺带解决；UniDrop 应用侧
       也可移植本项目的检测/自愈逻辑。
 
+## 九、第三轮排查（2026-09-14 16:35 重启后）：拉黑来自 ControlCenter 的持久「应用菜单栏项」记录
+
+### 9.1 现场证据链
+
+开机 16:35:42，ControlCenter(pid 498) 16:36:18 起；TokenBar 开机自启 16:37:15，
+每个 host 创建后 ~20ms 被拉黑，之后每次重建、每次重启进程都一样。完整时序
+（`command log show --info --debug --predicate 'process == "ControlCenter"'`）：
+
+```
+Host properties initialized; (bid:com.tokenbar.mac-TokenBarStatusItem-<pid>)
+Starting to track host; ...
+(TCC) tcc_send_get_identity_for_credential() IPC        ← 用 audit token 向 tccd 取 host 身份
+Created new displayable type ... / Adding displayable items ... / Created ephemaral instance ...
+[SystemItemMenuBarPreferences] Preferences: changed     ← 连续两条
+[SystemItemMenuBarPreferences] Preferences: changed
+Moving host to blocked list; ...                        ← 拉黑
+Responding to displayables availability update; hiding status items for [...]
+```
+
+关键对照：ControlCenter **一启动**就把微信、QQ、钉钉、飞书、网易邮箱大师、WorkBuddy、密码、
+Claude 等按 `Starting to track blocked host` 直接跟踪（没有 `Moving` 事件）——这些应用在
+「系统设置 › 菜单栏 › 应用程序」里的开关**全是关的**，菜单栏里也确实没有它们的图标。
+说明 blocked 名单是持久化的、跨重启的，并且就是这份系统设置。
+
+### 9.2 决策逻辑在哪（ControlCenter 二进制符号）
+
+`strings` / `nm` / `otool -tV` 反查 `/System/Library/CoreServices/ControlCenter.app` 与
+dyld 缓存里的私有框架 `ControlCenter.framework`：
+
+- 类 `SystemItemMenuBarPreferences`（`shared`，`SecuredPreferencesController` 存储）：
+  `trackedApplications: [TrackedApplicationLocation: TrackedApplication]`、
+  `TrackedApplication { isAllowed, location, menuItemLocations }`（Codable，
+  `BundleCodingKeys` / `AdhocBinaryCodingKeys` 两种身份）、
+  `TrackedApplicationLocation { menuBar, controlCenter, bentoBox }`、
+  `startTrackingApplication(for: bundleID, auditToken:)` / `(at: URL, auditToken:)`、
+  `blockTrackedApplication(for:auditToken:)` / `(at:auditToken:)`、`stopTrackingApplication`。
+- 调用 `blockTrackedApplication` 的函数里紧邻的日志串：`Requesting host set visibility to false`、
+  `Unable to handle user removal of menu extra for %s; no available host for %s`——即
+  "用户把菜单栏项移除"的处理路径；另有 `Unable to verify new host id for app status item type`。
+- 拉黑判定函数（含 `Moving host to blocked list` 的那个）先取
+  `TrackedApplication.menuItemLocations`，遍历比较 `TrackedApplicationLocation` 枚举，再决定拉黑。
+- 落盘路径（dyld 缓存字符串）：
+  `Library/Group Containers/group.com.apple.secure-control-center-preferences/Library/Preferences/group.com.apple.secure-control-center-preferences.*.plist`。
+  该目录受 TCC 保护，普通 shell `ls` 直接 `Operation not permitted`——**这就是前两轮
+  "ControlCenter 落盘状态查无该 bundle id"的原因：根本没读到。**
+- 设置面板扩展 `ControlCenterSettings.appex` 里有 `TrackedApplicationsView`，文案
+  「在菜单栏显示 / 不在菜单栏显示 / 在控制中心显示 / 始终在菜单栏显示」，以及
+  「应用程序可添加菜单栏项……**菜单栏项关闭后，将无法再在菜单栏显示**」。
+
+### 9.3 本轮实测排除项（别再查）
+
+| 假设 | 实验 | 结果 |
+| :--- | :--- | :--- |
+| LS 同 bundle id 多条注册 | 注销 `mac/build` 与 `mac/build/dist` 两条，只剩 `/Applications` 一条后重启应用 | 仍 20ms 拉黑 |
+| 安装路径 | 分别从 `/Applications`、`mac/build`、`mac/build/dist` 启动 | 三处都拉黑 |
+| 被挪进了控制中心面板 | 解码 ByHost `com.apple.controlcenter.bentoboxes` 的 `boxes`→`displayablesData`（嵌套 bplist） | 只有系统模块，没有任何应用项 |
+| ControlCenter 自己的 defaults | 递归解码 `com.apple.controlcenter` 里所有 JSON/base64/bplist 字段（`MenuBarCustomizationState`、`ControlCenterDisplayableChronoControlsProviderConfiguration` 等） | 无 tokenbar/unidrop/vpsquota |
+| 用户拖出菜单栏（`NSStatusItem VisibleCC <autosave> = 0`，写在**应用自己的域**里） | 全盘扫 Preferences / ByHost / Containers | 钉钉、WPS、Passwords、OpenAI Sky 有该键；tokenbar 三个域都没有 |
+| 不是 .app 包的裸可执行文件 | 直接运行 `mac/.build/arm64-apple-macosx/debug/TokenBar`（ad-hoc 签名，内嵌 Info.plist 同 bundle id） | **正常上屏**（layer-25 出现 `TokenBarStatusItem` 镜像，x=2718 宽 107），ControlCenter 甚至不为它记 host 日志——拉黑只针对 bundle 身份的记录 |
+| 签名差异 | TokenBar/VPSQuota 未公证、UniDrop 已公证，都被拉黑；Tailscale/Google Drive 等正常 | 与公证/Gatekeeper 无关 |
+
+### 9.4 落盘记录长什么样（sudo 拷出 plist 后解码，2026-09-14 17:27）
+
+文件：`~/Library/Group Containers/group.com.apple.controlcenter/Library/Preferences/group.com.apple.controlcenter.plist`
+（目录受 TCC 保护，普通 shell 连 `ls` 都是 Operation not permitted，要 `sudo cp` 出来再解；同目录
+`group.com.apple.secure-control-center-preferences/...av.plist` 是音视频权限的，不相干）。
+顶层键 `showSpotlight` / `showWeather` / `trackedApplications`，后者是一段 bplist，内容是
+`[TrackedApplicationLocation: TrackedApplication]` 字典（数组形式 key,value 交替），共 64 条。
+每条 `TrackedApplication { location, menuItemLocations: [Location], isAllowed }`，`Location` 是
+`bundle(<bundle id>)` 或 `adhocBinary(<file URL>)`。与本项目相关的几条：
+
+| 记录（location） | isAllowed | menuItemLocations |
+| :--- | :--- | :--- |
+| `bundle:com.tokenbar.mac` | true | `com.tokenbar.mac` |
+| **`bundle:com.microsoft.VSCode`** | **false** | `com.unidrop.client`, **`com.tokenbar.mac`**, `io.vpsquota.VPSTrafficQuota`, `com.unidrop.traytest` |
+| **`bundle:dev.zcode.app`** | **false** | **`com.tokenbar.mac`** |
+| `bundle:com.google.antigravity` | false | `com.google.antigravity`, `com.unidrop.client` |
+| `adhoc:…/mac/.build/arm64-apple-macosx/debug/TokenBar` | true | 自身（裸可执行文件独立成记录，所以能上屏） |
+| `bundle:com.tokenbar.probe5` | true | 自身（探针新 bundle id，能上屏） |
+
+判定逻辑（与 ControlCenter 反汇编里"遍历集合 → 比较 → 命中即处理"的循环吻合）：新 host 的 bundle id
+只要出现在**任何一条 `isAllowed=false` 记录的 `menuItemLocations`** 里，就被拉黑，不管它自己那条记录开关如何。
+「系统设置 › 菜单栏 › 应用程序」列表里每一行就是一条记录；TokenBar 的两行 = `bundle:com.tokenbar.mac` +
+`adhoc:…/debug/TokenBar`（后者无图标）。
+
+**怎么挂到 VS Code / ZCode 名下的**：从 IDE 集成终端直接执行 TokenBar 可执行文件（`swift run`、
+`./.build/debug/TokenBar`、`mac/build/TokenBar.app/Contents/MacOS/TokenBar`）时，进程的"负责进程"是 IDE，
+ControlCenter 按负责进程归属菜单项。用 `open` 启动的 .app 由 launchd 负责，不会被归到 IDE 下。
+
+### 9.5 解除步骤
+
+1. **系统设置 › 菜单栏 › 应用程序**：把 **Visual Studio Code、ZCode 的开关打开**（把这两条记录的 `isAllowed`
+   置 true，名下的 `com.tokenbar.mac` 随之解封；UniDrop 还需打开 Antigravity）。副作用只是允许这些 IDE
+   "名下"的菜单项显示，它们自身并没有状态项。然后 `killall TokenBar && open -a TokenBar`，
+   跑第一节的命令确认没有新的 `Moving host to blocked list`，应用日志 `mirror=true`。
+2. 只想让 TokenBar 自己那行开关起作用而不动 IDE 的开关：`sudo` 拷出上述 plist，用 plistlib 从
+   VS Code / ZCode 记录的 `menuItemLocations` 里删掉 `com.tokenbar.mac`，写回原路径（保持 600 权限）后
+   `killall ControlCenter`。属于改系统偏好文件，优先走第 1 步。
+3. 已实测**无效**的手段：清 LS 死记录、重启 ControlCenter、`tccutil reset`、整机重启、
+   TokenBar 自己那行开关关再开（只写 `Preferences: changed`，不改 IDE 记录）。
+4. **预防**：开发时不要在 IDE 集成终端里直接执行 TokenBar 可执行文件；构建后一律 `open mac/build/TokenBar.app`
+   或 `open -a TokenBar`。已经挂错的归属不会自动清理。
+5. 应用侧结论：`purgeStaleLaunchServicesRecords` + 5 次重建对这个根因无效，每次重建还触发 ControlCenter
+   重写偏好。后续应把"镜像缺失但几何正常"识别为"被系统设置拉黑"，只重建一次并在日志/通知里指引用户去
+   「系统设置 › 菜单栏 › 应用程序」。另一个待修误判：裸可执行文件实验里镜像在 x=2718，应用健康探测仍报
+   `mirror=false`（自己缓存的 frame 停在 3333），镜像匹配要容忍 frame 过期。
+
 ---
 *2026-09-14 · 基于 a42d45b / c0914de 两轮修复与当日受控实验整理；同日 13:42 重启实测
-证伪「重启解除拉黑」，已回写 6.3 与第八节。如结论被后续验证修正，先更新本文与
+证伪「重启解除拉黑」；同日 16:35 重启后第三轮（第九节）读到 ControlCenter 组容器里的 `trackedApplications`，定案为
+TokenBar 被记在开关已关的 VS Code / ZCode 名下连坐拉黑，推翻"LS 死记录是触发器"的判断。如结论被后续验证修正，先更新本文与
 `ARCH_系统架构设计文档.md` 对应段落。*

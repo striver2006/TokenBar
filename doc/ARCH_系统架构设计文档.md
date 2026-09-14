@@ -107,6 +107,20 @@ macOS 客户端采用纯 Swift 打造，支持 macOS 13 (Ventura) 及以上系�
     另注意到无关应用 `io.vpsquota.VPSTrafficQuota`、`com.unidrop.client` 同期也被 blocked，
     「按 bundle id 精确命中」有待重审。解除手段目前只剩全库重建 `lsregister -kill -seed -r`
     这类重手段（未验证）。
+    **2026-09-14 晚第三轮（16:35 重启后）定案**：拉黑依据是 ControlCenter 自己的持久「应用菜单栏项」记录——
+    `~/Library/Group Containers/group.com.apple.controlcenter/Library/Preferences/group.com.apple.controlcenter.plist`
+    的 `trackedApplications`（私有框架 `ControlCenter.framework` 的 `SystemItemMenuBarPreferences`，
+    `TrackedApplication { location, menuItemLocations, isAllowed }`，对应「系统设置 › 菜单栏 › 应用程序」列表；
+    目录受 TCC 保护，普通 shell 读不到，前两轮"落盘状态查无痕迹"是假阴性）。`sudo` 拷出解码后发现
+    `com.tokenbar.mac` 被记在 **`com.microsoft.VSCode` 与 `dev.zcode.app` 两条 `isAllowed=false` 记录的
+    `menuItemLocations`** 里（曾从 IDE 集成终端直接执行 TokenBar，系统按负责进程归属），ControlCenter 的规则是
+    bundle id 只要出现在任一禁止记录的菜单项列表里就拉黑，TokenBar 自己那条允许记录不起作用。VPSQuota、UniDrop
+    同理挂在 VS Code / Antigravity 名下。实测排除：LS 注册条数、安装路径、autosaveName、控制中心面板内容、
+    ControlCenter defaults、`NSStatusItem VisibleCC` 键、公证状态；裸可执行文件与新 bundle id 探针能上屏是因为各自
+    独立成记录。**LS 死记录不是根因，应用内 LS 清理与 5 次重建对此无效**；解除是在系统设置里打开 VS Code / ZCode
+    的开关（或 sudo 改 plist 删掉归属），预防是开发时用 `open` 启动 .app 而不是在 IDE 终端直接执行可执行文件。
+    详见 `TROUBLESHOOTING_菜单栏图标不显示.md` 第九节。后续应用侧改造方向：镜像缺失但几何正常时只重建一次并指引
+    用户去系统设置；镜像匹配需容忍应用缓存 frame 过期（观察到镜像在 2718、应用缓存 3333 而误报 `mirror=false`）。
     - 判定：纯函数 `StatusItemHealth.evaluate` 吃一份 `Snapshot`（`isVisible` / `button.window` 几何 / `windowNumber` /
       控制中心是否为它渲染了镜像 / 能否在 `CGWindowList` 按窗口号查到 / 各屏几何），输出 `healthy` / `userHidden` /
       `detached(Reason)` / `indeterminate`。**最可靠的信号是控制中心镜像**：每个真正显示出来的状态项在 layer-25 层都有一个
