@@ -80,8 +80,29 @@ macOS 客户端采用纯 Swift 打造，支持 macOS 13 (Ventura) 及以上系�
     `Moving host to blocked list` 并隐藏；黑名单不落盘、重启 ControlCenter 也不清，只有 `lsregister -u` 注销死记录后
     下一次注册才恢复（2026-09-14 用探针 .app 逐变量排除后实测确认）。所以自愈动作里**清理 LS 死记录排在重建状态项之前**：
     `purgeStaleLaunchServicesRecords` 在后台线程解析 `lsregister -dump`（全量输出，本机 28MB / 3 秒）找出本 bundle id
-    下路径已不存在的记录，逐条 `lsregister -u`，完成后回主线程再重建；启动时先清一次、每次重建前再清一次。
+    下路径已不存在的记录，逐条注销，完成后回主线程再重建；启动时先清一次、每次重建前再清一次。
+    注销机制是受控实验（2026-09-14）实测出来的：`lsregister -u` **只认路径上真实存在的 bundle**，
+    路径已删除时直接失败（-10814）；`-gc` 与「同 bundle id 在别处重新注册」都挤不掉死记录。
+    所以对每条死记录：先试 `-u`（路径复活过的快路径），失败则**原位重建一个最小 stub .app
+    （`stubInfoPlist`，CFBundleIdentifier 与死记录一致）→ `-u` → 删掉 stub 并按 rmdir 语义
+    回收新建的空目录**；`/Volumes/...` 等不可写路径上的死记录自动注销会失败，打 error 日志
+    留给人工处理（重新挂载对应卷）。
     不能用 `NSWorkspace.urlsForApplications(withBundleIdentifier:)`——它会把不存在的路径过滤掉，永远找不到死记录。
+    dump 带 15s 看门狗（这条在重建路径上被同步等待，挂死会永久卡住 `isRebuilding`）；**"没查成"与"查了、没有"
+    严格分开**——工具起不来、被看门狗杀掉或退出码非 0 时打 error 级"dump 执行失败，跳过核对"，
+    绝不把失败伪装成"无死记录"的假阴性。构建侧配套：`build_app.sh` 删除旧产物前先 `lsregister -u`，
+    另提供 `--clean` 一并注销并删除 `build/` 与 `build/dist/` 两个输出路径——清理构建目录必须走它，
+    直接 `rm` 又会制造新的死记录。
+    2026-09-14 下午真机复测补充：**LS 清干净后 block 未必解除**。LS 里 com.tokenbar.mac 只剩
+    /Applications 一条干净注册、死记录为零时，ControlCenter 仍在新会话里对该 bundle id 的状态项
+    即时 `Moving host to blocked list`——换用该 bundle id 的最小探针 .app（无 autosaveName、ad-hoc
+    签名、/tmp 路径）同样 20ms 内被拉黑，而全新 bundle id 的同款探针正常上屏；重启 ControlCenter、
+    `tccutil reset`、`-f` 重注册、注销再注册均无效，且 ControlCenter 的全部落盘状态
+    （defaults / ByHost displayablemenuextras / Application Support / Group Containers）里查无该
+    bundle id 的痕迹。结论：**拉黑是按 bundle id 的粘性会话态**（疑似活在对 CC 重启免疫的
+    WindowServer/会话层），LS 死记录只是初始触发器之一。应用内 LS 清理仍是必要卫生（防再次触发），
+    镜像健康信号也如实探测到了 block；但对已存在的拉黑，LS 侧动作已无力解除，需**注销重登**
+    （待真机验证；若重登仍被拉黑，再考虑全库重建 `lsregister -kill -seed -r` 这类重手段）。
     - 判定：纯函数 `StatusItemHealth.evaluate` 吃一份 `Snapshot`（`isVisible` / `button.window` 几何 / `windowNumber` /
       控制中心是否为它渲染了镜像 / 能否在 `CGWindowList` 按窗口号查到 / 各屏几何），输出 `healthy` / `userHidden` /
       `detached(Reason)` / `indeterminate`。**最可靠的信号是控制中心镜像**：每个真正显示出来的状态项在 layer-25 层都有一个

@@ -281,3 +281,16 @@ final class LaunchServicesDumpParsingTests: XCTestCase {
         XCTAssertEqual(stale, ["/Volumes/UniDrop 1/UniDrop.app"])
     }
 }
+
+/// 注销死记录时原位重建的 stub Info.plist：必须是可解析的 XML plist，
+/// 且 CFBundleIdentifier 与要注销的记录一致（否则 `-u` 匹配不上）。
+final class StubInfoPlistTests: XCTestCase {
+    func testStubPlistIsReadablePropertyListWithOwnBundleID() throws {
+        let data = MenuBarController.stubInfoPlist(bundleID: "com.tokenbar.mac")
+        let dict = try XCTUnwrap(
+            try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: String])
+        XCTAssertEqual(dict["CFBundleIdentifier"], "com.tokenbar.mac")
+        XCTAssertEqual(dict["CFBundlePackageType"], "APPL")
+        XCTAssertEqual(dict["CFBundleExecutable"], "LSTombstone")
+    }
+}

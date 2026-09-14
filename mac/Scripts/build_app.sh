@@ -1,10 +1,15 @@
 #!/bin/bash
 set -e
 
-# 用法: ./Scripts/build_app.sh [--distribute]
+# 用法: ./Scripts/build_app.sh [--distribute] [--clean]
 #   默认        : signing.local.env 配置的证书签名 → build/TokenBar.app（日常开发/自用）
 #   --distribute : Developer ID Application 证书 + Hardened Runtime 签名
 #                  → build/dist/TokenBar.app（可提交公证的分发版，见 Scripts/notarize_app.sh）
+#   --clean      : 先向 LaunchServices 注销 build/ 与 build/dist/ 两个产物路径再删除，
+#                  然后退出（不构建）。macOS 26 的 ControlCenter 按 bundle id 查
+#                  LaunchServices，路径已不存在的注册记录会让状态项被拉黑隐藏
+#                  （详见 doc/ARCH_系统架构设计文档.md）——要删构建产物一律走本参数，
+#                  别直接 rm，否则又是一条死记录。
 #
 # 签名身份原则：钥匙串 ACL 的 designated requirement 绑定签名证书——日常构建必须
 # **始终用同一张证书**（换身份 = 已授权的钥匙串条目全部要重新授权一轮）。
@@ -12,15 +17,33 @@ set -e
 # 默认构建与分发版同身份，钥匙串授权只有一套；两者区别只剩 Hardened Runtime、
 # 输出目录与是否走公证。--distribute 身份缺失时直接报错退出，绝不静默降级。
 DISTRIBUTE=0
+CLEAN=0
 for arg in "$@"; do
     case "$arg" in
         --distribute) DISTRIBUTE=1 ;;
-        *) echo "未知参数: $arg（可用: --distribute）" >&2; exit 1 ;;
+        --clean) CLEAN=1 ;;
+        *) echo "未知参数: $arg（可用: --distribute --clean）" >&2; exit 1 ;;
     esac
 done
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_DIR"
+
+# 删除构建产物前先注销它的 LaunchServices 注册，否则留下指向已不存在路径的死记录，
+# macOS 26 的 ControlCenter 撞上就会把 com.tokenbar.mac 的状态项拉黑隐藏。
+LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+unregister_ls() {
+    [ -d "$1" ] && [ -x "$LSREGISTER" ] && "$LSREGISTER" -u "$1" >/dev/null 2>&1 || true
+}
+
+if [ "$CLEAN" -eq 1 ]; then
+    echo "==> 注销 LaunchServices 注册并删除构建产物..."
+    unregister_ls "$PROJECT_DIR/build/TokenBar.app"
+    unregister_ls "$PROJECT_DIR/build/dist/TokenBar.app"
+    rm -rf "$PROJECT_DIR/build/TokenBar.app" "$PROJECT_DIR/build/dist/TokenBar.app"
+    echo "==> 清理完成"
+    exit 0
+fi
 
 echo "==> 编译 TokenBar (Release, universal: arm64 + x86_64)..."
 swift build -c release --arch arm64 --arch x86_64
@@ -36,6 +59,8 @@ MACOS_DIR="$APP_BUNDLE/Contents/MacOS"
 RESOURCES_DIR="$APP_BUNDLE/Contents/Resources"
 
 echo "==> 创建应用包结构: $APP_BUNDLE"
+# 先注销再删：万一本次构建中途失败收场，也不会留下指向本路径的死记录
+unregister_ls "$APP_BUNDLE"
 rm -rf "$APP_BUNDLE"
 mkdir -p "$MACOS_DIR"
 mkdir -p "$RESOURCES_DIR"

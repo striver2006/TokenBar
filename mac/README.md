@@ -41,6 +41,11 @@ open build/TokenBar.app
 双架构可执行文件，并与 `Resources/Info.plist` 组装为标准的 `build/TokenBar.app`
 包结构（Contents/MacOS + Contents/Resources + PkgInfo）。
 
+删除构建产物用 `./Scripts/build_app.sh --clean`（先向 LaunchServices 注销注册，再删
+`build/` 与 `build/dist/` 两处产物），不要直接 `rm`——路径没了但注册记录还留着时，
+macOS 26 的 ControlCenter 会把 TokenBar 的菜单栏图标拉黑隐藏
+（详见 `doc/ARCH_系统架构设计文档.md` 状态项健康自愈一节）。
+
 ---
 
 ## 📦 分发构建：Developer ID 签名 + 公证（本机出包）

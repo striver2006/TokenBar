@@ -156,8 +156,9 @@ public final class MenuBarController: NSObject {
     /// 早先的实现是 `button.addSubview(HoverTrackingView(...), positioned: .below)`。
     /// macOS 26 的状态项由系统进程托管布局，少往它的按钮里插东西就少一个和这套流程打架的变量；
     /// 同机另一个只 `addTrackingArea` 的菜单栏应用（vps-traffic-quota）从没出现过拿不到槽位的故障。
-    /// 不过用探针单独对比过两种写法，几何都正常 —— 故障偶发，没能当场复现，
-    /// 所以这是"对齐已知稳定的实现"，不是已经坐实的根因修复。
+    /// 用探针单独对比过两种写法，几何都正常——后来根因坐实为 LaunchServices 死记录把
+    /// bundle id 拉黑（见 `purgeStaleLaunchServicesRecords`），与悬停追踪的挂法无关；
+    /// 保留 addTrackingArea 写法只是对齐已知稳定的实现。
     ///
     /// `.inVisibleRect` 让 AppKit 跟着按钮 bounds 走，额度文案变宽变窄都不必重建追踪区。
     private func installHoverTracking(on button: NSStatusBarButton) {
@@ -827,14 +828,28 @@ public final class MenuBarController: NSObject {
     private func purgeStaleLaunchServicesRecords(reason: String, completion: @escaping @MainActor (Int) -> Void) {
         guard let bundleID = Bundle.main.bundleIdentifier,
               FileManager.default.isExecutableFile(atPath: Self.lsregisterPath) else {
+            // 查不了不能静默：否则会被误读成"核对过、没问题"
+            Log.lifecycle.error("LaunchServices 死记录清理[\(reason, privacy: .public)]：找不到可执行的 lsregister，跳过核对")
             completion(0)
             return
         }
         DispatchQueue.global(qos: .utility).async {
-            let stale = Self.staleLaunchServicesPaths(bundleID: bundleID)
+            guard let stale = Self.staleLaunchServicesPaths(bundleID: bundleID) else {
+                Task { @MainActor in
+                    // error 级：这条排查线（hardened runtime 下工具是否可用）必须能事后倒查
+                    Log.lifecycle.error("LaunchServices 死记录清理[\(reason, privacy: .public)]：dump 执行失败，跳过核对")
+                    completion(0)
+                }
+                return
+            }
             var purged = 0
-            for path in stale where Self.runLSRegister(["-u", path]) {
-                purged += 1
+            var uncleanable: [String] = []
+            for path in stale {
+                if Self.unregisterRecord(atPath: path, bundleID: bundleID) {
+                    purged += 1
+                } else {
+                    uncleanable.append(path)
+                }
             }
             let staleCount = stale.count
             Task { @MainActor in
@@ -844,23 +859,40 @@ public final class MenuBarController: NSObject {
                 } else {
                     Log.lifecycle.notice("LaunchServices 注册核对[\(reason, privacy: .public)]：无死记录")
                 }
+                if !uncleanable.isEmpty {
+                    let list = uncleanable.joined(separator: " | ")
+                    Log.lifecycle.error(
+                        "LaunchServices 死记录清理[\(reason, privacy: .public)]：\(uncleanable.count, privacy: .public) 条无法自动注销（路径不可写，如已卸载的卷，需重新挂载对应卷或人工处理）：\(list, privacy: .public)")
+                }
                 completion(purged)
             }
         }
     }
 
     /// 跑 `lsregister -dump` 并取本 bundle id 所有注册路径里已不存在的那些。可在后台线程跑。
-    nonisolated private static func staleLaunchServicesPaths(bundleID: String) -> [String] {
+    ///
+    /// 返回 nil 表示**没查成**（起不来 / 被看门狗杀掉 / 退出码非 0 / 输出解不出码），
+    /// 与"查成了、确实没有"的空数组严格区分——工具一失败就伪装成空数组的话，
+    /// 日志里的"无死记录"就成了假阴性。看门狗防的是 dump 挂死：这条在重建路径上
+    /// 被同步等待，挂死会让 `isRebuilding` 永久为真，后续重建请求整段被丢弃。
+    nonisolated private static func staleLaunchServicesPaths(bundleID: String) -> [String]? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: lsregisterPath)
         process.arguments = ["-dump"]
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
-        do { try process.run() } catch { return [] }
+        do { try process.run() } catch { return nil }
+        // 全量 dump 本机 ~1 秒、几十 MB；15 秒还没跑完按挂死处理
+        let watchdog = DispatchWorkItem {
+            if process.isRunning { process.terminate() }
+        }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 15, execute: watchdog)
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
-        guard let text = String(data: data, encoding: .utf8) else { return [] }
+        watchdog.cancel()
+        guard process.terminationReason == .exit, process.terminationStatus == 0 else { return nil }
+        guard let text = String(data: data, encoding: .utf8) else { return nil }
         return staleLaunchServicesPaths(inDump: text, bundleID: bundleID) {
             FileManager.default.fileExists(atPath: $0)
         }
@@ -916,6 +948,72 @@ public final class MenuBarController: NSObject {
         } catch {
             return false
         }
+    }
+
+    /// 注销一条本 bundle id 的注册记录。
+    ///
+    /// 实测（2026-09-14 受控实验）：`lsregister -u` 只认路径上真实存在的 bundle——路径
+    /// 已删除时直接失败（-10814）；`-gc` 与「同 bundle id 在别处重新注册」都挤不掉死记录。
+    /// 唯一可行的注销方式是**原位重建一个最小 stub .app → `-u` → 删掉 stub**。
+    /// `/Volumes/...` 这类不可写路径上的死记录会失败，如实上报留给人工处理。
+    nonisolated private static func unregisterRecord(atPath path: String, bundleID: String) -> Bool {
+        // 快路径：路径上有真实 bundle（或记录已被别处清掉）时 -u 直接生效
+        if runLSRegister(["-u", path]) { return true }
+
+        let fm = FileManager.default
+        // 双保险：解析时该路径确实不存在；若此刻又出现了（比如用户刚在旧路径重建应用），
+        // 那已经不是死记录，绝不能动它
+        guard !fm.fileExists(atPath: path) else { return false }
+
+        let contentsDir = (path as NSString).appendingPathComponent("Contents")
+        let plistPath = (contentsDir as NSString).appendingPathComponent("Info.plist")
+        let macosDir = (contentsDir as NSString).appendingPathComponent("MacOS")
+
+        // createDirectory(withIntermediateDirectories:) 会连父目录一起建；先把原本不存在
+        // 的目录链记下来，注销后按 rmdir 语义逐级回收，绝不碰任何已存在的目录
+        var missingAncestors: [String] = []
+        var dir = (path as NSString).deletingLastPathComponent
+        while !fm.fileExists(atPath: dir) {
+            missingAncestors.insert(dir, at: 0)
+            let parent = (dir as NSString).deletingLastPathComponent
+            guard parent != dir else { break }
+            dir = parent
+        }
+
+        guard (try? fm.createDirectory(atPath: macosDir, withIntermediateDirectories: true)) != nil,
+              fm.createFile(atPath: plistPath, contents: stubInfoPlist(bundleID: bundleID)),
+              fm.createFile(atPath: (macosDir as NSString).appendingPathComponent("LSTombstone"), contents: nil)
+        else { return false }
+
+        defer {
+            try? fm.removeItem(atPath: path)
+            for ancestor in missingAncestors.reversed() {
+                _ = Darwin.rmdir(ancestor) // 只删空目录，中途有别的文件落进来就留着
+            }
+        }
+        return runLSRegister(["-u", path])
+    }
+
+    /// 注销死记录用的最小 stub Info.plist。lsregister 只要求路径上能扫描出一个合法
+    /// bundle；CFBundleIdentifier 必须与要注销的记录一致，否则 -u 匹配不上。
+    nonisolated static func stubInfoPlist(bundleID: String) -> Data {
+        let xml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+            <key>CFBundleIdentifier</key>
+            <string>\(bundleID)</string>
+            <key>CFBundleName</key>
+            <string>LSTombstone</string>
+            <key>CFBundleExecutable</key>
+            <string>LSTombstone</string>
+            <key>CFBundlePackageType</key>
+            <string>APPL</string>
+        </dict>
+        </plist>
+        """
+        return Data(xml.utf8)
     }
 
     /// 按窗口号反查 CGWindowList。
