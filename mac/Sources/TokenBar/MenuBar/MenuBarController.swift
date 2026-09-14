@@ -2,42 +2,6 @@ import Cocoa
 import SwiftUI
 import Combine
 
-final class HoverTrackingView: NSView {
-    var onMouseEnter: (() -> Void)?
-    var onMouseExit: (() -> Void)?
-    private var trackingArea: NSTrackingArea?
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let existing = trackingArea {
-            removeTrackingArea(existing)
-        }
-        let options: NSTrackingArea.Options = [.mouseEnteredAndExited, .activeAlways, .inVisibleRect]
-        let area = NSTrackingArea(rect: bounds, options: options, owner: self, userInfo: nil)
-        addTrackingArea(area)
-        self.trackingArea = area
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        onMouseEnter?()
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        onMouseExit?()
-    }
-
-    /// 状态项重建时拆掉旧 tracker：不摘 trackingArea、不断开闭包的话，
-    /// 旧 tracker 的悬停回调会打到已经换新的状态项状态机上。
-    func detach() {
-        onMouseEnter = nil
-        onMouseExit = nil
-        if let existing = trackingArea {
-            removeTrackingArea(existing)
-            trackingArea = nil
-        }
-    }
-}
-
 @MainActor
 public final class MenuBarController: NSObject {
     public static let shared = MenuBarController()
@@ -56,7 +20,7 @@ public final class MenuBarController: NSObject {
     private static let forceFallbackDefaultsKey = "TokenBarForceAnchorFallback"
     /// 调试键：强制把状态项判成掉线，用来验证重建链路
     private static let forceUnhealthyDefaultsKey = "TokenBarForceStatusItemUnhealthy"
-    /// 调试键：不给按钮挂 HoverTrackingView，A/B 它是否干扰菜单栏布局
+    /// 调试键：不给按钮挂悬停追踪区，A/B 它是否干扰菜单栏布局
     private static let disableHoverTrackerDefaultsKey = "TokenBarDisableHoverTracker"
 
     private static let statusItemAutosaveName = "TokenBarStatusItem"
@@ -72,7 +36,7 @@ public final class MenuBarController: NSObject {
     private var statusItemHeartbeat: Timer?
     private var isPinnedByClick: Bool = false
     private var settingsWindow: NSWindow?
-    private var trackingView: HoverTrackingView?
+    private var trackingArea: NSTrackingArea?
     private var cancellables = Set<AnyCancellable>()
 
     /// 缓存坐标过期时用于挂载 NSPopover 的透明辅助面板（懒创建、复用）
@@ -174,43 +138,61 @@ public final class MenuBarController: NSObject {
         button.action = #selector(statusBarButtonClicked(_:))
         button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         applyStatusItemContent()
-        attachHoverTracker(to: button)
+        installHoverTracking(on: button)
         // 刚创建时窗口还没分配，这里只如实记"装上了"，几何留给随后的健康检查判定 ——
         // 旧日志拿 `button.image != nil` 当"状态项已创建成功"是假阳性，图标看不见时它照样报成功
         Log.lifecycle.notice(
             "状态项已安装（几何待校验）：图标=\(button.image != nil ? "有" : "无", privacy: .public) clearAutosave=\(clearAutosaveState, privacy: .public)")
     }
 
-    private func attachHoverTracker(to button: NSStatusBarButton) {
+    /// 悬停追踪区直接挂在状态项按钮上，不再往按钮里塞子视图。
+    ///
+    /// 早先的实现是 `button.addSubview(HoverTrackingView(...), positioned: .below)`。
+    /// macOS 26 的状态项由系统进程托管布局，少往它的按钮里插东西就少一个和这套流程打架的变量；
+    /// 同机另一个只 `addTrackingArea` 的菜单栏应用（vps-traffic-quota）从没出现过拿不到槽位的故障。
+    /// 不过用探针单独对比过两种写法，几何都正常 —— 故障偶发，没能当场复现，
+    /// 所以这是"对齐已知稳定的实现"，不是已经坐实的根因修复。
+    ///
+    /// `.inVisibleRect` 让 AppKit 跟着按钮 bounds 走，额度文案变宽变窄都不必重建追踪区。
+    private func installHoverTracking(on button: NSStatusBarButton) {
         guard !UserDefaults.standard.bool(forKey: Self.disableHoverTrackerDefaultsKey) else {
-            Log.lifecycle.notice("调试开关生效：跳过 HoverTrackingView 安装")
+            Log.lifecycle.notice("调试开关生效：跳过悬停追踪区安装")
             return
         }
-        let tracker = HoverTrackingView(frame: button.bounds)
-        tracker.autoresizingMask = [.width, .height]
-        tracker.onMouseEnter = { [weak self] in
-            Task { @MainActor in
-                self?.handleHoverEntered()
-            }
-        }
-        tracker.onMouseExit = { [weak self] in
-            Task { @MainActor in
-                self?.handleHoverExited()
-            }
-        }
-        button.addSubview(tracker, positioned: .below, relativeTo: nil)
-        self.trackingView = tracker
+        let area = NSTrackingArea(
+            rect: button.bounds,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        button.addTrackingArea(area)
+        trackingArea = area
+    }
+
+    // selector 必须显式写死。Swift 给 `mouseEntered(with:)` 自动合成的 @objc 名字是
+    // `mouseEnteredWith:`（只有 override NSResponder 的同名方法才保留原名），而 AppKit
+    // 向 NSTrackingArea 的 owner 发的是 `mouseEntered:` —— 对不上就静默收不到悬停事件，
+    // 点击却照常工作，极难排查。
+    @objc(mouseEntered:)
+    func mouseEntered(with event: NSEvent) {
+        handleHoverEntered()
+    }
+
+    @objc(mouseExited:)
+    func mouseExited(with event: NSEvent) {
+        handleHoverExited()
     }
 
     private func teardownStatusItem() {
-        trackingView?.detach()
-        trackingView?.removeFromSuperview()
-        trackingView = nil
         if let button = statusItem?.button {
+            if let trackingArea {
+                button.removeTrackingArea(trackingArea)
+            }
             button.target = nil
             button.action = nil
             button.image = nil
         }
+        trackingArea = nil
         if let item = statusItem {
             NSStatusBar.system.removeStatusItem(item)
         }

@@ -59,7 +59,10 @@ macOS 客户端采用纯 Swift 打造，支持 macOS 13 (Ventura) 及以上系�
 
 ### 2.1 表现层 (Presentation Layer)
 - **`MenuBarController`**：
-  - 维护系统状态栏 `NSStatusItem`，通过 `HoverTrackingView`（基于 `NSTrackingArea`）监听鼠标悬浮与移出事件。
+  - 维护系统状态栏 `NSStatusItem`，用直接挂在按钮上的 `NSTrackingArea` 监听鼠标悬浮与移出事件
+    （不往 `NSStatusBarButton` 里插子视图：macOS 26 的状态项由系统进程托管布局，少插一层就少一个变量；
+    追踪区的 owner 是控制器本身，回调必须写成 `@objc(mouseEntered:)` —— Swift 自动合成的名字是
+    `mouseEnteredWith:`，和 AppKit 实际发送的 selector 对不上会静默收不到悬停事件）。
   - 支持“鼠标悬停快速展开”与“点击固定（Pin）”双重交互模型。悬停 0.15s 展开、移出 0.35s 关闭
     （`hoverOpenDelay` / `hoverCloseDelay`），定时器注册到 `.common` mode。`NSTrackingArea` 只覆盖
     状态栏按钮，鼠标「图标 → 浮窗 → 桌面」后不会再收到 exited，因此 `handleMouseMoved` 在鼠标既不在
