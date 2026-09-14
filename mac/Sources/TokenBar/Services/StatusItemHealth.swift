@@ -6,9 +6,11 @@ import Foundation
 /// （`AXEnabled=true`、`AXTitle=" 100%/65%"`、tooltip 正常），但控制中心没有为它
 /// 渲染菜单栏镜像，几何常停在 `(3332, 1417, 109, 24)`（右边缘越出屏幕），用户就"看不到图标"。
 ///
-/// 根因不在应用代码：macOS 26 的 ControlCenter 按 bundle id 查 LaunchServices，只要有一条
-/// 路径已不存在的陈旧注册记录，就把这个 bundle id 的状态项 `Moving host to blocked list`
-/// 并隐藏。所以最可靠的健康信号是**控制中心有没有为它画镜像**（layer-25、onscreen、同 x 同宽）；
+/// 根因不在应用代码：macOS 26 的 ControlCenter 维护一份持久的「应用菜单栏项」记录
+/// （系统设置 › 菜单栏 › 应用程序），本应用的 bundle id 一旦被记在某条开关已关的记录名下
+/// （2026-09-14 实测：从 IDE 终端直接执行可执行文件，会被记到 IDE 名下），每个新 host 创建后
+/// ~20ms 就 `Moving host to blocked list` 并隐藏。应用侧无法解除，只能识别并指引用户去系统设置。
+/// 所以最可靠的健康信号是**控制中心有没有为它画镜像**（layer-25、onscreen 的控制中心窗口）；
 /// 几何判定只是辅助 —— 被 block 的状态项 frame 也可能停在正常位置。
 /// `button.window == nil` / 宽度为 0 这两个信号在这种故障态下都不成立，单靠它们会漏判。
 ///
@@ -147,6 +149,10 @@ public enum StatusItemHealth {
         public var confirmations: Int
         /// 单次运行的重建预算
         public var maxAttempts: Int
+        /// `notMirrored`（几何正常、控制中心不画镜像）的重建预算。这种掉线绝大多数是被系统
+        /// 「菜单栏 › 应用程序」设置拉黑，重建只会让 ControlCenter 再拉黑一次并重写偏好，
+        /// 所以只试一次证明不是偶发，之后交给 `blockedBySystem` 去提示用户。
+        public var notMirroredAttempts: Int
         /// 退避基数：30 / 60 / 120 / 240 …
         public var baseInterval: TimeInterval
         public var maxInterval: TimeInterval
@@ -156,12 +162,14 @@ public enum StatusItemHealth {
         public init(
             confirmations: Int = 2,
             maxAttempts: Int = 5,
+            notMirroredAttempts: Int = 1,
             baseInterval: TimeInterval = 30,
             maxInterval: TimeInterval = 900,
             stableResetWindow: TimeInterval = 600
         ) {
             self.confirmations = confirmations
             self.maxAttempts = maxAttempts
+            self.notMirroredAttempts = notMirroredAttempts
             self.baseInterval = baseInterval
             self.maxInterval = maxInterval
             self.stableResetWindow = stableResetWindow
@@ -175,6 +183,21 @@ public enum StatusItemHealth {
             /// 没有这一档的话，持久化位置被写坏时带 autosaveName 重建会一直把坏状态还原回来。
             case resetAutosaveThenRebuild
             case giveUp
+            /// 几何正常但控制中心不画镜像，且已经重建过一次仍然如此：判定为被系统
+            /// 「菜单栏 › 应用程序」设置拉黑。不再重建，调用方应提示用户去系统设置解除，
+            /// 并继续低频探测 —— 用户在设置里放行后 ControlCenter 会就地 `Unblocking host`，无需重建。
+            case blockedBySystem
+        }
+
+        /// 该判定下还允不允许重建（reopen 路径等不走 decide 的地方用它，避免把 notMirrored 重建 5 次）
+        public func allowsRebuild(verdict: Verdict, attempts: Int) -> Bool {
+            guard verdict.isDetached else { return false }
+            return attempts < attemptBudget(for: verdict)
+        }
+
+        private func attemptBudget(for verdict: Verdict) -> Int {
+            if case .detached(.notMirrored) = verdict { return min(notMirroredAttempts, maxAttempts) }
+            return maxAttempts
         }
 
         public func decide(
@@ -186,6 +209,9 @@ public enum StatusItemHealth {
         ) -> Decision {
             guard verdict.isDetached else { return .wait(0) }
             guard consecutiveDetached >= confirmations else { return .wait(0) }
+            if case .detached(.notMirrored) = verdict, attempts >= attemptBudget(for: verdict) {
+                return .blockedBySystem
+            }
             guard attempts < maxAttempts else { return .giveUp }
 
             if attempts > 0, let last = lastRebuildAt {

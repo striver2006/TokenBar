@@ -1,6 +1,7 @@
 import Cocoa
 import SwiftUI
 import Combine
+@preconcurrency import UserNotifications
 
 @MainActor
 public final class MenuBarController: NSObject {
@@ -77,6 +78,8 @@ public final class MenuBarController: NSObject {
     private var screenReconfigureUntil: Date?
     /// `userHidden` 只尝试一次性拉回可见，之后尊重用户意图
     private var didForceVisibleOnce = false
+    /// 被系统「菜单栏 › 应用程序」设置拉黑只提示一次（日志 + 系统通知），之后静默低频探测
+    private var didReportSystemBlock = false
 
     private override init() {
         super.init()
@@ -211,7 +214,7 @@ public final class MenuBarController: NSObject {
     private func rebuildStatusItem(reason: String, clearAutosaveState: Bool) {
         guard !isRebuilding else { return }
         isRebuilding = true
-        // 被 ControlCenter 拉黑的根因在 LaunchServices 死记录，不先清掉，重建多少次都一样被隐藏
+        // LaunchServices 死记录清理是构建卫生（2026-09-14 实测它并非拉黑根因，但无害），顺手在重建前做一次
         purgeStaleLaunchServicesRecords(reason: "rebuild") { [weak self] purged in
             guard let self else { return }
             self.isRebuilding = false
@@ -653,7 +656,7 @@ public final class MenuBarController: NSObject {
         // 从 Dock / Finder / `tb` 重开时鼠标不在图标上，掉线就地重建 ——
         // 顺带让这条路径成为"把不见了的图标修回来"的手段
         let verdict = StatusItemHealth.evaluate(statusItemSnapshot())
-        if verdict.isDetached, rebuildAttempts < Self.rebuildPolicy.maxAttempts, !isRebuilding {
+        if Self.rebuildPolicy.allowsRebuild(verdict: verdict, attempts: rebuildAttempts), !isRebuilding {
             logStatusItemState(reason: "reopen")
             pendingReopenAutoDismiss = autoDismiss
             rebuildStatusItem(reason: verdict.logDescription, clearAutosaveState: false)
@@ -788,16 +791,27 @@ public final class MenuBarController: NSObject {
         )
     }
 
-    /// 控制中心是否为这个状态项窗口渲染了菜单栏镜像。
+    /// 控制中心是否为这个状态项渲染了菜单栏镜像。
     ///
     /// macOS 26：每个真正显示出来的状态项，在 layer-25 层都有一个 onscreen 的控制中心窗口，
-    /// 与应用自己那个离屏的状态项窗口同 x 同宽。被 ControlCenter 放进 blocked list 隐藏的
-    /// 状态项没有这条镜像 —— 这是目前最可靠的健康信号，几何判定只是辅助（被 block 的状态项
-    /// frame 也可能停在正常位置）。查询失败返回 nil，让该信号被忽略。
+    /// 窗口名就是状态项的 autosaveName（实测 `TokenBarStatusItem` / `Item-0` / `Clock`），
+    /// 位置与应用自己那个离屏状态项窗口同 x 同宽。被 ControlCenter 拉黑隐藏的状态项没有这条镜像 ——
+    /// 这是目前最可靠的健康信号，几何判定只是辅助（被 block 的状态项 frame 也可能停在正常位置）。
+    ///
+    /// 匹配顺序：
+    /// 1. 拿得到窗口名（需要屏幕录制权限，否则 `kCGWindowName` 缺失）→ 按 autosaveName 精确匹配，
+    ///    与应用缓存的 frame 无关。2026-09-14 实测镜像在 x=2605 而应用缓存 frame 停在 3333，
+    ///    只按几何会把健康项误判成 `notMirrored` 并触发重建。
+    /// 2. 拿不到窗口名 → 同 x 同宽视为镜像；只有同宽、x 不同的说明缓存 frame 过期，返回 nil 让该信号被忽略，
+    ///    绝不因为自己的坐标过期就判掉线。
+    /// 3. 查询失败返回 nil。
     private func menuBarHostMirrors(_ frame: NSRect) -> Bool? {
         guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]]
         else { return nil }
         let ownPID = ProcessInfo.processInfo.processIdentifier
+        var anyNameAvailable = false
+        var sameXAndWidth = false
+        var sameWidthOnly = false
         for info in list {
             guard let layer = info[kCGWindowLayer as String] as? Int, layer == 25,
                   (info[kCGWindowOwnerPID as String] as? Int32) != ownPID,
@@ -805,10 +819,17 @@ public final class MenuBarController: NSObject {
                   let x = bounds["X"], let width = bounds["Width"], let height = bounds["Height"],
                   height <= 40                                  // 只认菜单栏那一排，排除弹窗
             else { continue }
-            if abs(x - frame.minX) <= 2, abs(width - frame.width) <= 2 {
-                return true
+            if let name = info[kCGWindowName as String] as? String {
+                anyNameAvailable = true
+                if name == Self.statusItemAutosaveName { return true }
+            }
+            if abs(width - frame.width) <= 2 {
+                if abs(x - frame.minX) <= 2 { sameXAndWidth = true } else { sameWidthOnly = true }
             }
         }
+        if anyNameAvailable { return false }          // 名字查得到却没有我们的：确实没画镜像
+        if sameXAndWidth { return true }
+        if sameWidthOnly { return nil }               // 缓存 frame 过期，信号不可信
         return false
     }
 
@@ -817,10 +838,10 @@ public final class MenuBarController: NSObject {
 
     /// 清掉本 bundle id 在 LaunchServices 里指向已不存在路径的陈旧注册。
     ///
-    /// 图标"消失"的真正根因：macOS 26 的 ControlCenter 按 bundle id 查 LaunchServices，只要撞上
-    /// 一条路径已被删除的注册记录（换过构建输出目录、反复挂载 DMG 测安装包都会留下），就把这个
-    /// bundle id 的状态项 `Moving host to blocked list` 并隐藏，重启进程、重建状态项都没用；
-    /// 用 `lsregister -u` 注销死记录后，下一次注册立即恢复。这一步必须排在重建之前。
+    /// 历史：2026-09-14 上午曾把它当成图标"消失"的根因（`Moving host to blocked list`）；同日晚
+    /// 实测证伪——LS 清到只剩一条仍被拉黑，真正根因是 ControlCenter 的「菜单栏 › 应用程序」持久记录
+    /// （见 `StatusItemHealth` 头注释与 doc/TROUBLESHOOTING 第九节）。保留这一步只作为构建卫生：
+    /// 换过构建输出目录、反复挂载 DMG 都会留下死记录，清掉无害。
     ///
     /// 只能解析 `lsregister -dump`：`NSWorkspace.urlsForApplications(withBundleIdentifier:)`
     /// 会把不存在的路径过滤掉，拿它永远找不到死记录。dump 是全量输出（本机 ~1 秒、几十 MB），
@@ -1074,6 +1095,7 @@ public final class MenuBarController: NSObject {
 
         case .healthy:
             consecutiveDetached = 0
+            didReportSystemBlock = false
             if healthySince == nil { healthySince = Date() }
             if Self.rebuildPolicy.shouldResetAttempts(now: Date(), healthySince: healthySince) {
                 rebuildAttempts = 0
@@ -1101,7 +1123,29 @@ public final class MenuBarController: NSObject {
             case .giveUp:
                 Log.lifecycle.error(
                     "状态项重建预算耗尽（\(self.rebuildAttempts, privacy: .public) 次），停止自愈")
+            case .blockedBySystem:
+                reportSystemBlockIfNeeded()
             }
+        }
+    }
+
+    /// 几何正常、重建过一次仍无镜像：按"被系统设置拉黑"处理。应用侧解不开，只能把用户引到
+    /// 「系统设置 › 菜单栏 › 应用程序」。只提示一次；之后靠心跳低频探测，用户放行后 ControlCenter
+    /// 会对现有 host `Unblocking host`，下一轮探测自然转 healthy，不需要再重建。
+    private func reportSystemBlockIfNeeded() {
+        guard !didReportSystemBlock else { return }
+        didReportSystemBlock = true
+        Log.lifecycle.error(
+            "状态项被 ControlCenter 拉黑（几何正常、重建后仍无镜像）：应用侧无法解除，请到「系统设置 › 菜单栏 › 应用程序」打开 TokenBar 及曾直接启动过它的 IDE 的开关。停止重建，仅保留低频探测")
+
+        let center = UNUserNotificationCenter.current()
+        let content = UNMutableNotificationContent()
+        content.title = I18n(.statusItemBlockedTitle)
+        content.body = I18n(.statusItemBlockedBody)
+        let request = UNNotificationRequest(identifier: "status-item-blocked", content: content, trigger: nil)
+        center.requestAuthorization(options: [.alert]) { granted, _ in
+            guard granted else { return }
+            center.add(request)
         }
     }
 

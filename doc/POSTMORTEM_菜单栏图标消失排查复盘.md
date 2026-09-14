@@ -83,9 +83,9 @@
 
 ## 五、遗留与后续
 
-- [ ] 应用侧：镜像缺失但几何正常时只重建一次，并在日志/通知里指引用户去「系统设置 › 菜单栏 › 应用程序」。
-- [ ] 应用侧：镜像匹配容忍缓存 frame 过期（实测镜像在 x=2718、缓存 frame 停在 3333 时误报 `mirror=false`）。
-- [ ] 评估是否保留 `purgeStaleLaunchServicesRecords`：它对本问题无效，但作为构建卫生仍无害。
+- [x] 应用侧：镜像缺失但几何正常时只重建一次（`RebuildPolicy.notMirroredAttempts`），再无镜像即 `blockedBySystem`，一次 error 日志 + 系统通知指引去「系统设置 › 菜单栏 › 应用程序」（2026-09-14 晚落地）。
+- [x] 应用侧：镜像匹配改为按 layer-25 窗口名（autosaveName）优先，几何兜底，缓存 frame 过期时忽略信号（2026-09-14 晚落地）。
+- [x] `purgeStaleLaunchServicesRecords` 保留为构建卫生，代码注释已改口说明它不是根因。
 - [ ] UniDrop 同样挂在 VS Code / Antigravity 名下，`unidrop-client` 两条 adhoc 记录是禁止状态，一并处理。
 - [ ] 第一、二轮的结论已在 `TROUBLESHOOTING_菜单栏图标不显示.md` 顶部标注为历史记录，内容保留供比对。
 

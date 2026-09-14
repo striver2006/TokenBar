@@ -225,6 +225,30 @@ final class StatusItemHealthTests: XCTestCase {
         XCTAssertEqual(decide(attempts: 5, secondsSinceLastRebuild: 900), .giveUp)
     }
 
+    /// notMirrored（几何正常、控制中心不画镜像）只允许重建一次：这种掉线基本是被系统
+    /// 「菜单栏 › 应用程序」设置拉黑，重建只会再被拉黑一次，第二次起改为 blockedBySystem 提示用户
+    func testPolicyRebuildsNotMirroredOnlyOnceThenReportsSystemBlock() {
+        XCTAssertEqual(decide(.detached(.notMirrored), attempts: 0), .rebuild)
+        XCTAssertEqual(decide(.detached(.notMirrored), attempts: 1, secondsSinceLastRebuild: 5), .blockedBySystem)
+        XCTAssertEqual(decide(.detached(.notMirrored), attempts: 4, secondsSinceLastRebuild: 9999), .blockedBySystem)
+        // 仍要先过确认次数，单次误判不动手
+        XCTAssertEqual(decide(.detached(.notMirrored), detachedRun: 1, attempts: 0), .wait(0))
+    }
+
+    func testPolicyOtherReasonsKeepFullBudget() {
+        XCTAssertEqual(decide(.detached(.offMenuBar), attempts: 1, secondsSinceLastRebuild: 31), .rebuild)
+        XCTAssertEqual(decide(.detached(.noWindow), attempts: 4, secondsSinceLastRebuild: 300), .resetAutosaveThenRebuild)
+    }
+
+    func testAllowsRebuildHonoursPerReasonBudget() {
+        XCTAssertTrue(policy.allowsRebuild(verdict: .detached(.notMirrored), attempts: 0))
+        XCTAssertFalse(policy.allowsRebuild(verdict: .detached(.notMirrored), attempts: 1))
+        XCTAssertTrue(policy.allowsRebuild(verdict: .detached(.offMenuBar), attempts: 4))
+        XCTAssertFalse(policy.allowsRebuild(verdict: .detached(.offMenuBar), attempts: 5))
+        XCTAssertFalse(policy.allowsRebuild(verdict: .healthy, attempts: 0))
+        XCTAssertFalse(policy.allowsRebuild(verdict: .userHidden, attempts: 0))
+    }
+
     func testPolicyResetsAttemptsAfterStablePeriod() {
         let now = Date()
         XCTAssertTrue(policy.shouldResetAttempts(now: now, healthySince: now.addingTimeInterval(-601)))

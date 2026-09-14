@@ -119,8 +119,15 @@ macOS 客户端采用纯 Swift 打造，支持 macOS 13 (Ventura) 及以上系�
     ControlCenter defaults、`NSStatusItem VisibleCC` 键、公证状态；裸可执行文件与新 bundle id 探针能上屏是因为各自
     独立成记录。**LS 死记录不是根因，应用内 LS 清理与 5 次重建对此无效**；解除是在系统设置里打开 VS Code / ZCode
     的开关（或 sudo 改 plist 删掉归属），预防是开发时用 `open` 启动 .app 而不是在 IDE 终端直接执行可执行文件。
-    详见 `TROUBLESHOOTING_菜单栏图标不显示.md` 第九节。后续应用侧改造方向：镜像缺失但几何正常时只重建一次并指引
-    用户去系统设置；镜像匹配需容忍应用缓存 frame 过期（观察到镜像在 2718、应用缓存 3333 而误报 `mirror=false`）。
+    详见 `TROUBLESHOOTING_菜单栏图标不显示.md` 第九节。**应用侧据此改造（2026-09-14 晚）**：
+    ① `RebuildPolicy` 对 `notMirrored`（几何正常、无镜像）单独设预算 `notMirroredAttempts = 1`，
+    重建一次仍无镜像即返回 `.blockedBySystem`，控制器只打一次 error 日志 + 系统通知
+    （`I18n.statusItemBlockedTitle/Body`，指引到「系统设置 › 菜单栏 › 应用程序」），不再重建、保留心跳探测；
+    用户放行后 ControlCenter 对现有 host `Unblocking host`，下一轮探测转 healthy 并清掉提示标志。
+    reopen 路径改用 `allowsRebuild(verdict:attempts:)`，同样受此预算约束。
+    ② `menuBarHostMirrors` 改为按 layer-25 窗口名（= autosaveName，需屏幕录制权限才拿得到）精确匹配，
+    拿不到名字才退回同 x 同宽；只有同宽、x 不同的说明应用缓存 frame 过期，返回 nil 让信号被忽略，
+    修掉"镜像在 2605 / 缓存 3333 误报 notMirrored"的假阳性。③ LS 死记录清理保留为构建卫生，注释已改口。
     - 判定：纯函数 `StatusItemHealth.evaluate` 吃一份 `Snapshot`（`isVisible` / `button.window` 几何 / `windowNumber` /
       控制中心是否为它渲染了镜像 / 能否在 `CGWindowList` 按窗口号查到 / 各屏几何），输出 `healthy` / `userHidden` /
       `detached(Reason)` / `indeterminate`。**最可靠的信号是控制中心镜像**：每个真正显示出来的状态项在 layer-25 层都有一个

@@ -301,10 +301,11 @@ ControlCenter 按负责进程归属菜单项。用 `open` 启动的 .app 由 lau
    TokenBar 自己那行开关关再开（只写 `Preferences: changed`，不改 IDE 记录）。
 4. **预防**：开发时不要在 IDE 集成终端里直接执行 TokenBar 可执行文件；构建后一律 `open mac/build/TokenBar.app`
    或 `open -a TokenBar`。已经挂错的归属不会自动清理。
-5. 应用侧结论：`purgeStaleLaunchServicesRecords` + 5 次重建对这个根因无效，每次重建还触发 ControlCenter
-   重写偏好。后续应把"镜像缺失但几何正常"识别为"被系统设置拉黑"，只重建一次并在日志/通知里指引用户去
-   「系统设置 › 菜单栏 › 应用程序」。另一个待修误判：裸可执行文件实验里镜像在 x=2718，应用健康探测仍报
-   `mirror=false`（自己缓存的 frame 停在 3333），镜像匹配要容忍 frame 过期。
+5. 应用侧改造（2026-09-14 晚已落地）：`notMirrored` 只重建一次，再无镜像即 `blockedBySystem`——
+   error 日志「状态项被 ControlCenter 拉黑…请到系统设置 › 菜单栏 › 应用程序…」+ 一次系统通知，
+   停止重建、保留心跳探测；用户放行后自动转 healthy。镜像匹配改为按 layer-25 窗口名（autosaveName）
+   优先，几何兜底，缓存 frame 过期时忽略信号，不再把健康项误判成 `notMirrored`。
+   LS 死记录清理保留为构建卫生。验证日志：`verdict=healthy … mirror=true`。
 
 ---
 *2026-09-14 · 基于 a42d45b / c0914de 两轮修复与当日受控实验整理；同日 13:42 重启实测
