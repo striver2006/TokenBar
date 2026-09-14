@@ -75,59 +75,25 @@ macOS 客户端采用纯 Swift 打造，支持 macOS 13 (Ventura) 及以上系�
   - 绑定 `NSPopover`，将其根视图托管至 SwiftUI `TokenSummaryPopoverView`。
   - 订阅 `RefreshManager.objectWillChange`，按用户配置把某个厂商的剩余额度 / 余额渲染到 `NSStatusItem` 标题（文案由纯函数 `MenuBarStatus` 计算，便于单测）。
   - **状态项健康自愈**（macOS 26 起状态项托管在系统进程 ControlCenter，实测会出现"对象活着、内容完好，但控制中心不为它渲染"
-    的故障态，用户看到的就是"图标不见了"）。**真正的根因不在应用代码**：ControlCenter 按 bundle id 查 LaunchServices，
-    只要有一条路径已不存在的陈旧注册记录（换过构建输出目录、反复挂载 DMG 测安装包都会留下），就把该 bundle id 的状态项
-    `Moving host to blocked list` 并隐藏；黑名单不落盘、重启 ControlCenter 也不清，只有 `lsregister -u` 注销死记录后
-    下一次注册才恢复（2026-09-14 用探针 .app 逐变量排除后实测确认）。所以自愈动作里**清理 LS 死记录排在重建状态项之前**：
-    `purgeStaleLaunchServicesRecords` 在后台线程解析 `lsregister -dump`（全量输出，本机 28MB / 3 秒）找出本 bundle id
-    下路径已不存在的记录，逐条注销，完成后回主线程再重建；启动时先清一次、每次重建前再清一次。
-    注销机制是受控实验（2026-09-14）实测出来的：`lsregister -u` **只认路径上真实存在的 bundle**，
-    路径已删除时直接失败（-10814）；`-gc` 与「同 bundle id 在别处重新注册」都挤不掉死记录。
-    所以对每条死记录：先试 `-u`（路径复活过的快路径），失败则**原位重建一个最小 stub .app
-    （`stubInfoPlist`，CFBundleIdentifier 与死记录一致）→ `-u` → 删掉 stub 并按 rmdir 语义
-    回收新建的空目录**；`/Volumes/...` 等不可写路径上的死记录自动注销会失败，打 error 日志
-    留给人工处理（重新挂载对应卷）。
-    不能用 `NSWorkspace.urlsForApplications(withBundleIdentifier:)`——它会把不存在的路径过滤掉，永远找不到死记录。
-    dump 带 15s 看门狗（这条在重建路径上被同步等待，挂死会永久卡住 `isRebuilding`）；**"没查成"与"查了、没有"
-    严格分开**——工具起不来、被看门狗杀掉或退出码非 0 时打 error 级"dump 执行失败，跳过核对"，
-    绝不把失败伪装成"无死记录"的假阴性。构建侧配套：`build_app.sh` 删除旧产物前先 `lsregister -u`，
-    另提供 `--clean` 一并注销并删除 `build/` 与 `build/dist/` 两个输出路径——清理构建目录必须走它，
-    直接 `rm` 又会制造新的死记录。
-    2026-09-14 下午真机复测补充：**LS 清干净后 block 未必解除**。LS 里 com.tokenbar.mac 只剩
-    /Applications 一条干净注册、死记录为零时，ControlCenter 仍在新会话里对该 bundle id 的状态项
-    即时 `Moving host to blocked list`——换用该 bundle id 的最小探针 .app（无 autosaveName、ad-hoc
-    签名、/tmp 路径）同样 20ms 内被拉黑，而全新 bundle id 的同款探针正常上屏；重启 ControlCenter、
-    `tccutil reset`、`-f` 重注册、注销再注册均无效，且 ControlCenter 的全部落盘状态
-    （defaults / ByHost displayablemenuextras / Application Support / Group Containers）里查无该
-    bundle id 的痕迹。结论：**拉黑是按 bundle id 的粘性会话态**（疑似活在对 CC 重启免疫的
-    WindowServer/会话层），LS 死记录只是初始触发器之一。应用内 LS 清理仍是必要卫生（防再次触发），
-    镜像健康信号也如实探测到了 block；但对已存在的拉黑，LS 侧动作已无力解除。2026-09-14 13:42
-    整机重启实测：**重启也无效**——开机自启的首个 host 在 13:46 创建 20ms 后复现拉黑，此后全天
-    各 PID 均秒拒；「拉黑随会话清除」假设不成立（要么跨重启持久，要么重启后又被即刻再触发）。
-    另注意到无关应用 `io.vpsquota.VPSTrafficQuota`、`com.unidrop.client` 同期也被 blocked，
-    「按 bundle id 精确命中」有待重审。解除手段目前只剩全库重建 `lsregister -kill -seed -r`
-    这类重手段（未验证）。
-    **2026-09-14 晚第三轮（16:35 重启后）定案**：拉黑依据是 ControlCenter 自己的持久「应用菜单栏项」记录——
-    `~/Library/Group Containers/group.com.apple.controlcenter/Library/Preferences/group.com.apple.controlcenter.plist`
+    的故障态，用户看到的就是"图标不见了"）。**根因不在应用代码**（2026-09-14 定案）：ControlCenter 维护一份持久的
+    「应用菜单栏项」记录——`~/Library/Group Containers/group.com.apple.controlcenter/Library/Preferences/group.com.apple.controlcenter.plist`
     的 `trackedApplications`（私有框架 `ControlCenter.framework` 的 `SystemItemMenuBarPreferences`，
     `TrackedApplication { location, menuItemLocations, isAllowed }`，对应「系统设置 › 菜单栏 › 应用程序」列表；
-    目录受 TCC 保护，普通 shell 读不到，前两轮"落盘状态查无痕迹"是假阴性）。`sudo` 拷出解码后发现
-    `com.tokenbar.mac` 被记在 **`com.microsoft.VSCode` 与 `dev.zcode.app` 两条 `isAllowed=false` 记录的
-    `menuItemLocations`** 里（曾从 IDE 集成终端直接执行 TokenBar，系统按负责进程归属），ControlCenter 的规则是
-    bundle id 只要出现在任一禁止记录的菜单项列表里就拉黑，TokenBar 自己那条允许记录不起作用。VPSQuota、UniDrop
-    同理挂在 VS Code / Antigravity 名下。实测排除：LS 注册条数、安装路径、autosaveName、控制中心面板内容、
-    ControlCenter defaults、`NSStatusItem VisibleCC` 键、公证状态；裸可执行文件与新 bundle id 探针能上屏是因为各自
-    独立成记录。**LS 死记录不是根因，应用内 LS 清理与 5 次重建对此无效**；解除是在系统设置里打开 VS Code / ZCode
-    的开关（或 sudo 改 plist 删掉归属），预防是开发时用 `open` 启动 .app 而不是在 IDE 终端直接执行可执行文件。
-    详见 `TROUBLESHOOTING_菜单栏图标不显示.md` 第九节。**应用侧据此改造（2026-09-14 晚）**：
-    ① `RebuildPolicy` 对 `notMirrored`（几何正常、无镜像）单独设预算 `notMirroredAttempts = 1`，
+    目录受 TCC 保护，普通 shell 读不到）。`com.tokenbar.mac` 被记在 **`com.microsoft.VSCode` 与 `dev.zcode.app`
+    两条 `isAllowed=false` 记录的 `menuItemLocations`** 里（曾从 IDE 集成终端直接执行 TokenBar，系统按负责进程归属），
+    ControlCenter 的规则是 bundle id 出现在任一禁止记录的菜单项列表里就 `Moving host to blocked list`，应用自己那条
+    允许记录不起作用。解除只能在系统设置里打开 IDE 的开关（放行瞬间 ControlCenter 对现有 host `Unblocking host`）；
+    预防是调试用 `open` 启动 .app。
+    历史：2026-09-14 上午曾把 LaunchServices 死记录当成根因（a42d45b / c0914de 加了 `lsregister -dump` 解析、
+    stub 法注销、构建脚本注销等约 300 行），同日晚实测证伪（LS 清到一条仍拉黑、换 bundle id 立即正常），
+    这部分代码已整体移除；排查过程见 `POSTMORTEM_菜单栏图标消失排查复盘.md`。
+    **应用侧现状**：① `RebuildPolicy` 对 `notMirrored`（几何正常、无镜像）单独设预算 `notMirroredAttempts = 1`，
     重建一次仍无镜像即返回 `.blockedBySystem`，控制器只打一次 error 日志 + 系统通知
     （`I18n.statusItemBlockedTitle/Body`，指引到「系统设置 › 菜单栏 › 应用程序」），不再重建、保留心跳探测；
-    用户放行后 ControlCenter 对现有 host `Unblocking host`，下一轮探测转 healthy 并清掉提示标志。
-    reopen 路径改用 `allowsRebuild(verdict:attempts:)`，同样受此预算约束。
-    ② `menuBarHostMirrors` 改为按 layer-25 窗口名（= autosaveName，需屏幕录制权限才拿得到）精确匹配，
-    拿不到名字才退回同 x 同宽；只有同宽、x 不同的说明应用缓存 frame 过期，返回 nil 让信号被忽略，
-    修掉"镜像在 2605 / 缓存 3333 误报 notMirrored"的假阳性。③ LS 死记录清理保留为构建卫生，注释已改口。
+    用户放行后下一轮探测转 healthy 并清掉提示标志。reopen 路径改用 `allowsRebuild(verdict:attempts:)`，同受此预算约束。
+    ② `menuBarHostMirrors` 按 layer-25 窗口名（= autosaveName，需屏幕录制权限才拿得到）精确匹配，
+    拿不到名字才退回同 x 同宽；只有同宽、x 不同的说明应用缓存 frame 过期，返回 nil 让信号被忽略。
+    ③ 曾有的"按窗口号查 CGWindowList"信号（`registeredInWindowServer`）在 macOS 26 上恒为 nil（托管窗口号是 2^32 占位值），已删除。
     - 判定：纯函数 `StatusItemHealth.evaluate` 吃一份 `Snapshot`（`isVisible` / `button.window` 几何 / `windowNumber` /
       控制中心是否为它渲染了镜像 / 能否在 `CGWindowList` 按窗口号查到 / 各屏几何），输出 `healthy` / `userHidden` /
       `detached(Reason)` / `indeterminate`。**最可靠的信号是控制中心镜像**：每个真正显示出来的状态项在 layer-25 层都有一个

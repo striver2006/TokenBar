@@ -39,10 +39,7 @@ public enum StatusItemHealth {
         public let windowFrame: NSRect?
         /// `button.window?.windowNumber`；≤ 0 表示窗口从未被窗口服务器接管
         public let windowNumber: Int?
-        /// 按窗口号在 CGWindowList 里能否查到；**无法查询时传 nil，该信号被忽略**。
-        /// macOS 26 托管状态项的 windowNumber 是 2^32 这类占位值，实际上恒为 nil。
-        public let registeredInWindowServer: Bool?
-        /// 控制中心是否为它渲染了菜单栏镜像（layer-25、onscreen、与 windowFrame 同 x 同宽）。
+        /// 控制中心是否为它渲染了菜单栏镜像（layer-25、onscreen 的控制中心窗口，按 autosaveName 或几何匹配）。
         /// 这是 macOS 26 上最可靠的信号；**无法查询时传 nil，该信号被忽略**。
         public let mirroredByMenuBarHost: Bool?
         public let screens: [ScreenGeometry]
@@ -54,7 +51,6 @@ public enum StatusItemHealth {
             buttonWidth: CGFloat,
             windowFrame: NSRect?,
             windowNumber: Int?,
-            registeredInWindowServer: Bool?,
             mirroredByMenuBarHost: Bool? = nil,
             screens: [ScreenGeometry]
         ) {
@@ -64,7 +60,6 @@ public enum StatusItemHealth {
             self.buttonWidth = buttonWidth
             self.windowFrame = windowFrame
             self.windowNumber = windowNumber
-            self.registeredInWindowServer = registeredInWindowServer
             self.mirroredByMenuBarHost = mirroredByMenuBarHost
             self.screens = screens
         }
@@ -77,7 +72,6 @@ public enum StatusItemHealth {
         case zeroWindowNumber
         case zeroWindowSize
         case zeroButtonWidth
-        case notRegistered
         case offMenuBar
         /// 控制中心没有为它渲染镜像 —— 典型就是被 blocked list 隐藏
         case notMirrored
@@ -123,7 +117,7 @@ public enum StatusItemHealth {
         guard frame.width > 0, frame.height > 0 else { return .detached(.zeroWindowSize) }
         guard snapshot.buttonWidth > 0 else { return .detached(.zeroButtonWidth) }
 
-        // 几何判定在前：它只依赖 AppKit 自己的数字，比窗口服务器那条信号可靠。
+        // 几何判定在前：它只依赖 AppKit 自己的数字，不依赖任何跨进程查询。
         // 本次线上故障（maxY 越出屏幕顶边、maxX 越出右边界）单靠几何就能命中。
         let onMenuBar = snapshot.screens.contains { screen in
             MenuBarAnchor.isInMenuBarBand(
@@ -137,7 +131,6 @@ public enum StatusItemHealth {
         // 几何看着正常，但控制中心没为它画镜像 —— 图标一样是看不见的。
         // nil = 查不了（无权限 / API 变化），忽略该信号，绝不因为查不到就判掉线。
         if snapshot.mirroredByMenuBarHost == false { return .detached(.notMirrored) }
-        if snapshot.registeredInWindowServer == false { return .detached(.notRegistered) }
 
         return .healthy
     }

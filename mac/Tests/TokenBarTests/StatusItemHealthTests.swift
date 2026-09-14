@@ -27,7 +27,6 @@ final class StatusItemHealthTests: XCTestCase {
         buttonWidth: CGFloat = 80,
         windowFrame: NSRect? = nil,
         windowNumber: Int? = 4096,
-        registeredInWindowServer: Bool? = true,
         mirrored: Bool? = true,
         screens: [StatusItemHealth.ScreenGeometry]? = nil
     ) -> StatusItemHealth.Snapshot {
@@ -38,7 +37,6 @@ final class StatusItemHealthTests: XCTestCase {
             buttonWidth: buttonWidth,
             windowFrame: windowFrame ?? healthyRect,
             windowNumber: windowNumber,
-            registeredInWindowServer: registeredInWindowServer,
             mirroredByMenuBarHost: mirrored,
             screens: screens ?? [mainScreen]
         )
@@ -50,46 +48,34 @@ final class StatusItemHealthTests: XCTestCase {
         XCTAssertEqual(StatusItemHealth.evaluate(makeSnapshot()), .healthy)
     }
 
-    /// 几何看着正常，但窗口没在窗口服务器注册 —— 图标一样看不见
-    func testDetachedWhenNotRegisteredInWindowServer() {
-        let snapshot = makeSnapshot(registeredInWindowServer: false)
-        XCTAssertEqual(StatusItemHealth.evaluate(snapshot), .detached(.notRegistered))
-    }
-
-    /// 线上故障态：几何判定必须能独立命中，不依赖窗口服务器那条信号
+    /// 线上故障态：几何判定必须能独立命中，不依赖任何跨进程信号
     /// （maxY = 1441 越出屏幕顶边、maxX = 3441 越出右边界）
-    func testDetachedByGeometryAloneWhenWindowServerSignalUnavailable() {
-        for signal in [nil, true, false] as [Bool?] {
-            let snapshot = makeSnapshot(windowFrame: detachedRect, registeredInWindowServer: signal)
+    func testDetachedByGeometryAlone() {
+        for mirrored in [nil, true, false] as [Bool?] {
+            let snapshot = makeSnapshot(windowFrame: detachedRect, mirrored: mirrored)
             XCTAssertEqual(
                 StatusItemHealth.evaluate(snapshot), .detached(.offMenuBar),
-                "reg=\(String(describing: signal)) 时几何判定应优先命中"
+                "mirror=\(String(describing: mirrored)) 时几何判定应优先命中"
             )
         }
     }
 
-    /// 查不到窗口服务器（无权限 / API 变化）绝不能当成掉线
-    func testUnavailableWindowServerSignalNeverCausesDetach() {
-        XCTAssertEqual(StatusItemHealth.evaluate(makeSnapshot(registeredInWindowServer: nil)), .healthy)
+    /// 查不到镜像（无权限 / API 变化）绝不能当成掉线
+    func testUnavailableMirrorSignalNeverCausesDetach() {
         XCTAssertEqual(StatusItemHealth.evaluate(makeSnapshot(mirrored: nil)), .healthy)
     }
 
     /// 真正的根因形态：几何停在正常位置、窗口也在，但控制中心没为它画镜像
-    /// （探针实测：LS 死记录导致被 blocked list 隐藏时 frame=2634 而 mirror=false）
+    /// （被 ControlCenter「菜单栏 › 应用程序」记录拉黑时 frame 正常而 mirror=false）
     func testDetachedWhenMenuBarHostDoesNotMirror() {
         XCTAssertEqual(StatusItemHealth.evaluate(makeSnapshot(mirrored: false)), .detached(.notMirrored))
-        // 镜像信号优先于窗口服务器注册信号
-        XCTAssertEqual(
-            StatusItemHealth.evaluate(makeSnapshot(registeredInWindowServer: false, mirrored: false)),
-            .detached(.notMirrored)
-        )
     }
 
     func testDetachedWhenWindowMissing() {
         // makeSnapshot 的 windowFrame 默认值会兜成 healthyRect，这里直接构造
         let snapshot = StatusItemHealth.Snapshot(
             hasItem: true, hasButton: true, isVisible: true, buttonWidth: 80,
-            windowFrame: nil, windowNumber: 4096, registeredInWindowServer: true,
+            windowFrame: nil, windowNumber: 4096,
             screens: [mainScreen]
         )
         XCTAssertEqual(StatusItemHealth.evaluate(snapshot), .detached(.noWindow))
@@ -124,7 +110,7 @@ final class StatusItemHealthTests: XCTestCase {
 
         let hiddenAndDetached = StatusItemHealth.Snapshot(
             hasItem: true, hasButton: true, isVisible: false, buttonWidth: 0,
-            windowFrame: nil, windowNumber: 0, registeredInWindowServer: false,
+            windowFrame: nil, windowNumber: 0,
             screens: [mainScreen]
         )
         XCTAssertEqual(StatusItemHealth.evaluate(hiddenAndDetached), .userHidden)
@@ -254,67 +240,5 @@ final class StatusItemHealthTests: XCTestCase {
         XCTAssertTrue(policy.shouldResetAttempts(now: now, healthySince: now.addingTimeInterval(-601)))
         XCTAssertFalse(policy.shouldResetAttempts(now: now, healthySince: now.addingTimeInterval(-599)))
         XCTAssertFalse(policy.shouldResetAttempts(now: now, healthySince: nil))
-    }
-}
-
-/// `lsregister -dump` 解析：找出本 bundle id 下路径已不存在的陈旧注册。
-/// 样本照抄真实 dump 的格式（80 个 `-` 分隔、字段值前对齐空白、path 末尾 ` (0x…)` 序号）。
-final class LaunchServicesDumpParsingTests: XCTestCase {
-    private let separator = String(repeating: "-", count: 80)
-
-    private func record(identifier: String, path: String, seq: String) -> String {
-        """
-        \(separator)
-        container:                  / (0x4)
-        path:                       \(path) (\(seq))
-        identifier:                 \(identifier)
-        version:                    1.0 ({length = 32, bytes = 0x01000000 ... })
-        executable:                 Contents/MacOS/TokenBar
-        type code:                  'APPL' (4150504c)
-        """
-    }
-
-    private var sampleDump: String {
-        [
-            "Checking data integrity......done.",
-            record(identifier: "com.tokenbar.mac", path: "/Applications/TokenBar.app", seq: "0x4654"),
-            record(identifier: "com.tokenbar.mac", path: "/Users/chenzhenbo/Work/TokenBar/build/TokenBar.app", seq: "0x2ecc"),
-            record(identifier: "com.unidrop.client", path: "/Volumes/dmg.Qj9lpz/UniDrop.app", seq: "0x3e7c"),
-            record(identifier: "com.tokenbar.mac", path: "/Users/chenzhenbo/Work/TokenBar/mac/build/TokenBar.app", seq: "0x45ec"),
-            separator,
-        ].joined(separator: "\n")
-    }
-
-    func testFindsOnlyOwnBundleStalePaths() {
-        let existing: Set<String> = ["/Applications/TokenBar.app", "/Users/chenzhenbo/Work/TokenBar/mac/build/TokenBar.app"]
-        let stale = MenuBarController.staleLaunchServicesPaths(inDump: sampleDump, bundleID: "com.tokenbar.mac") {
-            existing.contains($0)
-        }
-        // UniDrop 的死记录不是我们的，不能碰；序号后缀必须被剥掉
-        XCTAssertEqual(stale, ["/Users/chenzhenbo/Work/TokenBar/build/TokenBar.app"])
-    }
-
-    func testReturnsEmptyWhenAllPathsExist() {
-        let stale = MenuBarController.staleLaunchServicesPaths(inDump: sampleDump, bundleID: "com.tokenbar.mac") { _ in true }
-        XCTAssertTrue(stale.isEmpty)
-    }
-
-    func testHandlesPathWithSpacesAndNoTrailingSeparator() {
-        let dump = record(identifier: "com.unidrop.client", path: "/Volumes/UniDrop 1/UniDrop.app", seq: "0x411c")
-        let stale = MenuBarController.staleLaunchServicesPaths(inDump: dump, bundleID: "com.unidrop.client") { _ in false }
-        XCTAssertEqual(stale, ["/Volumes/UniDrop 1/UniDrop.app"])
-    }
-}
-
-/// 注销死记录时原位重建的 stub Info.plist：必须是可解析的 XML plist，
-/// 且 CFBundleIdentifier 与要注销的记录一致（否则 `-u` 匹配不上）。
-final class StubInfoPlistTests: XCTestCase {
-    func testStubPlistIsReadablePropertyListWithOwnBundleID() throws {
-        let data = MenuBarController.stubInfoPlist(bundleID: "com.tokenbar.mac")
-        let dict = try XCTUnwrap(
-            try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: String])
-        XCTAssertEqual(dict["CFBundleIdentifier"], "com.tokenbar.mac")
-        XCTAssertEqual(dict["CFBundlePackageType"], "APPL")
-        XCTAssertEqual(dict["CFBundleExecutable"], "LSTombstone")
     }
 }

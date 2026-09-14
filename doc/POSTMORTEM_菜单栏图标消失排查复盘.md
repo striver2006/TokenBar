@@ -85,7 +85,7 @@
 
 - [x] 应用侧：镜像缺失但几何正常时只重建一次（`RebuildPolicy.notMirroredAttempts`），再无镜像即 `blockedBySystem`，一次 error 日志 + 系统通知指引去「系统设置 › 菜单栏 › 应用程序」（2026-09-14 晚落地）。
 - [x] 应用侧：镜像匹配改为按 layer-25 窗口名（autosaveName）优先，几何兜底，缓存 frame 过期时忽略信号（2026-09-14 晚落地）。
-- [x] `purgeStaleLaunchServicesRecords` 保留为构建卫生，代码注释已改口说明它不是根因。
+- [x] `purgeStaleLaunchServicesRecords` 整条链路（dump 解析 / stub 注销 / 看门狗 / 构建脚本注销，约 300 行）、恒为 nil 的 `registeredInWindowServer` 信号、悬停追踪 A/B 调试键已整体删除（2026-09-14 晚）。
 - [ ] UniDrop 同样挂在 VS Code / Antigravity 名下，`unidrop-client` 两条 adhoc 记录是禁止状态，一并处理。
 - [ ] 第一、二轮的结论已在 `TROUBLESHOOTING_菜单栏图标不显示.md` 顶部标注为历史记录，内容保留供比对。
 

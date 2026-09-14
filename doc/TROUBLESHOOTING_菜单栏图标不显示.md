@@ -78,37 +78,36 @@ command log show --last 10m --predicate 'process == "ControlCenter"' --info --de
 
 ## 四、应用内自愈机制（代码指引）
 
+> 本节原描述的 LaunchServices 死记录清理链路（`purgeStaleLaunchServicesRecords` / stub 注销 / dump 看门狗）
+> 已于 2026-09-14 晚整体移除（根因证伪，见第九节）。现状如下。
+
 全部在 `mac/Sources/TokenBar/MenuBar/MenuBarController.swift`，判定纯函数在
 `mac/Sources/TokenBar/Services/StatusItemHealth.swift`：
 
-- **清理时机**：启动时一次（`setup()`）+ 每次状态项重建前（`rebuildStatusItem`，
-  清理完才重建——拉黑不解除时重建多少次都一样，所以顺序不能反）。
-- **清理范围**：只清**本 bundle id** 且路径已不存在的注册（`NSWorkspace`
-  的接口会过滤掉不存在路径，永远找不到死记录，必须解析 `lsregister -dump`；
-  解析是纯函数 `staleLaunchServicesPaths(inDump:)`，有单测）。
-- **失败可见化**：dump 起不来 / 被看门狗杀掉 / 退出码非 0 → error 级
-  `LaunchServices 死记录清理[reason]：dump 执行失败，跳过核对`；成功无死记录 → notice 级
-  `LaunchServices 注册核对[reason]：无死记录`；发现 N 条 → error 级
-  `发现 N 条，注销 M 条`（M < N 即有失败，含不可写路径清单）。dump 带 15s 看门狗，
-  防挂死卡住重建链路。
 - **健康判据优先级**（`StatusItemHealth.evaluate`，顺序不可调）：
-  `isVisible`（用户意图）→ 存在性/几何 → **镜像信号**（`mirror=false` → `notMirrored`）
-  → 窗口服务器注册。`mirror` 查不到（nil）时忽略该信号，绝不因查不到判掉线。
+  `isVisible`（用户意图）→ 存在性/几何 → **镜像信号**（`mirror=false` → `notMirrored`）。
+  `mirror` 查不到（nil）时忽略该信号，绝不因查不到判掉线。
+- **镜像匹配**（`menuBarHostMirrors`）：layer-25 控制中心窗口按窗口名（= autosaveName）精确匹配，
+  拿不到窗口名（无屏幕录制权限）才退回同 x 同宽；只有同宽、x 不同的说明缓存 frame 过期，返回 nil。
+- **重建预算**（`RebuildPolicy`）：一般掉线原因 5 次、指数退避；`notMirrored` 只 1 次，再无镜像返回
+  `blockedBySystem`——一次 error 日志「状态项被 ControlCenter 拉黑…请到系统设置 › 菜单栏 › 应用程序…」
+  + 一次系统通知，之后只保留心跳探测，用户放行后自动转 healthy。
+- 调试键：`defaults write com.tokenbar.mac TokenBarForceStatusItemUnhealthy -bool YES` 强制 `mirror=false`，
+  可完整走一遍"重建一次 → blockedBySystem 提示"链路；测完 `defaults delete` 掉。
 
-## 五、构建与清理纪律（防再触发）
+## 五、构建与启动纪律（防再触发）
 
 ```bash
-# 日常构建 / 分发构建（脚本会在删旧产物前自动 lsregister -u）
-./Scripts/build_app.sh
-./Scripts/build_app.sh --distribute
-
-# 删除构建产物——一律走 --clean（先注销两个输出路径的 LS 记录再删），别直接 rm
-./Scripts/build_app.sh --clean
+./Scripts/build_app.sh              # 日常构建 → mac/build/TokenBar.app
+./Scripts/build_app.sh --distribute # 分发构建 → mac/build/dist/TokenBar.app
+./Scripts/build_app.sh --clean      # 删除两个产物路径
+open mac/build/TokenBar.app         # 调试启动一律用 open
 ```
 
-`mac/build/` 与 `mac/build/dist/` 两个输出路径都会被 LaunchServices 注册着；直接 `rm`
-其中任何一个，就是给 `com.tokenbar.mac` 制造新的死记录——下次 ControlCenter 重新评估时
-可能再次触发拉黑。
+**不要在 VS Code / ZCode 等 IDE 的集成终端里直接执行** `swift run`、`./.build/debug/TokenBar` 或
+`xxx.app/Contents/MacOS/TokenBar`：macOS 26 的 ControlCenter 会把状态项记到"负责进程"（IDE）名下，
+IDE 在「系统设置 › 菜单栏 › 应用程序」里一旦是关闭状态，TokenBar 的图标就被连坐隐藏，且这条归属不会自动清理。
+（构建脚本此前的 `lsregister -u` 注销逻辑基于已证伪的死记录假设，已移除；删构建产物直接 `--clean` 即可。）
 
 ## 六、手动排查与清除手册
 
@@ -305,7 +304,7 @@ ControlCenter 按负责进程归属菜单项。用 `open` 启动的 .app 由 lau
    error 日志「状态项被 ControlCenter 拉黑…请到系统设置 › 菜单栏 › 应用程序…」+ 一次系统通知，
    停止重建、保留心跳探测；用户放行后自动转 healthy。镜像匹配改为按 layer-25 窗口名（autosaveName）
    优先，几何兜底，缓存 frame 过期时忽略信号，不再把健康项误判成 `notMirrored`。
-   LS 死记录清理保留为构建卫生。验证日志：`verdict=healthy … mirror=true`。
+   LS 死记录清理链路（约 300 行）与恒为 nil 的窗口服务器信号已整体删除。验证日志：`verdict=healthy … mirror=true`。
 
 ---
 *2026-09-14 · 基于 a42d45b / c0914de 两轮修复与当日受控实验整理；同日 13:42 重启实测

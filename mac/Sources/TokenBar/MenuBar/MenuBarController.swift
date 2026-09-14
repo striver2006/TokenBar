@@ -21,8 +21,6 @@ public final class MenuBarController: NSObject {
     private static let forceFallbackDefaultsKey = "TokenBarForceAnchorFallback"
     /// 调试键：强制把状态项判成掉线，用来验证重建链路
     private static let forceUnhealthyDefaultsKey = "TokenBarForceStatusItemUnhealthy"
-    /// 调试键：不给按钮挂悬停追踪区，A/B 它是否干扰菜单栏布局
-    private static let disableHoverTrackerDefaultsKey = "TokenBarDisableHoverTracker"
 
     private static let statusItemAutosaveName = "TokenBarStatusItem"
     private static let rebuildPolicy = StatusItemHealth.RebuildPolicy()
@@ -66,8 +64,6 @@ public final class MenuBarController: NSObject {
     /// setup 的一次性部分是否已经跑过。用它而不是 `statusItem == nil` 做幂等，
     /// 否则状态项一旦重建，订阅与监听会被重复注册。
     private var didSetupOnce = false
-    /// 重建要先异步清 LaunchServices 死记录，这段时间内再来的重建请求直接丢弃
-    private var isRebuilding = false
     /// reopen 路径触发的重建完成后要接着弹窗；用 Optional<Optional> 区分"没有待办"与"待办且不自动收回"
     private var pendingReopenAutoDismiss: TimeInterval??
     private var healthCheckWorkItem: DispatchWorkItem?
@@ -111,8 +107,6 @@ public final class MenuBarController: NSObject {
         if Self.screenRelayoutEnabled {
             observeScreenChanges()
             observeStatusItemHealth()
-            // 启动就把 LaunchServices 死记录清掉：等到判定掉线再清，要多白等一轮探测
-            purgeStaleLaunchServicesRecords(reason: "launch") { _ in }
             // 登录自启时菜单栏服务未必已经就绪，隔着几档复查有没有真的拿到槽位
             for delay in Self.launchProbeLadder {
                 scheduleHealthCheck(delay: delay, reason: "launch+\(Int(delay))s", coalescing: false)
@@ -159,16 +153,12 @@ public final class MenuBarController: NSObject {
     /// 早先的实现是 `button.addSubview(HoverTrackingView(...), positioned: .below)`。
     /// macOS 26 的状态项由系统进程托管布局，少往它的按钮里插东西就少一个和这套流程打架的变量；
     /// 同机另一个只 `addTrackingArea` 的菜单栏应用（vps-traffic-quota）从没出现过拿不到槽位的故障。
-    /// 用探针单独对比过两种写法，几何都正常——后来根因坐实为 LaunchServices 死记录把
-    /// bundle id 拉黑（见 `purgeStaleLaunchServicesRecords`），与悬停追踪的挂法无关；
+    /// 用探针单独对比过两种写法，几何都正常——后来根因坐实为 ControlCenter 的「菜单栏 › 应用程序」
+    /// 记录把 bundle id 拉黑（见 `StatusItemHealth` 头注释），与悬停追踪的挂法无关；
     /// 保留 addTrackingArea 写法只是对齐已知稳定的实现。
     ///
     /// `.inVisibleRect` 让 AppKit 跟着按钮 bounds 走，额度文案变宽变窄都不必重建追踪区。
     private func installHoverTracking(on button: NSStatusBarButton) {
-        guard !UserDefaults.standard.bool(forKey: Self.disableHoverTrackerDefaultsKey) else {
-            Log.lifecycle.notice("调试开关生效：跳过悬停追踪区安装")
-            return
-        }
         let area = NSTrackingArea(
             rect: button.bounds,
             options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
@@ -212,17 +202,6 @@ public final class MenuBarController: NSObject {
     /// 轻推 length 治不了"状态项没拿到菜单栏槽位"这类故障（实测心跳推了多次都无效），
     /// 只能整个销毁重建。
     private func rebuildStatusItem(reason: String, clearAutosaveState: Bool) {
-        guard !isRebuilding else { return }
-        isRebuilding = true
-        // LaunchServices 死记录清理是构建卫生（2026-09-14 实测它并非拉黑根因，但无害），顺手在重建前做一次
-        purgeStaleLaunchServicesRecords(reason: "rebuild") { [weak self] purged in
-            guard let self else { return }
-            self.isRebuilding = false
-            self.performStatusItemRebuild(reason: reason, clearAutosaveState: clearAutosaveState, purgedRecords: purged)
-        }
-    }
-
-    private func performStatusItemRebuild(reason: String, clearAutosaveState: Bool, purgedRecords: Int) {
         let before = cachedButtonScreenRect()
         // 弹窗挂在旧 button 上，先收干净再换
         if popover.isShown { closePopover() }
@@ -236,7 +215,7 @@ public final class MenuBarController: NSObject {
         lastRebuildAt = Date()
         consecutiveDetached = 0
         Log.lifecycle.error(
-            "状态项重建：原因=\(reason, privacy: .public) 第\(self.rebuildAttempts, privacy: .public)次 clearAutosave=\(clearAutosaveState, privacy: .public) 清理LS死记录=\(purgedRecords, privacy: .public) 旧窗口=\(Self.describe(before), privacy: .public)")
+            "状态项重建：原因=\(reason, privacy: .public) 第\(self.rebuildAttempts, privacy: .public)次 clearAutosave=\(clearAutosaveState, privacy: .public) 旧窗口=\(Self.describe(before), privacy: .public)")
         scheduleHealthCheck(delay: 1.5, reason: "post-rebuild")
 
         if let autoDismiss = pendingReopenAutoDismiss {
@@ -656,7 +635,7 @@ public final class MenuBarController: NSObject {
         // 从 Dock / Finder / `tb` 重开时鼠标不在图标上，掉线就地重建 ——
         // 顺带让这条路径成为"把不见了的图标修回来"的手段
         let verdict = StatusItemHealth.evaluate(statusItemSnapshot())
-        if Self.rebuildPolicy.allowsRebuild(verdict: verdict, attempts: rebuildAttempts), !isRebuilding {
+        if Self.rebuildPolicy.allowsRebuild(verdict: verdict, attempts: rebuildAttempts) {
             logStatusItemState(reason: "reopen")
             pendingReopenAutoDismiss = autoDismiss
             rebuildStatusItem(reason: verdict.logDescription, clearAutosaveState: false)
@@ -771,7 +750,6 @@ public final class MenuBarController: NSObject {
                 buttonWidth: statusItem?.button?.bounds.width ?? 0,
                 windowFrame: statusItem?.button?.window?.frame,
                 windowNumber: statusItem?.button?.window?.windowNumber,
-                registeredInWindowServer: nil,
                 mirroredByMenuBarHost: false,
                 screens: screens
             )
@@ -785,7 +763,6 @@ public final class MenuBarController: NSObject {
             buttonWidth: button?.bounds.width ?? 0,
             windowFrame: window?.frame,
             windowNumber: window?.windowNumber,
-            registeredInWindowServer: window.flatMap { windowIsRegistered($0) },
             mirroredByMenuBarHost: window.flatMap { menuBarHostMirrors($0.frame) },
             screens: screens
         )
@@ -830,238 +807,6 @@ public final class MenuBarController: NSObject {
         if anyNameAvailable { return false }          // 名字查得到却没有我们的：确实没画镜像
         if sameXAndWidth { return true }
         if sameWidthOnly { return nil }               // 缓存 frame 过期，信号不可信
-        return false
-    }
-
-    nonisolated private static let lsregisterPath =
-        "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
-
-    /// 清掉本 bundle id 在 LaunchServices 里指向已不存在路径的陈旧注册。
-    ///
-    /// 历史：2026-09-14 上午曾把它当成图标"消失"的根因（`Moving host to blocked list`）；同日晚
-    /// 实测证伪——LS 清到只剩一条仍被拉黑，真正根因是 ControlCenter 的「菜单栏 › 应用程序」持久记录
-    /// （见 `StatusItemHealth` 头注释与 doc/TROUBLESHOOTING 第九节）。保留这一步只作为构建卫生：
-    /// 换过构建输出目录、反复挂载 DMG 都会留下死记录，清掉无害。
-    ///
-    /// 只能解析 `lsregister -dump`：`NSWorkspace.urlsForApplications(withBundleIdentifier:)`
-    /// 会把不存在的路径过滤掉，拿它永远找不到死记录。dump 是全量输出（本机 ~1 秒、几十 MB），
-    /// 所以放后台队列跑，完成后回主线程。
-    private func purgeStaleLaunchServicesRecords(reason: String, completion: @escaping @MainActor (Int) -> Void) {
-        guard let bundleID = Bundle.main.bundleIdentifier,
-              FileManager.default.isExecutableFile(atPath: Self.lsregisterPath) else {
-            // 查不了不能静默：否则会被误读成"核对过、没问题"
-            Log.lifecycle.error("LaunchServices 死记录清理[\(reason, privacy: .public)]：找不到可执行的 lsregister，跳过核对")
-            completion(0)
-            return
-        }
-        DispatchQueue.global(qos: .utility).async {
-            guard let stale = Self.staleLaunchServicesPaths(bundleID: bundleID) else {
-                Task { @MainActor in
-                    // error 级：这条排查线（hardened runtime 下工具是否可用）必须能事后倒查
-                    Log.lifecycle.error("LaunchServices 死记录清理[\(reason, privacy: .public)]：dump 执行失败，跳过核对")
-                    completion(0)
-                }
-                return
-            }
-            var purged = 0
-            var uncleanable: [String] = []
-            for path in stale {
-                if Self.unregisterRecord(atPath: path, bundleID: bundleID) {
-                    purged += 1
-                } else {
-                    uncleanable.append(path)
-                }
-            }
-            let staleCount = stale.count
-            Task { @MainActor in
-                if staleCount > 0 {
-                    Log.lifecycle.error(
-                        "LaunchServices 死记录清理[\(reason, privacy: .public)]：发现 \(staleCount, privacy: .public) 条，注销 \(purged, privacy: .public) 条")
-                } else {
-                    Log.lifecycle.notice("LaunchServices 注册核对[\(reason, privacy: .public)]：无死记录")
-                }
-                if !uncleanable.isEmpty {
-                    let list = uncleanable.joined(separator: " | ")
-                    Log.lifecycle.error(
-                        "LaunchServices 死记录清理[\(reason, privacy: .public)]：\(uncleanable.count, privacy: .public) 条无法自动注销（路径不可写，如已卸载的卷，需重新挂载对应卷或人工处理）：\(list, privacy: .public)")
-                }
-                completion(purged)
-            }
-        }
-    }
-
-    /// 跑 `lsregister -dump` 并取本 bundle id 所有注册路径里已不存在的那些。可在后台线程跑。
-    ///
-    /// 返回 nil 表示**没查成**（起不来 / 被看门狗杀掉 / 退出码非 0 / 输出解不出码），
-    /// 与"查成了、确实没有"的空数组严格区分——工具一失败就伪装成空数组的话，
-    /// 日志里的"无死记录"就成了假阴性。看门狗防的是 dump 挂死：这条在重建路径上
-    /// 被同步等待，挂死会让 `isRebuilding` 永久为真，后续重建请求整段被丢弃。
-    nonisolated private static func staleLaunchServicesPaths(bundleID: String) -> [String]? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: lsregisterPath)
-        process.arguments = ["-dump"]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-        do { try process.run() } catch { return nil }
-        // 全量 dump 本机 ~1 秒、几十 MB；15 秒还没跑完按挂死处理
-        let watchdog = DispatchWorkItem {
-            if process.isRunning { process.terminate() }
-        }
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 15, execute: watchdog)
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        watchdog.cancel()
-        guard process.terminationReason == .exit, process.terminationStatus == 0 else { return nil }
-        guard let text = String(data: data, encoding: .utf8) else { return nil }
-        return staleLaunchServicesPaths(inDump: text, bundleID: bundleID) {
-            FileManager.default.fileExists(atPath: $0)
-        }
-    }
-
-    /// `lsregister -dump` 的纯文本解析，抽出来便于单测。
-    ///
-    /// 记录之间用整行 80 个 `-` 分隔；每条记录里 `identifier:` 与 `path:` 各占一行、值前有对齐空白，
-    /// path 末尾带 ` (0x…)` 序号。只认本 bundle id 且路径已不存在的记录。
-    nonisolated static func staleLaunchServicesPaths(
-        inDump text: String,
-        bundleID: String,
-        fileExists: (String) -> Bool
-    ) -> [String] {
-        var stale: [String] = []
-        var identifier: String?
-        var path: String?
-
-        func flush() {
-            defer { identifier = nil; path = nil }
-            guard identifier == bundleID, let path, !path.isEmpty, !fileExists(path) else { return }
-            stale.append(path)
-        }
-
-        for rawLine in text.split(separator: "\n", omittingEmptySubsequences: false) {
-            let line = rawLine.trimmingCharacters(in: .whitespaces)
-            if line.count >= 20, line.allSatisfy({ $0 == "-" }) {
-                flush()
-            } else if line.hasPrefix("identifier:") {
-                identifier = line.dropFirst("identifier:".count).trimmingCharacters(in: .whitespaces)
-            } else if line.hasPrefix("path:") {
-                var value = line.dropFirst("path:".count).trimmingCharacters(in: .whitespaces)
-                if value.hasSuffix(")"), let range = value.range(of: " (0x", options: .backwards) {
-                    value = String(value[..<range.lowerBound])
-                }
-                path = value
-            }
-        }
-        flush()
-        return stale
-    }
-
-    nonisolated private static func runLSRegister(_ arguments: [String]) -> Bool {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: lsregisterPath)
-        process.arguments = arguments
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        do {
-            try process.run()
-            process.waitUntilExit()
-            return process.terminationStatus == 0
-        } catch {
-            return false
-        }
-    }
-
-    /// 注销一条本 bundle id 的注册记录。
-    ///
-    /// 实测（2026-09-14 受控实验）：`lsregister -u` 只认路径上真实存在的 bundle——路径
-    /// 已删除时直接失败（-10814）；`-gc` 与「同 bundle id 在别处重新注册」都挤不掉死记录。
-    /// 唯一可行的注销方式是**原位重建一个最小 stub .app → `-u` → 删掉 stub**。
-    /// `/Volumes/...` 这类不可写路径上的死记录会失败，如实上报留给人工处理。
-    nonisolated private static func unregisterRecord(atPath path: String, bundleID: String) -> Bool {
-        // 快路径：路径上有真实 bundle（或记录已被别处清掉）时 -u 直接生效
-        if runLSRegister(["-u", path]) { return true }
-
-        let fm = FileManager.default
-        // 双保险：解析时该路径确实不存在；若此刻又出现了（比如用户刚在旧路径重建应用），
-        // 那已经不是死记录，绝不能动它
-        guard !fm.fileExists(atPath: path) else { return false }
-
-        let contentsDir = (path as NSString).appendingPathComponent("Contents")
-        let plistPath = (contentsDir as NSString).appendingPathComponent("Info.plist")
-        let macosDir = (contentsDir as NSString).appendingPathComponent("MacOS")
-
-        // createDirectory(withIntermediateDirectories:) 会连父目录一起建；先把原本不存在
-        // 的目录链记下来，注销后按 rmdir 语义逐级回收，绝不碰任何已存在的目录
-        var missingAncestors: [String] = []
-        var dir = (path as NSString).deletingLastPathComponent
-        while !fm.fileExists(atPath: dir) {
-            missingAncestors.insert(dir, at: 0)
-            let parent = (dir as NSString).deletingLastPathComponent
-            guard parent != dir else { break }
-            dir = parent
-        }
-
-        guard (try? fm.createDirectory(atPath: macosDir, withIntermediateDirectories: true)) != nil,
-              fm.createFile(atPath: plistPath, contents: stubInfoPlist(bundleID: bundleID)),
-              fm.createFile(atPath: (macosDir as NSString).appendingPathComponent("LSTombstone"), contents: nil)
-        else { return false }
-
-        defer {
-            try? fm.removeItem(atPath: path)
-            for ancestor in missingAncestors.reversed() {
-                _ = Darwin.rmdir(ancestor) // 只删空目录，中途有别的文件落进来就留着
-            }
-        }
-        return runLSRegister(["-u", path])
-    }
-
-    /// 注销死记录用的最小 stub Info.plist。lsregister 只要求路径上能扫描出一个合法
-    /// bundle；CFBundleIdentifier 必须与要注销的记录一致，否则 -u 匹配不上。
-    nonisolated static func stubInfoPlist(bundleID: String) -> Data {
-        let xml = """
-        <?xml version="1.0" encoding="UTF-8"?>
-        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-        <plist version="1.0">
-        <dict>
-            <key>CFBundleIdentifier</key>
-            <string>\(bundleID)</string>
-            <key>CFBundleName</key>
-            <string>LSTombstone</string>
-            <key>CFBundleExecutable</key>
-            <string>LSTombstone</string>
-            <key>CFBundlePackageType</key>
-            <string>APPL</string>
-        </dict>
-        </plist>
-        """
-        return Data(xml.utf8)
-    }
-
-    /// 按窗口号反查 CGWindowList。
-    ///
-    /// 只查自己的窗口号、只读 bounds（`kCGWindowName` 才需要屏幕录制权限），查不了就返回 nil
-    /// 让这个信号被忽略。**绝不能看 `kCGWindowIsOnscreen`** —— macOS 26 上健康的第三方状态项
-    /// 自己的窗口也是 offscreen，真正上屏的是控制中心的镜像窗口。
-    private func windowIsRegistered(_ window: NSWindow) -> Bool? {
-        guard window.windowNumber > 0 else { return false }
-        // macOS 26 上状态项窗口托管在系统进程，本进程拿到的 windowNumber 是个超出
-        // CGWindowID(UInt32) 范围的占位值（实测健康状态项为 4294967296 = 2^32）。
-        // 这种窗口号查不了窗口服务器，返回 nil 让该信号被忽略 ——
-        // 当成 false 会把健康的状态项判成掉线、反复重建。
-        guard window.windowNumber <= Int(UInt32.max) else { return nil }
-
-        // 全量枚举再按窗口号过滤，而不是带 on-screen 语义的查询：
-        // 状态项窗口本身是离屏的，只有控制中心的镜像窗口才上屏。
-        guard let list = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]]
-        else { return nil }
-
-        for info in list {
-            guard let number = info[kCGWindowNumber as String] as? Int,
-                  number == window.windowNumber else { continue }
-            guard let bounds = info[kCGWindowBounds as String] as? [String: CGFloat],
-                  let width = bounds["Width"], let height = bounds["Height"] else { return false }
-            return width > 0 && height > 0
-        }
         return false
     }
 
@@ -1161,9 +906,8 @@ public final class MenuBarController: NSObject {
     ) {
         let snapshot = snapshot ?? statusItemSnapshot()
         let verdict = verdict ?? StatusItemHealth.evaluate(snapshot)
-        let registered = snapshot.registeredInWindowServer.map(String.init(describing:)) ?? "?"
         let mirrored = snapshot.mirroredByMenuBarHost.map(String.init(describing:)) ?? "?"
-        let line = "状态项[\(reason)] verdict=\(verdict.logDescription) visible=\(snapshot.isVisible) btnW=\(Int(snapshot.buttonWidth)) win=\(Self.describe(snapshot.windowFrame)) winNum=\(snapshot.windowNumber ?? -1) mirror=\(mirrored) reg=\(registered) screens=\(snapshot.screens.count) rebuilds=\(rebuildAttempts) detachedRun=\(consecutiveDetached)"
+        let line = "状态项[\(reason)] verdict=\(verdict.logDescription) visible=\(snapshot.isVisible) btnW=\(Int(snapshot.buttonWidth)) win=\(Self.describe(snapshot.windowFrame)) winNum=\(snapshot.windowNumber ?? -1) mirror=\(mirrored) screens=\(snapshot.screens.count) rebuilds=\(rebuildAttempts) detachedRun=\(consecutiveDetached)"
         if case .healthy = verdict {
             Log.lifecycle.info("\(line, privacy: .public)")
         } else {
