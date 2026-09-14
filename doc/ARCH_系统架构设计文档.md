@@ -71,9 +71,33 @@ macOS 客户端采用纯 Swift 打造，支持 macOS 13 (Ventura) 及以上系�
     通知视图（`.task(id: openCount)`），用户未保存的输入不会因为再次打开而丢失。
   - 绑定 `NSPopover`，将其根视图托管至 SwiftUI `TokenSummaryPopoverView`。
   - 订阅 `RefreshManager.objectWillChange`，按用户配置把某个厂商的剩余额度 / 余额渲染到 `NSStatusItem` 标题（文案由纯函数 `MenuBarStatus` 计算，便于单测）。
-  - 弹窗定位两层防护（macOS 26 起状态项托管在系统进程，本进程缓存的状态栏窗口坐标在显示器熄屏/唤醒后可能过期，会把 `NSPopover` 定位到屏幕中央）：
-    - 主动层：订阅 `NSApplication.didChangeScreenParametersNotification` 与 `NSWorkspace` 的唤醒通知，去抖后对 `NSStatusItem.length` 做“定长 → 变长”轻推，迫使状态项重新布局并同步坐标。
-    - 被动层：悬停/点击触发时由纯函数 `MenuBarAnchor` 用鼠标位置校验缓存的按钮矩形，过期则把 `NSPopover` 挂到一个透明、穿透点击的辅助 `NSPanel` 上，按鼠标位置贴菜单栏锚定；弹窗关闭后回收面板并再轻推一次。
+  - **状态项健康自愈**（macOS 26 起状态项托管在系统进程，实测会出现"对象活着、内容完好，但根本没拿到菜单栏槽位"的故障态：
+    几何停在屏幕右上角越界位置、窗口服务器 layer-25 层查不到它的状态项窗口，用户看到的就是"图标不见了"）：
+    - 判定：纯函数 `StatusItemHealth.evaluate` 吃一份 `Snapshot`（`isVisible` / `button.window` 几何 / `windowNumber` /
+      能否在 `CGWindowList` 按窗口号查到 / 各屏几何），输出 `healthy` / `userHidden` / `detached(Reason)` / `indeterminate`。
+      `isVisible` 判定排在所有几何判定之前——用户 Cmd 拖走图标不是故障，重建会覆盖用户意图。
+      几何判定排在窗口服务器信号之前：几何只依赖 AppKit 自己的数字，更可靠。窗口服务器那条信号在 macOS 26 上
+      基本恒为"不可用"——托管状态项的 `windowNumber` 是超出 `CGWindowID`(UInt32) 范围的占位值（实测 2^32），
+      按号查不到窗口，此时必须返回 nil 让信号被忽略；当成"没注册"会把健康的状态项判成掉线、反复重建。
+      判定"在不在菜单栏带内"复用 `MenuBarAnchor.isInMenuBarBand`，对屏幕顶边与左右边界是严格的（故障态正是各越界 1pt），
+      只有带下边界留松弛量（健康状态项 `maxY = screen.maxY − 3…−4`，并不贴齐屏幕顶边）。
+    - 自愈：`setup()` 拆成"一次性的订阅/监听"与"可重入的 `installStatusItem`"两半，判定掉线时
+      `NSStatusBar.removeStatusItem` + 重新安装。轻推 `NSStatusItem.length` 保留下来，但只治
+      "位置还在、图标不画了"那种托管渲染丢失，对没拿到槽位的故障态无效（实测心跳推多次都救不回来）。
+      重建受 `StatusItemHealth.RebuildPolicy` 约束：连续 2 次确认 + 指数退避（30/60/120…封顶 900s）+ 单次运行最多 5 次，
+      最后一次会先清掉 `NSStatusItem Preferred Position/Visible` 两个持久化键再重建，防止坏状态被 `autosaveName` 还原回来；
+      连续健康 10 分钟后预算清零。弹窗/右键菜单开着、鼠标按下、无屏幕、显示器重配置后 3s 内一律跳过判定。
+    - 触发时机：启动后 2/5/15/60s 四级校验梯（治登录自启时菜单栏服务未就绪的竞态）、屏幕参数变化、唤醒、
+      `didBecomeActive`、300s 保底心跳、弹窗关闭、锚点走了兜底。掉线期间快探测间隔 15s。
+  - 弹窗定位两层防护（缓存的状态栏窗口坐标在显示器熄屏/唤醒后可能过期，会把 `NSPopover` 定位到屏幕中央或夹到屏幕边缘）：
+    - 有鼠标（悬停/点击）：纯函数 `MenuBarAnchor.resolve` 用"触发时鼠标一定在图标上"校验缓存矩形，过期则按鼠标位置推导；
+      校验通过的结果还会再过一遍几何校验，因为 `resolve` 在"鼠标不在菜单栏带内"时会把坏缓存原样放行。
+    - 无鼠标（`tb` / Dock reopen / 第二实例唤醒）：`MenuBarAnchor.resolveWithoutPointer` 只认几何——缓存矩形不在菜单栏带内就兜底，
+      兜底锚点贴到系统项簇（控制中心）左侧、或距屏幕右缘留够弹窗半宽，**不能贴右边缘**，否则 `NSPopover` 会被 AppKit 夹回去、
+      看起来仍是错位。这条路径此前完全跳过校验，是"`tb` 弹窗贴死在屏幕右缘"的直接原因。
+    - 兜底时把 `NSPopover` 挂到一个透明、穿透点击的辅助 `NSPanel` 上；弹窗关闭后回收面板并复查一次状态项健康。
+    - 调试开关：`TokenBarForceAnchorFallback` 强制走锚点兜底、`TokenBarForceStatusItemUnhealthy` 强制判掉线以验证重建链路、
+      `TokenBarDisableHoverTracker` 摘掉悬停跟踪视图做 A/B。
 - **SwiftUI 视图组件**：
   - `TokenSummaryPopoverView`：主看板，包含标题区（TokenBar 及中英文副标题）、即时刷新动画按钮、滚动卡片列表以及状态栏。
   - `ProviderCardView` & `CustomProviderCardView`：展示各模型厂商卡片，双窗口（5 小时与每周）进度条及重置时间。

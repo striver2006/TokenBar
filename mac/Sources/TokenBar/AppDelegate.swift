@@ -22,7 +22,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         // Setup the Menu Bar status item and popover
         MenuBarController.shared.setup()
 
-        Log.lifecycle.notice("TokenBar 启动，refreshInterval=\(RefreshManager.shared.settings.refreshIntervalMinutes, privacy: .public)min")
+        // 磁盘上可能同时存在 /Applications 与 build 产物两三份同 bundle id 的副本，
+        // 不打出 bundlePath 就永远说不清用户跑的是哪一份
+        Log.lifecycle.notice(
+            "TokenBar 启动 v\(AppInfo.version, privacy: .public) pid=\(ProcessInfo.processInfo.processIdentifier, privacy: .public) bundle=\(Bundle.main.bundlePath, privacy: .public) refreshInterval=\(RefreshManager.shared.settings.refreshIntervalMinutes, privacy: .public)min")
 
         // 用户再次启动 TokenBar 时，第二个实例退出前会发该通知，这里弹出面板示意"我在这"。
         // 弹窗限时自动收回：唤醒示意没有自然关闭时机，pin 着一直开会持续吃 CPU；
@@ -32,7 +35,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             object: Bundle.main.bundleIdentifier,
             queue: nil
         ) { _ in
-            Log.lifecycle.notice("收到第二实例启动通知，弹出面板")
+            Log.lifecycle.notice("收到第二实例启动通知（tb / open -a 路径），弹出面板")
             Task { @MainActor in
                 MenuBarController.shared.togglePopoverOrOpenWindow(autoDismiss: 5)
             }
