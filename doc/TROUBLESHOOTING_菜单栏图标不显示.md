@@ -287,7 +287,11 @@ ControlCenter 按负责进程归属菜单项。用 `open` 启动的 .app 由 lau
 ### 9.5 解除步骤
 
 1. **系统设置 › 菜单栏 › 应用程序**：把 **Visual Studio Code、ZCode 的开关打开**（把这两条记录的 `isAllowed`
-   置 true，名下的 `com.tokenbar.mac` 随之解封；UniDrop 还需打开 Antigravity）。副作用只是允许这些 IDE
+   置 true，名下的 `com.tokenbar.mac` 随之解封；UniDrop 还需打开 Antigravity）。
+   **2026-09-14 17:4x 实测有效**：开关打开的瞬间 ControlCenter 日志出现
+   `Unblocking host; (bid:com.tokenbar.mac-TokenBarStatusItem-39125)`，正在运行的进程无需重启即恢复；
+   之后新启动的进程只有 `Starting to track host`，layer-25 出现 `TokenBarStatusItem` 镜像（x=2605 宽 107），
+   菜单栏图标回来了。副作用只是允许这些 IDE
    "名下"的菜单项显示，它们自身并没有状态项。然后 `killall TokenBar && open -a TokenBar`，
    跑第一节的命令确认没有新的 `Moving host to blocked list`，应用日志 `mirror=true`。
 2. 只想让 TokenBar 自己那行开关起作用而不动 IDE 的开关：`sudo` 拷出上述 plist，用 plistlib 从

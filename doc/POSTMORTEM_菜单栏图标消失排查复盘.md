@@ -12,7 +12,7 @@
 | 直接原因 | macOS 26 的 ControlCenter 在状态项 host 创建后 ~20ms 执行 `Moving host to blocked list` 并隐藏 |
 | 根因 | ControlCenter 组容器 `group.com.apple.controlcenter.plist` 的 `trackedApplications` 里，`com.tokenbar.mac` 被记在 **VS Code、ZCode 两条 `isAllowed=false` 记录的 `menuItemLocations`** 下；规则是"bundle id 出现在任一禁止记录的菜单项列表里即拉黑"，TokenBar 自己那条允许记录不起作用 |
 | 归属怎么来的 | 曾在 IDE 集成终端里直接执行 TokenBar 可执行文件，系统按"负责进程"把状态项记到了 IDE 名下 |
-| 解除 | 系统设置 › 菜单栏 › 应用程序：打开 Visual Studio Code、ZCode 的开关；或 sudo 改 plist 删掉归属后 `killall ControlCenter` |
+| 解除 | 系统设置 › 菜单栏 › 应用程序：打开 Visual Studio Code、ZCode 的开关（2026-09-14 实测：开关打开瞬间 ControlCenter 记 `Unblocking host`，运行中的进程即时恢复，不用重启）；或 sudo 改 plist 删掉归属后 `killall ControlCenter` |
 | 预防 | 调试一律 `open xxx.app` 启动，不要在 IDE 终端直接跑可执行文件 |
 | 与应用代码的关系 | 无关。应用内"清 LS 死记录 + 5 次重建"的自愈链路对此无效 |
 
