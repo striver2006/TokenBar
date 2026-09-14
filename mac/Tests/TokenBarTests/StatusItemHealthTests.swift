@@ -28,6 +28,7 @@ final class StatusItemHealthTests: XCTestCase {
         windowFrame: NSRect? = nil,
         windowNumber: Int? = 4096,
         registeredInWindowServer: Bool? = true,
+        mirrored: Bool? = true,
         screens: [StatusItemHealth.ScreenGeometry]? = nil
     ) -> StatusItemHealth.Snapshot {
         StatusItemHealth.Snapshot(
@@ -38,6 +39,7 @@ final class StatusItemHealthTests: XCTestCase {
             windowFrame: windowFrame ?? healthyRect,
             windowNumber: windowNumber,
             registeredInWindowServer: registeredInWindowServer,
+            mirroredByMenuBarHost: mirrored,
             screens: screens ?? [mainScreen]
         )
     }
@@ -69,6 +71,18 @@ final class StatusItemHealthTests: XCTestCase {
     /// 查不到窗口服务器（无权限 / API 变化）绝不能当成掉线
     func testUnavailableWindowServerSignalNeverCausesDetach() {
         XCTAssertEqual(StatusItemHealth.evaluate(makeSnapshot(registeredInWindowServer: nil)), .healthy)
+        XCTAssertEqual(StatusItemHealth.evaluate(makeSnapshot(mirrored: nil)), .healthy)
+    }
+
+    /// 真正的根因形态：几何停在正常位置、窗口也在，但控制中心没为它画镜像
+    /// （探针实测：LS 死记录导致被 blocked list 隐藏时 frame=2634 而 mirror=false）
+    func testDetachedWhenMenuBarHostDoesNotMirror() {
+        XCTAssertEqual(StatusItemHealth.evaluate(makeSnapshot(mirrored: false)), .detached(.notMirrored))
+        // 镜像信号优先于窗口服务器注册信号
+        XCTAssertEqual(
+            StatusItemHealth.evaluate(makeSnapshot(registeredInWindowServer: false, mirrored: false)),
+            .detached(.notMirrored)
+        )
     }
 
     func testDetachedWhenWindowMissing() {
@@ -216,5 +230,54 @@ final class StatusItemHealthTests: XCTestCase {
         XCTAssertTrue(policy.shouldResetAttempts(now: now, healthySince: now.addingTimeInterval(-601)))
         XCTAssertFalse(policy.shouldResetAttempts(now: now, healthySince: now.addingTimeInterval(-599)))
         XCTAssertFalse(policy.shouldResetAttempts(now: now, healthySince: nil))
+    }
+}
+
+/// `lsregister -dump` 解析：找出本 bundle id 下路径已不存在的陈旧注册。
+/// 样本照抄真实 dump 的格式（80 个 `-` 分隔、字段值前对齐空白、path 末尾 ` (0x…)` 序号）。
+final class LaunchServicesDumpParsingTests: XCTestCase {
+    private let separator = String(repeating: "-", count: 80)
+
+    private func record(identifier: String, path: String, seq: String) -> String {
+        """
+        \(separator)
+        container:                  / (0x4)
+        path:                       \(path) (\(seq))
+        identifier:                 \(identifier)
+        version:                    1.0 ({length = 32, bytes = 0x01000000 ... })
+        executable:                 Contents/MacOS/TokenBar
+        type code:                  'APPL' (4150504c)
+        """
+    }
+
+    private var sampleDump: String {
+        [
+            "Checking data integrity......done.",
+            record(identifier: "com.tokenbar.mac", path: "/Applications/TokenBar.app", seq: "0x4654"),
+            record(identifier: "com.tokenbar.mac", path: "/Users/chenzhenbo/Work/TokenBar/build/TokenBar.app", seq: "0x2ecc"),
+            record(identifier: "com.unidrop.client", path: "/Volumes/dmg.Qj9lpz/UniDrop.app", seq: "0x3e7c"),
+            record(identifier: "com.tokenbar.mac", path: "/Users/chenzhenbo/Work/TokenBar/mac/build/TokenBar.app", seq: "0x45ec"),
+            separator,
+        ].joined(separator: "\n")
+    }
+
+    func testFindsOnlyOwnBundleStalePaths() {
+        let existing: Set<String> = ["/Applications/TokenBar.app", "/Users/chenzhenbo/Work/TokenBar/mac/build/TokenBar.app"]
+        let stale = MenuBarController.staleLaunchServicesPaths(inDump: sampleDump, bundleID: "com.tokenbar.mac") {
+            existing.contains($0)
+        }
+        // UniDrop 的死记录不是我们的，不能碰；序号后缀必须被剥掉
+        XCTAssertEqual(stale, ["/Users/chenzhenbo/Work/TokenBar/build/TokenBar.app"])
+    }
+
+    func testReturnsEmptyWhenAllPathsExist() {
+        let stale = MenuBarController.staleLaunchServicesPaths(inDump: sampleDump, bundleID: "com.tokenbar.mac") { _ in true }
+        XCTAssertTrue(stale.isEmpty)
+    }
+
+    func testHandlesPathWithSpacesAndNoTrailingSeparator() {
+        let dump = record(identifier: "com.unidrop.client", path: "/Volumes/UniDrop 1/UniDrop.app", seq: "0x411c")
+        let stale = MenuBarController.staleLaunchServicesPaths(inDump: dump, bundleID: "com.unidrop.client") { _ in false }
+        XCTAssertEqual(stale, ["/Volumes/UniDrop 1/UniDrop.app"])
     }
 }

@@ -74,10 +74,19 @@ macOS 客户端采用纯 Swift 打造，支持 macOS 13 (Ventura) 及以上系�
     通知视图（`.task(id: openCount)`），用户未保存的输入不会因为再次打开而丢失。
   - 绑定 `NSPopover`，将其根视图托管至 SwiftUI `TokenSummaryPopoverView`。
   - 订阅 `RefreshManager.objectWillChange`，按用户配置把某个厂商的剩余额度 / 余额渲染到 `NSStatusItem` 标题（文案由纯函数 `MenuBarStatus` 计算，便于单测）。
-  - **状态项健康自愈**（macOS 26 起状态项托管在系统进程，实测会出现"对象活着、内容完好，但根本没拿到菜单栏槽位"的故障态：
-    几何停在屏幕右上角越界位置、窗口服务器 layer-25 层查不到它的状态项窗口，用户看到的就是"图标不见了"）：
+  - **状态项健康自愈**（macOS 26 起状态项托管在系统进程 ControlCenter，实测会出现"对象活着、内容完好，但控制中心不为它渲染"
+    的故障态，用户看到的就是"图标不见了"）。**真正的根因不在应用代码**：ControlCenter 按 bundle id 查 LaunchServices，
+    只要有一条路径已不存在的陈旧注册记录（换过构建输出目录、反复挂载 DMG 测安装包都会留下），就把该 bundle id 的状态项
+    `Moving host to blocked list` 并隐藏；黑名单不落盘、重启 ControlCenter 也不清，只有 `lsregister -u` 注销死记录后
+    下一次注册才恢复（2026-09-14 用探针 .app 逐变量排除后实测确认）。所以自愈动作里**清理 LS 死记录排在重建状态项之前**：
+    `purgeStaleLaunchServicesRecords` 在后台线程解析 `lsregister -dump`（全量输出，本机 28MB / 3 秒）找出本 bundle id
+    下路径已不存在的记录，逐条 `lsregister -u`，完成后回主线程再重建；启动时先清一次、每次重建前再清一次。
+    不能用 `NSWorkspace.urlsForApplications(withBundleIdentifier:)`——它会把不存在的路径过滤掉，永远找不到死记录。
     - 判定：纯函数 `StatusItemHealth.evaluate` 吃一份 `Snapshot`（`isVisible` / `button.window` 几何 / `windowNumber` /
-      能否在 `CGWindowList` 按窗口号查到 / 各屏几何），输出 `healthy` / `userHidden` / `detached(Reason)` / `indeterminate`。
+      控制中心是否为它渲染了镜像 / 能否在 `CGWindowList` 按窗口号查到 / 各屏几何），输出 `healthy` / `userHidden` /
+      `detached(Reason)` / `indeterminate`。**最可靠的信号是控制中心镜像**：每个真正显示出来的状态项在 layer-25 层都有一个
+      onscreen 的控制中心窗口，与应用自己那个离屏的状态项窗口同 x 同宽；被 block 的状态项没有这条镜像，而它的 frame
+      可能仍停在正常位置，所以几何判定只是辅助。
       `isVisible` 判定排在所有几何判定之前——用户 Cmd 拖走图标不是故障，重建会覆盖用户意图。
       几何判定排在窗口服务器信号之前：几何只依赖 AppKit 自己的数字，更可靠。窗口服务器那条信号在 macOS 26 上
       基本恒为"不可用"——托管状态项的 `windowNumber` 是超出 `CGWindowID`(UInt32) 范围的占位值（实测 2^32），

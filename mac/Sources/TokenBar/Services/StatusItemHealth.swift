@@ -3,14 +3,14 @@ import Foundation
 /// 状态项"还在不在菜单栏上"的判定，以及判定为掉线后的重建退避策略。
 ///
 /// 起因（macOS 26.6.2 / 3440×1440 实测）：状态项对象活着、内容完好
-/// （`AXEnabled=true`、`AXTitle=" 100%/65%"`、tooltip 正常），但几何停在
-/// `(3332, 1417, 109, 24)` —— 右边缘越出 3440 的屏幕、顶边比健康项高 4pt，
-/// 且窗口服务器的 layer-25 层根本查不到它的状态项窗口（健康的第三方应用有一条
-/// `2703,4 79x22` 的离屏窗口，控制中心在同一 x 镜像渲染）。它被控制中心画的
-/// 日期时间格盖住，用户就"看不到图标"。
+/// （`AXEnabled=true`、`AXTitle=" 100%/65%"`、tooltip 正常），但控制中心没有为它
+/// 渲染菜单栏镜像，几何常停在 `(3332, 1417, 109, 24)`（右边缘越出屏幕），用户就"看不到图标"。
 ///
-/// 这种故障态下 `button.window` 存在、宽度也正常，所以**只看 `window == nil`
-/// 或宽度为 0 会漏判**，必须同时看几何是否在菜单栏带内、窗口有没有在窗口服务器注册。
+/// 根因不在应用代码：macOS 26 的 ControlCenter 按 bundle id 查 LaunchServices，只要有一条
+/// 路径已不存在的陈旧注册记录，就把这个 bundle id 的状态项 `Moving host to blocked list`
+/// 并隐藏。所以最可靠的健康信号是**控制中心有没有为它画镜像**（layer-25、onscreen、同 x 同宽）；
+/// 几何判定只是辅助 —— 被 block 的状态项 frame 也可能停在正常位置。
+/// `button.window == nil` / 宽度为 0 这两个信号在这种故障态下都不成立，单靠它们会漏判。
 ///
 /// 全部为纯函数，几何由调用方采样后传入，便于单测。
 public enum StatusItemHealth {
@@ -37,8 +37,12 @@ public enum StatusItemHealth {
         public let windowFrame: NSRect?
         /// `button.window?.windowNumber`；≤ 0 表示窗口从未被窗口服务器接管
         public let windowNumber: Int?
-        /// 按窗口号在 CGWindowList 里能否查到；**无法查询时传 nil，该信号被忽略**
+        /// 按窗口号在 CGWindowList 里能否查到；**无法查询时传 nil，该信号被忽略**。
+        /// macOS 26 托管状态项的 windowNumber 是 2^32 这类占位值，实际上恒为 nil。
         public let registeredInWindowServer: Bool?
+        /// 控制中心是否为它渲染了菜单栏镜像（layer-25、onscreen、与 windowFrame 同 x 同宽）。
+        /// 这是 macOS 26 上最可靠的信号；**无法查询时传 nil，该信号被忽略**。
+        public let mirroredByMenuBarHost: Bool?
         public let screens: [ScreenGeometry]
 
         public init(
@@ -49,6 +53,7 @@ public enum StatusItemHealth {
             windowFrame: NSRect?,
             windowNumber: Int?,
             registeredInWindowServer: Bool?,
+            mirroredByMenuBarHost: Bool? = nil,
             screens: [ScreenGeometry]
         ) {
             self.hasItem = hasItem
@@ -58,6 +63,7 @@ public enum StatusItemHealth {
             self.windowFrame = windowFrame
             self.windowNumber = windowNumber
             self.registeredInWindowServer = registeredInWindowServer
+            self.mirroredByMenuBarHost = mirroredByMenuBarHost
             self.screens = screens
         }
     }
@@ -71,6 +77,8 @@ public enum StatusItemHealth {
         case zeroButtonWidth
         case notRegistered
         case offMenuBar
+        /// 控制中心没有为它渲染镜像 —— 典型就是被 blocked list 隐藏
+        case notMirrored
     }
 
     public enum Verdict: Equatable {
@@ -124,8 +132,9 @@ public enum StatusItemHealth {
         }
         guard onMenuBar else { return .detached(.offMenuBar) }
 
-        // 几何看着正常，但窗口压根没在窗口服务器注册 —— 图标一样是看不见的。
+        // 几何看着正常，但控制中心没为它画镜像 —— 图标一样是看不见的。
         // nil = 查不了（无权限 / API 变化），忽略该信号，绝不因为查不到就判掉线。
+        if snapshot.mirroredByMenuBarHost == false { return .detached(.notMirrored) }
         if snapshot.registeredInWindowServer == false { return .detached(.notRegistered) }
 
         return .healthy
