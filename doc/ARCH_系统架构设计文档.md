@@ -101,8 +101,12 @@ macOS 客户端采用纯 Swift 打造，支持 macOS 13 (Ventura) 及以上系�
     （defaults / ByHost displayablemenuextras / Application Support / Group Containers）里查无该
     bundle id 的痕迹。结论：**拉黑是按 bundle id 的粘性会话态**（疑似活在对 CC 重启免疫的
     WindowServer/会话层），LS 死记录只是初始触发器之一。应用内 LS 清理仍是必要卫生（防再次触发），
-    镜像健康信号也如实探测到了 block；但对已存在的拉黑，LS 侧动作已无力解除，需**注销重登**
-    （待真机验证；若重登仍被拉黑，再考虑全库重建 `lsregister -kill -seed -r` 这类重手段）。
+    镜像健康信号也如实探测到了 block；但对已存在的拉黑，LS 侧动作已无力解除。2026-09-14 13:42
+    整机重启实测：**重启也无效**——开机自启的首个 host 在 13:46 创建 20ms 后复现拉黑，此后全天
+    各 PID 均秒拒；「拉黑随会话清除」假设不成立（要么跨重启持久，要么重启后又被即刻再触发）。
+    另注意到无关应用 `io.vpsquota.VPSTrafficQuota`、`com.unidrop.client` 同期也被 blocked，
+    「按 bundle id 精确命中」有待重审。解除手段目前只剩全库重建 `lsregister -kill -seed -r`
+    这类重手段（未验证）。
     - 判定：纯函数 `StatusItemHealth.evaluate` 吃一份 `Snapshot`（`isVisible` / `button.window` 几何 / `windowNumber` /
       控制中心是否为它渲染了镜像 / 能否在 `CGWindowList` 按窗口号查到 / 各屏几何），输出 `healthy` / `userHidden` /
       `detached(Reason)` / `indeterminate`。**最可靠的信号是控制中心镜像**：每个真正显示出来的状态项在 layer-25 层都有一个
