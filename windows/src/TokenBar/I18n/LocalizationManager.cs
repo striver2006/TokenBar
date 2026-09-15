@@ -73,6 +73,8 @@ namespace TokenBar.I18n
         public string FiveHourIdle => IsChinese ? "5小时窗口已重置 (调用后开启)" : "5h window reset (starts on call)";
         public string Configure => IsChinese ? "去配置" : "Configure";
         public string NotAuthorized => IsChinese ? "尚未完成授权配置" : "Authorization required";
+        public string Retry => IsChinese ? "重试" : "Retry";
+        public string RefreshErrorHint => IsChinese ? "刷新失败，可能是网络未就绪" : "Refresh failed; network may be unavailable";
         public string SyncingData => IsChinese ? "正在同步额度信息..." : "Syncing quota data...";
         public string ServiceOperational => IsChinese ? "服务可用，接口正常" : "Operational & healthy";
         public string TimeDaysHours => IsChinese ? "剩余 {0}天 {1}小时" : "{0}d {1}h left";

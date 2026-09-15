@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net.NetworkInformation;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -129,9 +130,17 @@ namespace TokenBar.Services
             SetupInitialData();
             // 定时器必须先于首刷创建：首刷一旦挂起，定时器不存在就永远没有自动刷新
             StartTimer();
+            HookNetworkRecovery();
             Log.Notice("lifecycle", $"TokenBar 启动，refreshInterval={Settings.RefreshIntervalMinutes}min");
             _ = LoadSecretsThenInitialRefreshAsync();
         }
+
+        // 首刷全轮失败后的退避重试间隔。开机自启动时网络常未就绪，只等定时器要一个完整
+        // 间隔（默认 5 分钟）；两次短退避把「过一阵才恢复」缩短到半分钟内。
+        private static readonly int[] InitialRetryDelaysSeconds = { 15, 45 };
+
+        // NetworkAvailabilityChanged 是否已订阅，Dispose 时据此取消
+        private bool _networkHooked;
 
         /// <summary>凭证必须先于首刷从凭据管理器读进内存，否则首轮全部厂商都会被判成未配置</summary>
         private async Task LoadSecretsThenInitialRefreshAsync()
@@ -146,6 +155,52 @@ namespace TokenBar.Services
                 Log.Error("lifecycle", $"启动加载凭证异常: {ex}");
             }
             await RefreshAllAsync(RefreshTrigger.Initial).ConfigureAwait(false);
+
+            // 首刷因刷新失败（网络未就绪等）没拿到数据时退避重试；全是「未配置」则没有重试意义
+            foreach (var delay in InitialRetryDelaysSeconds)
+            {
+                if (!AnyRefreshError()) return;
+                await Task.Delay(TimeSpan.FromSeconds(delay)).ConfigureAwait(false);
+                if (!AnyRefreshError()) return;   // 等待期间定时器/手动/网络恢复补刷已成功
+                Log.Notice("refresh", $"首刷未拿到数据，{delay}s 后重试");
+                await RefreshAllAsync(RefreshTrigger.Initial).ConfigureAwait(false);
+            }
+        }
+
+        /// <summary>是否有厂商处于「刷新失败」态（区别于「未配置」）</summary>
+        private bool AnyRefreshError() =>
+            Quotas.Values.Any(q => q.HadRefreshError) || CustomQuotas.Values.Any(q => q.HadRefreshError);
+
+        /// <summary>
+        /// 网络恢复补刷：开机时网络未就绪导致首刷全败后，网络一通立即补刷，不等退避重试或定时器。
+        /// 事件在线程池触发；RefreshIfStaleAsync 自带 60 秒去抖，RefreshAllAsync 自带闸门，重复事件无害。
+        /// </summary>
+        private void HookNetworkRecovery()
+        {
+            try
+            {
+                NetworkChange.NetworkAvailabilityChanged += OnNetworkAvailabilityChanged;
+                _networkHooked = true;
+            }
+            catch (Exception ex)
+            {
+                // 个别精简系统没有 NetworkInformation 服务，注册失败不影响其余流程
+                Log.Error("lifecycle", $"注册网络状态监听失败: {ex.Message}");
+            }
+        }
+
+        private async void OnNetworkAvailabilityChanged(object? sender, NetworkAvailabilityEventArgs e)
+        {
+            if (!e.IsAvailable) return;
+            try
+            {
+                Log.Notice("lifecycle", "网络已恢复，触发补刷");
+                await RefreshIfStaleAsync(TimeSpan.FromMinutes(2));
+            }
+            catch (Exception ex)
+            {
+                Log.Error("lifecycle", $"网络恢复补刷异常: {ex.Message}");
+            }
         }
 
         // MARK: - 凭证与凭据管理器
@@ -694,11 +749,14 @@ namespace TokenBar.Services
             {
                 quota.IsLoading = false;
                 quota.ErrorMessage = message;
+                // 超时大多是网络未就绪/服务端无响应，不算「未配置」；授权态与旧数据保留
+                quota.HadRefreshError = true;
             }
             else if (customId.HasValue && CustomQuotas.TryGetValue(customId.Value, out var custom) && custom != null)
             {
                 custom.IsLoading = false;
                 custom.ErrorMessage = message;
+                custom.HadRefreshError = true;
             }
         }
 
@@ -764,13 +822,16 @@ namespace TokenBar.Services
                 quota.WeeklyWindow = secondary;
                 quota.AccountInfo = account;
                 quota.IsAuthorized = true;
+                quota.HadRefreshError = false;
                 quota.LastUpdated = DateTime.Now;
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex)
             {
                 if (IsStaleGeneration(generation, "openai")) return;
-                quota.IsAuthorized = false;
+                // Key 已配置的失败按「刷新失败」处理：可能是开机网络未就绪等瞬时故障，
+                // 打回未授权会让卡片显示「去配置」误导用户。授权态与旧数据保留，成功后回落。
+                quota.HadRefreshError = true;
                 quota.ErrorMessage = ex.Message;
                 Log.Error("provider", $"provider=openai failed: {ex.Message}");
             }
@@ -806,6 +867,7 @@ namespace TokenBar.Services
                     // 远端若暂未下发 scoped 周额度，回落本地缓存，任一路有数据即可显示
                     quota.ScopedWeeklyWindow = scopedWeekly ?? localClaude?.ScopedWeekly;
                     quota.IsAuthorized = true;
+                    quota.HadRefreshError = false;
                     if (account != null) quota.AccountInfo = account;
                     foundAuth = true;
                 }
@@ -820,8 +882,14 @@ namespace TokenBar.Services
                         quota.WeeklyWindow = localClaude.Value.Weekly;
                         quota.ScopedWeeklyWindow = localClaude.Value.ScopedWeekly;
                         quota.IsAuthorized = true;
+                        quota.HadRefreshError = false;
                         if (localClaude.Value.Account != null) quota.AccountInfo = localClaude.Value.Account;
                         foundAuth = true;
+                    }
+                    else
+                    {
+                        // 本地也没缓存：这是刷新失败不是未配置，留给末尾统一判定
+                        quota.ErrorMessage = ex.Message;
                     }
                 }
             }
@@ -856,6 +924,7 @@ namespace TokenBar.Services
                             : account;
                     }
                     quota.IsAuthorized = true;
+                    quota.HadRefreshError = false;
                     foundAuth = true;
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
@@ -873,8 +942,16 @@ namespace TokenBar.Services
             if (IsStaleGeneration(generation, "claude")) return;
             if (!foundAuth)
             {
-                quota.IsAuthorized = false;
-                quota.ErrorMessage ??= LocalizationManager.Instance.IsChinese ? "未配置 Anthropic API Key 或 Claude Code 网页/本地授权" : "Anthropic API Key or Claude Code authorization not configured";
+                if (quota.ErrorMessage != null)
+                {
+                    // 配了授权来源但全部失败（多为网络）：按刷新失败处理，不算未配置
+                    quota.HadRefreshError = true;
+                }
+                else
+                {
+                    quota.IsAuthorized = false;
+                    quota.ErrorMessage ??= LocalizationManager.Instance.IsChinese ? "未配置 Anthropic API Key 或 Claude Code 网页/本地授权" : "Anthropic API Key or Claude Code authorization not configured";
+                }
             }
 
             // 与其他厂商对齐：只有真的拿到数据才算一次成功更新
@@ -909,6 +986,7 @@ namespace TokenBar.Services
                     quota.FiveHourWindow = fiveHour;
                     quota.WeeklyWindow = weekly;
                     quota.IsAuthorized = true;
+                    quota.HadRefreshError = false;
                     quota.AccountInfo = account;
                     quota.LastUpdated = DateTime.Now;
                     quota.IsLoading = false;
@@ -923,7 +1001,8 @@ namespace TokenBar.Services
                     if (!hasOAuth)
                     {
                         if (IsStaleGeneration(generation, "gemini")) return;
-                        quota.IsAuthorized = false;
+                        // Key 已配置：失败按「刷新失败」处理（可能是网络未就绪），不算未配置
+                        quota.HadRefreshError = true;
                         quota.ErrorMessage = ex.Message;
                         Log.Error("provider", $"provider=gemini failed: {ex.Message}");
                         quota.IsLoading = false;
@@ -941,6 +1020,7 @@ namespace TokenBar.Services
                 quota.FiveHourWindow = fiveHour;
                 quota.WeeklyWindow = weekly;
                 quota.IsAuthorized = true;
+                quota.HadRefreshError = false;
                 if (account != null) quota.AccountInfo = account;
                 quota.LastUpdated = DateTime.Now;
             }
@@ -948,7 +1028,8 @@ namespace TokenBar.Services
             catch (Exception ex)
             {
                 if (IsStaleGeneration(generation, "gemini")) return;
-                quota.IsAuthorized = false;
+                // 授权来源存在但失败（多为网络未就绪）：不算未配置，保留授权态与旧数据
+                quota.HadRefreshError = true;
                 quota.ErrorMessage = ex.Message;
                 Log.Error("provider", $"provider=gemini failed: {ex.Message}");
             }
@@ -990,6 +1071,7 @@ namespace TokenBar.Services
                 quota.WeeklyWindow = secondary;
                 quota.AccountInfo = account;
                 quota.IsAuthorized = true;
+                quota.HadRefreshError = false;
                 quota.LastUpdated = DateTime.Now;
 
                 ProcessBalance("deepseek", ProviderType.DeepSeek.GetDisplayName(),
@@ -999,7 +1081,7 @@ namespace TokenBar.Services
             catch (Exception ex)
             {
                 if (IsStaleGeneration(generation, "deepseek")) return;
-                quota.IsAuthorized = false;
+                quota.HadRefreshError = true;
                 quota.ErrorMessage = ex.Message;
                 Log.Error("provider", $"provider=deepseek failed: {ex.Message}");
             }
@@ -1040,13 +1122,14 @@ namespace TokenBar.Services
                 quota.WeeklyWindow = secondary;
                 quota.AccountInfo = account;
                 quota.IsAuthorized = true;
+                quota.HadRefreshError = false;
                 quota.LastUpdated = DateTime.Now;
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex)
             {
                 if (IsStaleGeneration(generation, "volcengine")) return;
-                quota.IsAuthorized = false;
+                quota.HadRefreshError = true;
                 quota.ErrorMessage = ex.Message;
                 Log.Error("provider", $"provider=volcengine failed: {ex.Message}");
             }
@@ -1088,6 +1171,7 @@ namespace TokenBar.Services
                 quota.WeeklyWindow = secondary;
                 quota.AccountInfo = account;
                 quota.IsAuthorized = true;
+                quota.HadRefreshError = false;
                 quota.LastUpdated = DateTime.Now;
 
                 ProcessBalance("kimi", ProviderType.Kimi.GetDisplayName(),
@@ -1097,7 +1181,7 @@ namespace TokenBar.Services
             catch (Exception ex)
             {
                 if (IsStaleGeneration(generation, "kimi")) return;
-                quota.IsAuthorized = false;
+                quota.HadRefreshError = true;
                 quota.ErrorMessage = ex.Message;
                 Log.Error("provider", $"provider=kimi failed: {ex.Message}");
             }
@@ -1138,6 +1222,7 @@ namespace TokenBar.Services
                 quota.WeeklyWindow = secondary;
                 quota.AccountInfo = account;
                 quota.IsAuthorized = true;
+                quota.HadRefreshError = false;
                 quota.LastUpdated = DateTime.Now;
 
                 ProcessBalance("openrouter", ProviderType.OpenRouter.GetDisplayName(),
@@ -1147,7 +1232,7 @@ namespace TokenBar.Services
             catch (Exception ex)
             {
                 if (IsStaleGeneration(generation, "openrouter")) return;
-                quota.IsAuthorized = false;
+                quota.HadRefreshError = true;
                 quota.ErrorMessage = ex.Message;
                 Log.Error("provider", $"provider=openrouter failed: {ex.Message}");
             }
@@ -1187,13 +1272,14 @@ namespace TokenBar.Services
                 quota.WeeklyWindow = weekly;
                 quota.AccountInfo = account;
                 quota.IsAuthorized = true;
+                quota.HadRefreshError = false;
                 quota.LastUpdated = DateTime.Now;
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex)
             {
                 if (IsStaleGeneration(generation, "glm")) return;
-                quota.IsAuthorized = false;
+                quota.HadRefreshError = true;
                 quota.ErrorMessage = ex.Message;
                 Log.Error("provider", $"provider=glm failed: {ex.Message}");
             }
@@ -1234,6 +1320,7 @@ namespace TokenBar.Services
                 quota.WeeklyWindow = res.Weekly;
                 quota.AccountInfo = res.Account;
                 quota.IsAuthorized = true;
+                quota.HadRefreshError = false;
                 // 网关成功但没返回窗口数据时，用 Note 说明「可能不限量」，
                 // 而不是让卡片停在「同步中」——但仍算已授权，不是失败态
                 quota.ErrorMessage = res.Note;
@@ -1275,7 +1362,15 @@ namespace TokenBar.Services
             catch (Exception ex)
             {
                 if (IsStaleGeneration(generation, "aliyun")) return;
-                quota.IsAuthorized = false;
+                if (ex is AliyunChannelException { Kind: AliyunErrorKind.MissingCredentials })
+                {
+                    // 百炼没有「Key 为空」前置检查：完全没配凭据在这里浮出，维持未配置态
+                    quota.IsAuthorized = false;
+                }
+                else
+                {
+                    quota.HadRefreshError = true;
+                }
                 quota.ErrorMessage = ex.Message;
                 Log.Error("provider", $"provider=aliyun failed: {ex.Message}");
             }
@@ -1316,6 +1411,7 @@ namespace TokenBar.Services
                 q.SecondaryWindow = secondary;
                 q.AccountInfo = account;
                 q.IsAuthorized = true;
+                q.HadRefreshError = false;
                 q.LastUpdated = DateTime.Now;
 
                 // 余额窗口可能在主槽位（纯余额厂商）或副槽位（MiMo 等订阅+余额双通道厂商）
@@ -1329,7 +1425,7 @@ namespace TokenBar.Services
             catch (Exception ex)
             {
                 if (IsStaleGeneration(generation, "custom")) return;
-                q.IsAuthorized = false;
+                q.HadRefreshError = true;
                 q.ErrorMessage = ex.Message;
                 Log.Error("provider", $"provider=custom failed: {ex.Message}");
             }
@@ -1478,6 +1574,11 @@ namespace TokenBar.Services
 
         public void Dispose()
         {
+            if (_networkHooked)
+            {
+                NetworkChange.NetworkAvailabilityChanged -= OnNetworkAvailabilityChanged;
+                _networkHooked = false;
+            }
             _secretSyncGate.Dispose();
             _timer?.Dispose();
         }

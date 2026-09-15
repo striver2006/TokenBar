@@ -264,7 +264,10 @@ namespace TokenBar.Views
             stack.Children.Add(headerGrid);
 
             // Body
-            if (!quota.IsAuthorized)
+            bool hasWindowData = quota.FiveHourWindow != null || quota.WeeklyWindow != null
+                                 || quota.BalanceWindow != null || quota.ScopedWeeklyWindow != null;
+
+            if (!quota.IsAuthorized && !quota.HadRefreshError)
             {
                 var errorDock = new DockPanel { Margin = new Thickness(0, 8, 0, 2) };
                 var btnConfig = new Button
@@ -292,8 +295,12 @@ namespace TokenBar.Views
                 errorDock.Children.Add(msgBlock);
                 stack.Children.Add(errorDock);
             }
-            else if (quota.FiveHourWindow == null && quota.WeeklyWindow == null && quota.BalanceWindow == null
-                     && quota.ScopedWeeklyWindow == null)
+            else if (quota.HadRefreshError && !hasWindowData)
+            {
+                // 已配置但刷新失败（多为开机网络未就绪）：显示错误 + 「重试」，而不是误导性的「去配置」
+                AddRefreshErrorRow(stack, quota.ErrorMessage);
+            }
+            else if (!hasWindowData)
             {
                 var syncBlock = new TextBlock
                 {
@@ -354,6 +361,12 @@ namespace TokenBar.Views
                 if (quota.ScopedWeeklyWindow != null)
                 {
                     stack.Children.Add(CreateWindowQuotaRow(quota.ScopedWeeklyWindow, LocalizationManager.Instance.WeeklyWindow));
+                }
+
+                if (quota.HadRefreshError)
+                {
+                    // 本轮刷新失败但旧数据仍可参考：末尾叠一行小字提示，不打断余额展示
+                    AddRefreshErrorHint(stack, quota.ErrorMessage);
                 }
             }
 
@@ -442,7 +455,7 @@ namespace TokenBar.Views
 
             stack.Children.Add(headerGrid);
 
-            if (!quota.IsAuthorized)
+            if (!quota.IsAuthorized && !quota.HadRefreshError)
             {
                 var errorDock = new DockPanel { Margin = new Thickness(0, 8, 0, 2) };
                 var btnConfig = new Button
@@ -470,6 +483,11 @@ namespace TokenBar.Views
                 errorDock.Children.Add(msgBlock);
                 stack.Children.Add(errorDock);
             }
+            else if (quota.HadRefreshError && quota.PrimaryWindow == null && quota.SecondaryWindow == null)
+            {
+                // 已配置但刷新失败（多为开机网络未就绪）：显示错误 + 「重试」，而不是误导性的「去配置」
+                AddRefreshErrorRow(stack, quota.ErrorMessage);
+            }
             else
             {
                 if (quota.PrimaryWindow != null)
@@ -490,10 +508,62 @@ namespace TokenBar.Views
                 {
                     stack.Children.Add(CreateWindowQuotaRow(quota.SecondaryWindow, LocalizationManager.Instance.RateBadge));
                 }
+
+                if (quota.HadRefreshError)
+                {
+                    // 本轮刷新失败但旧数据仍可参考：末尾叠一行小字提示
+                    AddRefreshErrorHint(stack, quota.ErrorMessage);
+                }
             }
 
             card.Child = stack;
             return card;
+        }
+
+        /// <summary>刷新失败且无数据可显时的整行提示：错误信息 + 「重试」按钮（区别于「未配置 → 去配置」）</summary>
+        private void AddRefreshErrorRow(StackPanel stack, string? message)
+        {
+            var i18n = LocalizationManager.Instance;
+            var dock = new DockPanel { Margin = new Thickness(0, 8, 0, 2) };
+
+            var btnRetry = new Button
+            {
+                Content = i18n.Retry,
+                Padding = new Thickness(8, 2, 8, 2),
+                FontSize = 11,
+                Background = new SolidColorBrush(Color.FromRgb(37, 99, 235)),
+                Foreground = Brushes.White,
+                Cursor = System.Windows.Input.Cursors.Hand,
+                HorizontalAlignment = HorizontalAlignment.Right
+            };
+            btnRetry.Click += async (s, e) => await RefreshManager.Instance.RefreshAllAsync(RefreshTrigger.Manual);
+            DockPanel.SetDock(btnRetry, Dock.Right);
+            dock.Children.Add(btnRetry);
+
+            var msgBlock = new TextBlock
+            {
+                Text = message ?? i18n.RefreshErrorHint,
+                FontSize = 11,
+                // 橙色：瞬时刷新失败；红色保留给「未配置」
+                Foreground = new SolidColorBrush(Color.FromRgb(234, 88, 12)),
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            dock.Children.Add(msgBlock);
+            stack.Children.Add(dock);
+        }
+
+        /// <summary>已授权、旧数据保留展示、本轮刷新失败时，卡片末尾的小字提示</summary>
+        private void AddRefreshErrorHint(StackPanel stack, string? message)
+        {
+            stack.Children.Add(new TextBlock
+            {
+                Text = message ?? LocalizationManager.Instance.RefreshErrorHint,
+                FontSize = 10,
+                Foreground = new SolidColorBrush(Color.FromRgb(234, 88, 12)),
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                Margin = new Thickness(0, 4, 0, 0)
+            });
         }
 
         private UIElement CreateWindowQuotaRow(TokenWindow window, string badgeText)

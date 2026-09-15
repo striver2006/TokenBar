@@ -292,6 +292,9 @@ namespace TokenBar.Models
         public DateTime? LastUpdated { get; set; }
         public string? ErrorMessage { get; set; }
         public bool IsLoading { get; set; }
+        // 「配置了但本轮刷新失败」（网络未就绪/超时/服务端错误），与「未配置」区分开：
+        // UI 据此显示「重试」而非「去配置」，且不清除 IsAuthorized 与旧数据，成功后自动回落。
+        public bool HadRefreshError { get; set; }
     }
 
     public class CustomProviderQuota
@@ -306,6 +309,8 @@ namespace TokenBar.Models
         public string? ErrorMessage { get; set; }
         public bool IsLoading { get; set; }
         public DateTime? LastUpdated { get; set; }
+        // 语义同 ProviderQuota.HadRefreshError
+        public bool HadRefreshError { get; set; }
     }
 
     public class DomesticProviderPreset
