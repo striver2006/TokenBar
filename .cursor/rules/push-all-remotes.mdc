@@ -1,0 +1,24 @@
+---
+description: 推送时必须推送到所有远程仓库（origin + github），GitHub 为默认推送目标
+alwaysApply: true
+---
+
+# 推送规则：所有远程仓库都要推送
+
+本仓库配置了两个远程，且已设置 `git config remote.pushDefault github`：
+
+- `origin` → https://gitcode.com/czb99/TokenBar.git
+- `github` → https://github.com/striver2006/TokenBar.git
+
+## 要求
+
+用户说「推送」时，必须把当前分支推送到**所有**远程仓库，而不是只推其中一个。
+注意：不带参数的 `git push` 因 `remote.pushDefault` 只会推到 GitHub，因此必须显式补推其余远程：
+
+```bash
+git push            # 默认推到 github（remote.pushDefault）
+git push origin <branch>   # 再显式推 origin
+```
+
+- 任一远程推送失败必须如实报告，不要静默跳过。
+- 以后新增远程时，同样纳入「全部推送」的范围。
