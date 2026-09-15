@@ -281,6 +281,9 @@ public struct ProviderQuota: Identifiable, Codable {
     public var lastUpdated: Date?
     public var errorMessage: String?
     public var isLoading: Bool
+    /// 「配置了但本轮刷新失败」（网络未就绪/超时/服务端错误），与「未配置」区分开：
+    /// 卡片据此显示「重试」而非「去配置」，且不清除 isAuthorized 与旧数据，成功后自动回落。
+    public var hadRefreshError: Bool
 
     public init(
         provider: ProviderType,
@@ -293,7 +296,8 @@ public struct ProviderQuota: Identifiable, Codable {
         balanceWindow: TokenWindow? = nil,
         lastUpdated: Date? = nil,
         errorMessage: String? = nil,
-        isLoading: Bool = false
+        isLoading: Bool = false,
+        hadRefreshError: Bool = false
     ) {
         self.provider = provider
         self.isEnabled = isEnabled
@@ -306,6 +310,7 @@ public struct ProviderQuota: Identifiable, Codable {
         self.lastUpdated = lastUpdated
         self.errorMessage = errorMessage
         self.isLoading = isLoading
+        self.hadRefreshError = hadRefreshError
     }
 }
 
@@ -404,6 +409,8 @@ public struct CustomProviderQuota: Identifiable, Codable {
     public var lastUpdated: Date?
     public var errorMessage: String?
     public var isLoading: Bool
+    /// 语义同 ProviderQuota.hadRefreshError
+    public var hadRefreshError: Bool
 
     public init(
         id: UUID = UUID(),
@@ -417,7 +424,8 @@ public struct CustomProviderQuota: Identifiable, Codable {
         secondaryWindow: TokenWindow? = nil,
         lastUpdated: Date? = nil,
         errorMessage: String? = nil,
-        isLoading: Bool = false
+        isLoading: Bool = false,
+        hadRefreshError: Bool = false
     ) {
         self.id = id
         self.configId = configId
@@ -431,6 +439,7 @@ public struct CustomProviderQuota: Identifiable, Codable {
         self.lastUpdated = lastUpdated
         self.errorMessage = errorMessage
         self.isLoading = isLoading
+        self.hadRefreshError = hadRefreshError
     }
 }
 

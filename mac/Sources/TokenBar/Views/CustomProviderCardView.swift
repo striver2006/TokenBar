@@ -3,10 +3,16 @@ import SwiftUI
 public struct CustomProviderCardView: View {
     let quota: CustomProviderQuota
     let onConfigure: () -> Void
+    let onRetry: () -> Void
 
-    public init(quota: CustomProviderQuota, onConfigure: @escaping () -> Void) {
+    public init(
+        quota: CustomProviderQuota,
+        onConfigure: @escaping () -> Void,
+        onRetry: @escaping () -> Void = {}
+    ) {
         self.quota = quota
         self.onConfigure = onConfigure
+        self.onRetry = onRetry
     }
 
     private var themeColor: Color {
@@ -58,7 +64,7 @@ public struct CustomProviderCardView: View {
                     ProgressView()
                         .scaleEffect(0.6)
                         .frame(width: 16, height: 16)
-                } else if quota.isAuthorized {
+                } else if quota.isAuthorized && !quota.hadRefreshError {
                     Circle()
                         .fill(Color.green)
                         .frame(width: 7, height: 7)
@@ -69,7 +75,7 @@ public struct CustomProviderCardView: View {
                 }
             }
 
-            if !quota.isAuthorized {
+            if !quota.isAuthorized && !quota.hadRefreshError {
                 VStack(spacing: 8) {
                     HStack {
                         Image(systemName: "exclamationmark.triangle.fill")
@@ -86,6 +92,24 @@ public struct CustomProviderCardView: View {
                         .buttonStyle(.borderedProminent)
                         .controlSize(.mini)
                     }
+                }
+                .padding(.vertical, 4)
+            } else if quota.hadRefreshError && quota.primaryWindow == nil && quota.secondaryWindow == nil {
+                // 已配置但刷新失败（多为开机网络未就绪）：显示错误 + 「重试」，而不是误导性的「去配置」
+                HStack {
+                    Image(systemName: "wifi.exclamationmark")
+                        .foregroundColor(.orange)
+                        .font(.system(size: 11))
+                    Text(quota.errorMessage ?? I18n(.refreshErrorHint))
+                        .font(.system(size: 11))
+                        .foregroundColor(.orange)
+                        .lineLimit(2)
+                    Spacer()
+                    Button(I18n(.retry)) {
+                        onRetry()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.mini)
                 }
                 .padding(.vertical, 4)
             } else {
@@ -113,6 +137,18 @@ public struct CustomProviderCardView: View {
                     if let secondary = quota.secondaryWindow {
                         WindowQuotaRow(window: secondary, badgeText: secondary.title.uppercased().contains("TPM") ? "TPM" : "RPM")
                     }
+                }
+
+                if quota.hadRefreshError {
+                    // 本轮刷新失败但旧数据仍可参考：末尾叠一行小字提示，不打断余额展示
+                    HStack(spacing: 4) {
+                        Image(systemName: "exclamationmark.circle")
+                            .font(.system(size: 9))
+                        Text(quota.errorMessage ?? I18n(.refreshErrorHint))
+                            .font(.system(size: 10))
+                            .lineLimit(1)
+                    }
+                    .foregroundColor(.orange)
                 }
             }
         }

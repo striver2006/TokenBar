@@ -130,9 +130,17 @@ public struct TokenSummaryPopoverView: View {
                     ForEach(orderedCardEntries) { entry in
                         switch entry.content {
                         case .builtin(let quota):
-                            ProviderCardView(quota: quota, onConfigure: { onOpenSettings(quota.provider.settingsTab) })
+                            ProviderCardView(
+                                quota: quota,
+                                onConfigure: { onOpenSettings(quota.provider.settingsTab) },
+                                onRetry: { Task { await refreshManager.refreshAll() } }
+                            )
                         case .custom(let quota):
-                            CustomProviderCardView(quota: quota, onConfigure: { onOpenSettings(.custom) })
+                            CustomProviderCardView(
+                                quota: quota,
+                                onConfigure: { onOpenSettings(.custom) },
+                                onRetry: { Task { await refreshManager.refreshAll() } }
+                            )
                         }
                     }
                 }

@@ -45,6 +45,8 @@ public enum I18nKey: String {
     case fiveHourIdle
     case configure
     case notAuthorized
+    case retry
+    case refreshErrorHint
     case syncingData
     case serviceOperational
     case timeDaysHours
@@ -396,6 +398,10 @@ public final class LocalizationManager: ObservableObject {
             return isZh ? "去配置" : "Configure"
         case .notAuthorized:
             return isZh ? "尚未完成授权配置" : "Authorization required"
+        case .retry:
+            return isZh ? "重试" : "Retry"
+        case .refreshErrorHint:
+            return isZh ? "刷新失败，可能是网络未就绪" : "Refresh failed; network may be unavailable"
         case .syncingData:
             return isZh ? "正在同步额度信息..." : "Syncing quota data..."
         case .serviceOperational:

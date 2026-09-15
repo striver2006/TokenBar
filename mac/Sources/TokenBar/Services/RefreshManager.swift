@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import SwiftUI
+import Network
 // UserNotifications 的 UNUserNotificationCenter / UNNotificationRequest 至今未做 Sendable 审计，
 // 把它们传进 requestAuthorization 的回调是官方用法。@preconcurrency 是 Apple 对这类
 // 尚未标注的 SDK 模块给出的标准做法，而不是掩盖我们自己的并发问题。
@@ -83,6 +84,16 @@ public final class RefreshManager: ObservableObject {
     /// 取 15s 避开第一轮刷新与启动高峰。
     private static let keychainRetryDelaySeconds: TimeInterval = 15
 
+    /// 首刷全轮失败后的退避重试间隔（秒）。开机登录时网络常未就绪，只等定时器要一个完整
+    /// 间隔（默认 5 分钟）；两次短退避把「过一阵才恢复」缩短到半分钟内。
+    private static let initialRetryDelaysSeconds: [Int] = [15, 45]
+
+    /// 网络恢复补刷：登录后 Wi-Fi 未就绪导致首刷全败，网络一通立即补刷，不等退避重试或定时器。
+    /// refreshIfStale 自带 60 秒去抖、refreshAll 自带闸门，重复事件无害。
+    private var pathMonitor: NWPathMonitor?
+    /// 上一次网络路径是否不可用；只在「断 → 通」的边沿触发补刷，网络一直正常时不打扰
+    private var networkWasUnsatisfied = false
+
     // 余额窗口的展示辅助状态（较上次差值 + 低余额提醒状态机），进程内有效
     private var lastBalanceValues: [String: Double] = [:]
     private var balanceAlertedKeys: Set<String> = []
@@ -121,6 +132,7 @@ public final class RefreshManager: ObservableObject {
         // 首刷一旦挂起（某个厂商的请求没有超时），定时器根本不存在，
         // 整个进程生命周期里都不会有自动刷新。
         startPeriodicTimer()
+        hookNetworkRecovery()
 
         Task { @MainActor [weak self] in
             // 凭证必须先于首刷从钥匙串读进内存，否则首轮全部厂商都会被判成未配置
@@ -213,6 +225,42 @@ public final class RefreshManager: ObservableObject {
     /// 报「钥匙串读取失败」而不是误导性的「未配置」。
     private func missingKeyMessage(key: SecretKey, missing: I18nKey) -> I18nKey {
         unreadableSecretKeys.contains(key) ? .errSecretKeychainUnreadable : missing
+    }
+
+    /// 首刷因网络未就绪等全轮失败时的退避重试。独立任务执行，不阻塞 init 里
+    /// 排在后面的钥匙串重试；等待期间任何来源（定时器/手动/网络恢复补刷）刷新成功即停。
+    private func retryInitialRefreshIfFailed() async {
+        for delay in Self.initialRetryDelaysSeconds {
+            guard anyRefreshError() else { return }
+            try? await Task.sleep(nanoseconds: UInt64(delay) * 1_000_000_000)
+            guard anyRefreshError() else { return }
+            Log.refresh.notice("首刷未拿到数据，\(delay, privacy: .public)s 后重试")
+            await refreshAll(trigger: .initial)
+        }
+    }
+
+    /// 是否有厂商处于「刷新失败」态（区别于「未配置」）
+    private func anyRefreshError() -> Bool {
+        quotas.values.contains { $0.hadRefreshError } || customQuotas.values.contains { $0.hadRefreshError }
+    }
+
+    /// 订阅 Network.framework 路径监听：只在「断 → 通」边沿触发补刷。
+    /// 回调在后台队列，切回 MainActor；构造闭包只捕获 Bool，规避 NWPath 的 Sendable 审计。
+    private func hookNetworkRecovery() {
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { [weak self] path in
+            let unsatisfied = path.status != .satisfied
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let wasUnsatisfied = self.networkWasUnsatisfied
+                self.networkWasUnsatisfied = unsatisfied
+                guard !unsatisfied, wasUnsatisfied else { return }
+                Log.lifecycle.notice("网络已恢复，触发补刷")
+                await self.refreshIfStale(olderThan: 120)
+            }
+        }
+        monitor.start(queue: DispatchQueue(label: "TokenBar.NetworkRecovery"))
+        pathMonitor = monitor
     }
 
     /// 把内存里变更过的凭证同步到钥匙串。失败时不降级明文：保留内存值、置 `secretStoreError`
@@ -354,6 +402,10 @@ public final class RefreshManager: ObservableObject {
 
         // Trigger first background refresh
         await refreshAll(trigger: .initial)
+        // 首刷因网络未就绪全轮失败时的退避重试，独立任务跑，不阻塞钥匙串重试
+        Task { @MainActor [weak self] in
+            await self?.retryInitialRefreshIfFailed()
+        }
     }
 
     public func refreshAll(trigger: RefreshTrigger = .manual) async {
@@ -541,12 +593,15 @@ public final class RefreshManager: ObservableObject {
             if var quota = quotas[type] {
                 quota.isLoading = false
                 quota.errorMessage = message
+                // 超时大多是网络未就绪/服务端无响应，不算「未配置」；授权态与旧数据保留
+                quota.hadRefreshError = true
                 quotas[type] = quota
             }
         case .custom(let id):
             if var quota = customQuotas[id] {
                 quota.isLoading = false
                 quota.errorMessage = message
+                quota.hadRefreshError = true
                 customQuotas[id] = quota
             }
         case .none:
@@ -655,14 +710,18 @@ public final class RefreshManager: ObservableObject {
         }
 
         if !foundAuth {
-            quota.isAuthorized = false
-            if quota.errorMessage == nil {
+            if quota.errorMessage != nil {
+                // 配了授权来源但全部失败（多为网络未就绪）：按刷新失败处理，不算未配置
+                quota.hadRefreshError = true
+            } else {
+                quota.isAuthorized = false
                 quota.errorMessage = I18n(.errMissingAnthropicAuth)
             }
         }
 
         // 与其他厂商对齐：只有真的拿到数据才算一次成功更新
         if foundAuth {
+            quota.hadRefreshError = false
             quota.lastUpdated = Date()
         }
         quota.isLoading = false
@@ -688,6 +747,7 @@ public final class RefreshManager: ObservableObject {
                 quota.fiveHourWindow = res.fiveHour
                 quota.weeklyWindow = res.weekly
                 quota.isAuthorized = true
+                quota.hadRefreshError = false
                 quota.accountInfo = res.account
                 quota.lastUpdated = Date()
                 quota.isLoading = false
@@ -698,7 +758,8 @@ public final class RefreshManager: ObservableObject {
                 let local = await GeminiService.shared.readLocalGeminiConfig(storedRefreshToken: settings.geminiRefreshToken)
                 let hasOAuth = !settings.geminiToken.isEmpty || local.account != nil || local.token != nil || local.refreshToken != nil
                 if !hasOAuth {
-                    quota.isAuthorized = false
+                    // Key 已配置：失败按「刷新失败」处理（可能是网络未就绪），不算未配置
+                    quota.hadRefreshError = true
                     quota.errorMessage = error.localizedDescription
                     Log.provider.error("provider=gemini failed: \(error.localizedDescription)")
                     quota.isLoading = false
@@ -717,6 +778,7 @@ public final class RefreshManager: ObservableObject {
             quota.fiveHourWindow = res.fiveHour
             quota.weeklyWindow = res.weekly
             quota.isAuthorized = true
+            quota.hadRefreshError = false
             if let acc = res.account { quota.accountInfo = acc }
             quota.lastUpdated = Date()
             persistGeminiRefreshToken(res.refreshToken)
@@ -727,7 +789,8 @@ public final class RefreshManager: ObservableObject {
                 saveSettings()
             }
         } catch {
-            quota.isAuthorized = false
+            // 授权来源存在但失败（多为网络未就绪）：不算未配置，保留授权态与旧数据
+            quota.hadRefreshError = true
             quota.errorMessage = error.localizedDescription
             Log.provider.error("provider=gemini failed: \(error.localizedDescription)")
             if let credError = error as? GeminiService.CredentialError, credError.stage == .ownLoginRevoked,
@@ -765,8 +828,11 @@ public final class RefreshManager: ObservableObject {
             quota.weeklyWindow = res.weekly
             quota.accountInfo = res.account
             quota.isAuthorized = true
+            quota.hadRefreshError = false
             quota.lastUpdated = Date()
         } catch {
+            // Key 已配置的失败按「刷新失败」处理（可能是网络未就绪），不算未配置
+            quota.hadRefreshError = true
             quota.errorMessage = error.localizedDescription
             Log.provider.error("provider=glm failed: \(error.localizedDescription)")
         }
@@ -811,6 +877,7 @@ public final class RefreshManager: ObservableObject {
             quota.weeklyWindow = res.weekly
             quota.accountInfo = res.account
             quota.isAuthorized = true
+            quota.hadRefreshError = false
             // 网关成功但没返回窗口数据时，用 note 说明「可能不限量」，
             // 而不是让卡片停在「同步中」——但仍算已授权，不是失败态
             quota.errorMessage = res.note
@@ -837,7 +904,13 @@ public final class RefreshManager: ObservableObject {
                 quota.balanceWindow = nil
             }
         } catch {
-            quota.isAuthorized = false
+            if let channelError = error as? AliyunChannelError, case .missingCredentials = channelError {
+                // 百炼没有「Key 为空」前置检查：完全没配凭据在这里浮出，维持未配置态
+                quota.isAuthorized = false
+            } else {
+                // 其余失败（网络未就绪/超时/网关错误）按「刷新失败」处理，保留授权态与旧数据
+                quota.hadRefreshError = true
+            }
             quota.errorMessage = error.localizedDescription
             Log.provider.error("provider=aliyun failed: \(error.localizedDescription)")
         }
@@ -944,9 +1017,11 @@ public final class RefreshManager: ObservableObject {
             quota.weeklyWindow = res.secondary
             quota.accountInfo = res.account
             quota.isAuthorized = true
+            quota.hadRefreshError = false
             quota.lastUpdated = Date()
         } catch {
-            quota.isAuthorized = false
+            // Key 已配置的失败按「刷新失败」处理（可能是网络未就绪），不算未配置
+            quota.hadRefreshError = true
             quota.errorMessage = error.localizedDescription
             Log.provider.error("provider=openai failed: \(error.localizedDescription)")
         }
@@ -981,6 +1056,7 @@ public final class RefreshManager: ObservableObject {
             quota.weeklyWindow = res.weekly
             quota.accountInfo = res.account
             quota.isAuthorized = true
+            quota.hadRefreshError = false
             quota.lastUpdated = Date()
 
             quota.weeklyWindow = await processBalance(
@@ -990,7 +1066,7 @@ public final class RefreshManager: ObservableObject {
                 threshold: settings.deepseekBalanceAlertThreshold
             )
         } catch {
-            quota.isAuthorized = false
+            quota.hadRefreshError = true
             quota.errorMessage = error.localizedDescription
             Log.provider.error("provider=deepseek failed: \(error.localizedDescription)")
         }
@@ -1024,6 +1100,7 @@ public final class RefreshManager: ObservableObject {
             quota.weeklyWindow = res.secondary
             quota.accountInfo = res.account
             quota.isAuthorized = true
+            quota.hadRefreshError = false
             quota.lastUpdated = Date()
 
             quota.fiveHourWindow = await processBalance(
@@ -1033,7 +1110,7 @@ public final class RefreshManager: ObservableObject {
                 threshold: settings.openRouterBalanceAlertThreshold
             )
         } catch {
-            quota.isAuthorized = false
+            quota.hadRefreshError = true
             quota.errorMessage = error.localizedDescription
             Log.provider.error("provider=openrouter failed: \(error.localizedDescription)")
         }
@@ -1067,9 +1144,10 @@ public final class RefreshManager: ObservableObject {
             quota.weeklyWindow = res.weekly
             quota.accountInfo = res.account
             quota.isAuthorized = true
+            quota.hadRefreshError = false
             quota.lastUpdated = Date()
         } catch {
-            quota.isAuthorized = false
+            quota.hadRefreshError = true
             quota.errorMessage = error.localizedDescription
             Log.provider.error("provider=volcengine failed: \(error.localizedDescription)")
         }
@@ -1104,6 +1182,7 @@ public final class RefreshManager: ObservableObject {
             quota.weeklyWindow = res.weekly
             quota.accountInfo = res.account
             quota.isAuthorized = true
+            quota.hadRefreshError = false
             quota.lastUpdated = Date()
 
             quota.weeklyWindow = await processBalance(
@@ -1113,7 +1192,7 @@ public final class RefreshManager: ObservableObject {
                 threshold: settings.kimiBalanceAlertThreshold
             )
         } catch {
-            quota.isAuthorized = false
+            quota.hadRefreshError = true
             quota.errorMessage = error.localizedDescription
             Log.provider.error("provider=kimi failed: \(error.localizedDescription)")
         }
@@ -1148,6 +1227,7 @@ public final class RefreshManager: ObservableObject {
             q.secondaryWindow = res.secondary
             q.accountInfo = res.account
             q.isAuthorized = true
+            q.hadRefreshError = false
             q.lastUpdated = Date()
 
             // 余额窗口可能在主槽位（纯余额厂商）或副槽位（MiMo 等订阅+余额双通道厂商）
@@ -1169,7 +1249,7 @@ public final class RefreshManager: ObservableObject {
                 }
             }
         } catch {
-            q.isAuthorized = false
+            q.hadRefreshError = true
             q.errorMessage = error.localizedDescription
             Log.provider.error("provider=custom failed: \(error.localizedDescription)")
         }

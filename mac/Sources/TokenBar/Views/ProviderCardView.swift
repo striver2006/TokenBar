@@ -3,10 +3,21 @@ import SwiftUI
 public struct ProviderCardView: View {
     let quota: ProviderQuota
     let onConfigure: () -> Void
+    let onRetry: () -> Void
 
-    public init(quota: ProviderQuota, onConfigure: @escaping () -> Void) {
+    public init(
+        quota: ProviderQuota,
+        onConfigure: @escaping () -> Void,
+        onRetry: @escaping () -> Void = {}
+    ) {
         self.quota = quota
         self.onConfigure = onConfigure
+        self.onRetry = onRetry
+    }
+
+    private var hasWindowData: Bool {
+        quota.fiveHourWindow != nil || quota.weeklyWindow != nil
+            || quota.balanceWindow != nil || quota.scopedWeeklyWindow != nil
     }
 
     public var body: some View {
@@ -38,7 +49,7 @@ public struct ProviderCardView: View {
                     ProgressView()
                         .scaleEffect(0.6)
                         .frame(width: 16, height: 16)
-                } else if quota.isAuthorized {
+                } else if quota.isAuthorized && !quota.hadRefreshError {
                     Circle()
                         .fill(Color.green)
                         .frame(width: 7, height: 7)
@@ -49,7 +60,7 @@ public struct ProviderCardView: View {
                 }
             }
 
-            if !quota.isAuthorized {
+            if !quota.isAuthorized && !quota.hadRefreshError {
                 VStack(spacing: 8) {
                     HStack {
                         Image(systemName: "exclamationmark.triangle.fill")
@@ -67,59 +78,86 @@ public struct ProviderCardView: View {
                     }
                 }
                 .padding(.vertical, 4)
+            } else if quota.hadRefreshError && !hasWindowData {
+                // 已配置但刷新失败（多为开机网络未就绪）：显示错误 + 「重试」，而不是误导性的「去配置」
+                HStack {
+                    Image(systemName: "wifi.exclamationmark")
+                        .foregroundColor(.orange)
+                        .font(.system(size: 11))
+                    Text(quota.errorMessage ?? I18n(.refreshErrorHint))
+                        .font(.system(size: 11))
+                        .foregroundColor(.orange)
+                        .lineLimit(2)
+                    Spacer()
+                    Button(I18n(.retry)) {
+                        onRetry()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.mini)
+                }
+                .padding(.vertical, 4)
+            } else if !hasWindowData {
+                HStack {
+                    Image(systemName: "hourglass")
+                        .foregroundColor(.secondary)
+                        .font(.system(size: 11))
+                    Text(quota.errorMessage ?? I18n(.syncingData))
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                    Spacer()
+                }
+                .padding(.vertical, 4)
             } else {
-                if quota.fiveHourWindow == nil && quota.weeklyWindow == nil && quota.balanceWindow == nil
-                    && quota.scopedWeeklyWindow == nil {
-                    HStack {
-                        Image(systemName: "hourglass")
-                            .foregroundColor(.secondary)
-                            .font(.system(size: 11))
-                        Text(quota.errorMessage ?? I18n(.syncingData))
-                            .font(.system(size: 11))
-                            .foregroundColor(.secondary)
-                        Spacer()
-                    }
-                    .padding(.vertical, 4)
-                } else {
-                    // 5-Hour Window Section
-                    if let fiveHour = quota.fiveHourWindow {
-                        WindowQuotaRow(window: fiveHour, badgeText: I18n(.fiveHourWindow))
-                    }
+                // 5-Hour Window Section
+                if let fiveHour = quota.fiveHourWindow {
+                    WindowQuotaRow(window: fiveHour, badgeText: I18n(.fiveHourWindow))
+                }
 
-                    if quota.fiveHourWindow != nil && quota.weeklyWindow != nil
-                        && quota.balanceWindow == nil {
+                if quota.fiveHourWindow != nil && quota.weeklyWindow != nil
+                    && quota.balanceWindow == nil {
+                    Divider()
+                        .opacity(0.5)
+                }
+
+                // Balance Section（与时间窗口并存，例如百炼的账户现金余额）
+                if let balance = quota.balanceWindow {
+                    if quota.fiveHourWindow != nil {
                         Divider()
                             .opacity(0.5)
                     }
+                    WindowQuotaRow(window: balance, badgeText: I18n(.menuBarMetricBalance))
+                }
 
-                    // Balance Section（与时间窗口并存，例如百炼的账户现金余额）
-                    if let balance = quota.balanceWindow {
-                        if quota.fiveHourWindow != nil {
-                            Divider()
-                                .opacity(0.5)
-                        }
-                        WindowQuotaRow(window: balance, badgeText: I18n(.menuBarMetricBalance))
-                    }
+                if quota.balanceWindow != nil && quota.weeklyWindow != nil {
+                    Divider()
+                        .opacity(0.5)
+                }
 
-                    if quota.balanceWindow != nil && quota.weeklyWindow != nil {
-                        Divider()
-                            .opacity(0.5)
-                    }
+                // Weekly Window Section
+                if let weekly = quota.weeklyWindow {
+                    WindowQuotaRow(window: weekly, badgeText: I18n(.weeklyWindow))
+                }
 
-                    // Weekly Window Section
-                    if let weekly = quota.weeklyWindow {
-                        WindowQuotaRow(window: weekly, badgeText: I18n(.weeklyWindow))
-                    }
+                if quota.weeklyWindow != nil && quota.scopedWeeklyWindow != nil {
+                    Divider()
+                        .opacity(0.5)
+                }
 
-                    if quota.weeklyWindow != nil && quota.scopedWeeklyWindow != nil {
-                        Divider()
-                            .opacity(0.5)
-                    }
+                // Scoped Weekly Section（按模型圈定的周额度，如 Fable）
+                if let scoped = quota.scopedWeeklyWindow {
+                    WindowQuotaRow(window: scoped, badgeText: I18n(.weeklyWindow))
+                }
 
-                    // Scoped Weekly Section（按模型圈定的周额度，如 Fable）
-                    if let scoped = quota.scopedWeeklyWindow {
-                        WindowQuotaRow(window: scoped, badgeText: I18n(.weeklyWindow))
+                if quota.hadRefreshError {
+                    // 本轮刷新失败但旧数据仍可参考：末尾叠一行小字提示，不打断余额展示
+                    HStack(spacing: 4) {
+                        Image(systemName: "exclamationmark.circle")
+                            .font(.system(size: 9))
+                        Text(quota.errorMessage ?? I18n(.refreshErrorHint))
+                            .font(.system(size: 10))
+                            .lineLimit(1)
                     }
+                    .foregroundColor(.orange)
                 }
             }
         }
