@@ -144,8 +144,6 @@ public enum I18nKey: String {
     case forecastCollecting
     case lowBalanceTitle
     case lowBalanceBody
-    case statusItemBlockedTitle
-    case statusItemBlockedBody
     case balanceThresholdLabel
     case balanceThresholdHint
     case hintOpenRouterKey
@@ -578,12 +576,6 @@ public final class LocalizationManager: ObservableObject {
             return isZh ? "余额不足提醒" : "Low Balance"
         case .lowBalanceBody:
             return isZh ? "%@ 余额仅剩 %@，请及时充值" : "%@ balance is low: %@. Please top up."
-        case .statusItemBlockedTitle:
-            return isZh ? "菜单栏图标被系统隐藏" : "Menu Bar Icon Hidden by macOS"
-        case .statusItemBlockedBody:
-            return isZh
-                ? "请到「系统设置 › 菜单栏 › 应用程序」检查 TokenBar 及曾启动过它的 IDE（如 VS Code）的开关是否打开。"
-                : "Open System Settings › Menu Bar › Applications and make sure TokenBar, and any IDE it was launched from (e.g. VS Code), is switched on."
         case .balanceThresholdLabel:
             return isZh ? "余额提醒阈值 (按账户币种)" : "Low-balance Alert Threshold (account currency)"
         case .balanceThresholdHint:

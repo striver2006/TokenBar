@@ -76,24 +76,12 @@ command log show --last 10m --predicate 'process == "ControlCenter"' --info --de
 9. 日常构建（`build_app.sh` 默认）**不带 Hardened Runtime**，只有 `--distribute` 分支有
    `--options runtime`；验证 hardened 行为必须装 dist 版。
 
-## 四、应用内自愈机制（代码指引）
+## 四、应用内自愈机制（历史记录）
 
-> 本节原描述的 LaunchServices 死记录清理链路（`purgeStaleLaunchServicesRecords` / stub 注销 / dump 看门狗）
-> 已于 2026-09-14 晚整体移除（根因证伪，见第九节）。现状如下。
-
-全部在 `mac/Sources/TokenBar/MenuBar/MenuBarController.swift`，判定纯函数在
-`mac/Sources/TokenBar/Services/StatusItemHealth.swift`：
-
-- **健康判据优先级**（`StatusItemHealth.evaluate`，顺序不可调）：
-  `isVisible`（用户意图）→ 存在性/几何 → **镜像信号**（`mirror=false` → `notMirrored`）。
-  `mirror` 查不到（nil）时忽略该信号，绝不因查不到判掉线。
-- **镜像匹配**（`menuBarHostMirrors`）：layer-25 控制中心窗口按窗口名（= autosaveName）精确匹配，
-  拿不到窗口名（无屏幕录制权限）才退回同 x 同宽；只有同宽、x 不同的说明缓存 frame 过期，返回 nil。
-- **重建预算**（`RebuildPolicy`）：一般掉线原因 5 次、指数退避；`notMirrored` 只 1 次，再无镜像返回
-  `blockedBySystem`——一次 error 日志「状态项被 ControlCenter 拉黑…请到系统设置 › 菜单栏 › 应用程序…」
-  + 一次系统通知，之后只保留心跳探测，用户放行后自动转 healthy。
-- 调试键：`defaults write com.tokenbar.mac TokenBarForceStatusItemUnhealthy -bool YES` 强制 `mirror=false`，
-  可完整走一遍"重建一次 → blockedBySystem 提示"链路；测完 `defaults delete` 掉。
+> 注意：本节原描述的 LaunchServices 死记录清理链路已于 2026-09-14 移除；
+> 随后曾实现的 `StatusItemHealth`、`menuBarHostMirrors` 探测、重建退避与拉黑通知等代码
+> 亦已整体移除（根因在于系统 ControlCenter 的拉黑策略，应用内自愈无法越权绕过，且增加了不必要的复杂性）。
+> 应用侧回归精简安装，专注业务展示与休眠唤醒补刷。
 
 ## 五、构建与启动纪律（防再触发）
 

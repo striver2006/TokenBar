@@ -74,45 +74,11 @@ macOS 客户端采用纯 Swift 打造，支持 macOS 13 (Ventura) 及以上系�
     通知视图（`.task(id: openCount)`），用户未保存的输入不会因为再次打开而丢失。
   - 绑定 `NSPopover`，将其根视图托管至 SwiftUI `TokenSummaryPopoverView`。
   - 订阅 `RefreshManager.objectWillChange`，按用户配置把某个厂商的剩余额度 / 余额渲染到 `NSStatusItem` 标题（文案由纯函数 `MenuBarStatus` 计算，便于单测）。
-  - **状态项健康自愈**（macOS 26 起状态项托管在系统进程 ControlCenter，实测会出现"对象活着、内容完好，但控制中心不为它渲染"
-    的故障态，用户看到的就是"图标不见了"）。**根因不在应用代码**（2026-09-14 定案）：ControlCenter 维护一份持久的
-    「应用菜单栏项」记录——`~/Library/Group Containers/group.com.apple.controlcenter/Library/Preferences/group.com.apple.controlcenter.plist`
-    的 `trackedApplications`（私有框架 `ControlCenter.framework` 的 `SystemItemMenuBarPreferences`，
-    `TrackedApplication { location, menuItemLocations, isAllowed }`，对应「系统设置 › 菜单栏 › 应用程序」列表；
-    目录受 TCC 保护，普通 shell 读不到）。`com.tokenbar.mac` 被记在 **`com.microsoft.VSCode` 与 `dev.zcode.app`
-    两条 `isAllowed=false` 记录的 `menuItemLocations`** 里（曾从 IDE 集成终端直接执行 TokenBar，系统按负责进程归属），
-    ControlCenter 的规则是 bundle id 出现在任一禁止记录的菜单项列表里就 `Moving host to blocked list`，应用自己那条
-    允许记录不起作用。解除只能在系统设置里打开 IDE 的开关（放行瞬间 ControlCenter 对现有 host `Unblocking host`）；
-    预防是调试用 `open` 启动 .app。
-    历史：2026-09-14 上午曾把 LaunchServices 死记录当成根因（a42d45b / c0914de 加了 `lsregister -dump` 解析、
-    stub 法注销、构建脚本注销等约 300 行），同日晚实测证伪（LS 清到一条仍拉黑、换 bundle id 立即正常），
-    这部分代码已整体移除；排查过程见 `POSTMORTEM_菜单栏图标消失排查复盘.md`。
-    **应用侧现状**：① `RebuildPolicy` 对 `notMirrored`（几何正常、无镜像）单独设预算 `notMirroredAttempts = 1`，
-    重建一次仍无镜像即返回 `.blockedBySystem`，控制器只打一次 error 日志 + 系统通知
-    （`I18n.statusItemBlockedTitle/Body`，指引到「系统设置 › 菜单栏 › 应用程序」），不再重建、保留心跳探测；
-    用户放行后下一轮探测转 healthy 并清掉提示标志。reopen 路径改用 `allowsRebuild(verdict:attempts:)`，同受此预算约束。
-    ② `menuBarHostMirrors` 按 layer-25 窗口名（= autosaveName，需屏幕录制权限才拿得到）精确匹配，
-    拿不到名字才退回同 x 同宽；只有同宽、x 不同的说明应用缓存 frame 过期，返回 nil 让信号被忽略。
-    ③ 曾有的"按窗口号查 CGWindowList"信号（`registeredInWindowServer`）在 macOS 26 上恒为 nil（托管窗口号是 2^32 占位值），已删除。
-    - 判定：纯函数 `StatusItemHealth.evaluate` 吃一份 `Snapshot`（`isVisible` / `button.window` 几何 / `windowNumber` /
-      控制中心是否为它渲染了镜像 / 能否在 `CGWindowList` 按窗口号查到 / 各屏几何），输出 `healthy` / `userHidden` /
-      `detached(Reason)` / `indeterminate`。**最可靠的信号是控制中心镜像**：每个真正显示出来的状态项在 layer-25 层都有一个
-      onscreen 的控制中心窗口，与应用自己那个离屏的状态项窗口同 x 同宽；被 block 的状态项没有这条镜像，而它的 frame
-      可能仍停在正常位置，所以几何判定只是辅助。
-      `isVisible` 判定排在所有几何判定之前——用户 Cmd 拖走图标不是故障，重建会覆盖用户意图。
-      几何判定排在窗口服务器信号之前：几何只依赖 AppKit 自己的数字，更可靠。窗口服务器那条信号在 macOS 26 上
-      基本恒为"不可用"——托管状态项的 `windowNumber` 是超出 `CGWindowID`(UInt32) 范围的占位值（实测 2^32），
-      按号查不到窗口，此时必须返回 nil 让信号被忽略；当成"没注册"会把健康的状态项判成掉线、反复重建。
-      判定"在不在菜单栏带内"复用 `MenuBarAnchor.isInMenuBarBand`，对屏幕顶边与左右边界是严格的（故障态正是各越界 1pt），
-      只有带下边界留松弛量（健康状态项 `maxY = screen.maxY − 3…−4`，并不贴齐屏幕顶边）。
-    - 自愈：`setup()` 拆成"一次性的订阅/监听"与"可重入的 `installStatusItem`"两半，判定掉线时
-      `NSStatusBar.removeStatusItem` + 重新安装。轻推 `NSStatusItem.length` 保留下来，但只治
-      "位置还在、图标不画了"那种托管渲染丢失，对没拿到槽位的故障态无效（实测心跳推多次都救不回来）。
-      重建受 `StatusItemHealth.RebuildPolicy` 约束：连续 2 次确认 + 指数退避（30/60/120…封顶 900s）+ 单次运行最多 5 次，
-      最后一次会先清掉 `NSStatusItem Preferred Position/Visible` 两个持久化键再重建，防止坏状态被 `autosaveName` 还原回来；
-      连续健康 10 分钟后预算清零。弹窗/右键菜单开着、鼠标按下、无屏幕、显示器重配置后 3s 内一律跳过判定。
-    - 触发时机：启动后 2/5/15/60s 四级校验梯（治登录自启时菜单栏服务未就绪的竞态）、屏幕参数变化、唤醒、
-      `didBecomeActive`、300s 保底心跳、弹窗关闭、锚点走了兜底。掉线期间快探测间隔 15s。
+  - **状态项健康自愈历史与现状**：macOS 26 起状态项托管在系统进程 ControlCenter，实测曾出现"对象活着、内容完好，但控制中心不为它渲染"
+    的故障态。**根因不在应用代码**（2026-09-14 定案）：ControlCenter 维护持久的 `trackedApplications` 记录，
+    若应用 bundle id 出现在任何禁止记录的菜单项列表里，系统直接将其加入 blocked list。应用层无法靠代码绕过该系统行为。
+    因此，曾经加入的 `StatusItemHealth`（包含状态快照判定、layer-25 镜像探测、指数退避重建、多级启动探测阶梯与保底心跳等）
+    已在后续重构中整体移除，保持状态栏控制器精简。休眠唤醒后仅保留额度过期数据补刷。
   - 弹窗定位两层防护（缓存的状态栏窗口坐标在显示器熄屏/唤醒后可能过期，会把 `NSPopover` 定位到屏幕中央或夹到屏幕边缘）：
     - 有鼠标（悬停/点击）：纯函数 `MenuBarAnchor.resolve` 用"触发时鼠标一定在图标上"校验缓存矩形，过期则按鼠标位置推导；
       校验通过的结果还会再过一遍几何校验，因为 `resolve` 在"鼠标不在菜单栏带内"时会把坏缓存原样放行。
