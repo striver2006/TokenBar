@@ -59,20 +59,12 @@ namespace TokenBar
                 _trayManager = new TrayIconManager();
                 _trayManager.Initialize();
 
-                // 旧版自启条目不带 /boot 参数，启动时补迁移（条目不存在则不写）
+                // 历史版本的 Run 键带过 /boot 参数（旧语义：仅开机启动不弹窗），
+                // 现在启动一律不弹浮窗，启动时顺手把该参数清掉（条目不存在则不写）
                 AutoStart.NormalizeExistingEntry();
 
-                // 开机自启拉起的实例（/boot 参数）不弹浮窗：登录瞬间弹窗只会挡住刚亮起的屏幕。
-                // 手动启动（开始菜单/快捷方式）与第二实例激活照常弹窗示意「我在这」。
-                if (AutoStart.IsBootLaunch(e.Args))
-                {
-                    Log("Boot launch: popover suppressed");
-                }
-                else
-                {
-                    // Show popover on startup so user sees the app running
-                    _trayManager.TogglePopover();
-                }
+                // 启动一律不弹浮窗（对齐 mac 端行为）：托盘图标即「我在这」，
+                // 用户点按托盘图标或再次启动 TokenBar（第二实例激活）时面板才出现。
 
                 // 睡眠期间定时器不 fire，唤醒后数据可能已经过期若干个周期
                 SystemEvents.PowerModeChanged += OnPowerModeChanged;
