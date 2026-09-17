@@ -55,10 +55,9 @@ rm -rf "$APP_BUNDLE"
 mkdir -p "$MACOS_DIR"
 mkdir -p "$RESOURCES_DIR"
 
-# 定位编译产物：--arch 多架构构建输出于 .build/apple/Products/Release，
-# 单架构构建输出于 .build/release，按顺序探测
+# 定位编译产物：按修改时间取最新产物，避免历史目录残留导致使用旧二进制
 BIN=""
-for candidate in ".build/apple/Products/Release/$APP_NAME" ".build/release/$APP_NAME"; do
+for candidate in $(ls -t ".build/release/$APP_NAME" ".build/apple/Products/Release/$APP_NAME" 2>/dev/null); do
     if [ -f "$candidate" ]; then
         BIN="$candidate"
         break
