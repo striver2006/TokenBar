@@ -525,7 +525,7 @@ namespace TokenBar.Views
             };
 
             ChkHoverPreview.IsChecked = s.EnableHover;
-            ChkLaunchAtLogin.IsChecked = s.LaunchAtLogin || IsRunAtStartupConfigured();
+            ChkLaunchAtLogin.IsChecked = s.LaunchAtLogin || Services.AutoStart.IsConfigured();
         }
 
         private void SyncToSettings()
@@ -601,7 +601,7 @@ namespace TokenBar.Views
 
             s.EnableHover = ChkHoverPreview.IsChecked == true;
             s.LaunchAtLogin = ChkLaunchAtLogin.IsChecked == true;
-            SetRunAtStartup(s.LaunchAtLogin);
+            Services.AutoStart.SetEnabled(s.LaunchAtLogin);
 
             RefreshManager.Instance.SaveSettings();
         }
@@ -1445,73 +1445,6 @@ namespace TokenBar.Views
                 _ => AppLanguage.System
             };
             LocalizationManager.Instance.CurrentLanguage = lang;
-        }
-
-        private static bool IsRunAtStartupConfigured()
-        {
-            try
-            {
-                using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", false);
-                return key?.GetValue("TokenBar") != null;
-            }
-            catch (Exception ex)
-            {
-                Log.Warn("settings", $"读取开机自启注册表失败: {ex.Message}");
-                return false;
-            }
-        }
-
-        /// <summary>install.ps1 的安装目录，Run 键应指向这里而不是当前进程（可能是 bin\Debug 或临时解压目录）。</summary>
-        private static string InstalledExePath => System.IO.Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "Programs", "TokenBar", "TokenBar.exe");
-
-        private static string? ResolveStartupExePath()
-        {
-            var processPath = Environment.ProcessPath;
-            var installed = InstalledExePath;
-            if (!string.IsNullOrEmpty(processPath)
-                && string.Equals(System.IO.Path.GetFullPath(processPath), System.IO.Path.GetFullPath(installed), StringComparison.OrdinalIgnoreCase))
-            {
-                return installed;
-            }
-            if (System.IO.File.Exists(installed))
-            {
-                Log.Notice("settings", $"当前进程不在安装目录，开机自启写入安装目录路径: {installed}");
-                return installed;
-            }
-            if (!string.IsNullOrEmpty(processPath))
-            {
-                Log.Notice("settings", $"未找到安装目录下的 TokenBar.exe，开机自启写入当前进程路径: {processPath}");
-                return processPath;
-            }
-            return null;
-        }
-
-        private static void SetRunAtStartup(bool enable)
-        {
-            try
-            {
-                using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", true);
-                if (key == null) return;
-
-                if (enable)
-                {
-                    var exePath = ResolveStartupExePath();
-                    if (!string.IsNullOrEmpty(exePath))
-                    {
-                        key.SetValue("TokenBar", $"\"{exePath}\"");
-                    }
-                }
-                else
-                {
-                    key.DeleteValue("TokenBar", false);
-                }
-            }
-            catch (Exception ex)
-            {
-                Log.Error("settings", $"写入开机自启注册表失败: {ex.Message}");
-            }
         }
 
         private void BtnSaveAll_Click(object sender, RoutedEventArgs e)
