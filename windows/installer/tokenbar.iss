@@ -4,7 +4,7 @@
 ;   ISCC.exe /DAppVersion=x.y.z /DArch=x64|arm64 /DSourceExe="<绝对路径>\pack\TokenBar.exe" tokenbar.iss
 ;   注意：Source 路径相对 .iss 脚本目录解析，非工作目录——本地手动调用请传绝对路径。
 ; 本地调用（需先 dotnet publish 单文件 exe 到 windows\pack\TokenBar.exe）：
-;   ISCC.exe /DAppVersion=1.3.2 /DArch=x64 tokenbar.iss
+;   ISCC.exe /DAppVersion=1.4.0 /DArch=x64 tokenbar.iss
 
 #ifndef AppVersion
 #define AppVersion "0.0.0"
