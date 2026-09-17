@@ -963,6 +963,18 @@ namespace TokenBar.Services
             NotifyQuotasUpdated();
         }
 
+        /// <summary>
+        /// Gemini 刷新异常的用户可读文案。连接/请求超时（12s ConnectTimeout / 30s HttpClient.Timeout）
+        /// 在 .NET 里以 TaskCanceledException("The operation was canceled.") 抛出且预算 token 并未取消，
+        /// 直接透传框架英文消息对用户毫无信息量；这里映射成可行动的提示。其余异常保持原消息。
+        /// </summary>
+        private static string DescribeGeminiFailure(Exception ex) =>
+            ex is OperationCanceledException
+                ? LocalizationManager.Instance.IsChinese
+                    ? "无法连接 Google 服务，请检查网络或代理"
+                    : "Cannot reach Google services; check network or proxy"
+                : ex.Message;
+
         public async Task RefreshGeminiAsync(CancellationToken ct = default, long? generation = null)
         {
             var quota = Quotas[ProviderType.Gemini];
@@ -1003,8 +1015,8 @@ namespace TokenBar.Services
                         if (IsStaleGeneration(generation, "gemini")) return;
                         // Key 已配置：失败按「刷新失败」处理（可能是网络未就绪），不算未配置
                         quota.HadRefreshError = true;
-                        quota.ErrorMessage = ex.Message;
-                        Log.Error("provider", $"provider=gemini failed: {ex.Message}");
+                        quota.ErrorMessage = DescribeGeminiFailure(ex);
+                        Log.Error("provider", $"provider=gemini failed: {DescribeGeminiFailure(ex)}");
                         quota.IsLoading = false;
                         NotifyQuotasUpdated();
                         return;
@@ -1030,8 +1042,8 @@ namespace TokenBar.Services
                 if (IsStaleGeneration(generation, "gemini")) return;
                 // 授权来源存在但失败（多为网络未就绪）：不算未配置，保留授权态与旧数据
                 quota.HadRefreshError = true;
-                quota.ErrorMessage = ex.Message;
-                Log.Error("provider", $"provider=gemini failed: {ex.Message}");
+                quota.ErrorMessage = DescribeGeminiFailure(ex);
+                Log.Error("provider", $"provider=gemini failed: {DescribeGeminiFailure(ex)}");
             }
             finally
             {

@@ -655,9 +655,17 @@ namespace TokenBar.Services
                 {
                     throw;
                 }
-                catch (OperationCanceledException)
+                // 只有调用方预算取消才需要立即中止（此时 ct.IsCancellationRequested 为真）。
+                // 连接/请求超时同样以 OperationCanceledException 形态抛出但与预算无关——
+                // 本机实测 12s ConnectTimeout 即如此——那只说明当前 base URL 连不上，
+                // 应当继续试下一个，而不是把整轮刷新判死。
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
                     throw;
+                }
+                catch (OperationCanceledException ex)
+                {
+                    lastEx = ex;
                 }
                 catch (Exception ex)
                 {
