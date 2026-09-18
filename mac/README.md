@@ -56,6 +56,13 @@ open build/TokenBar.app
 
 # 2) 提交公证 → 落票 → 打出发布 zip（TokenBar-v<版本>-macOS-universal.zip）
 ./Scripts/notarize_app.sh
+
+# 3) 打成 DMG 安装镜像（含「拖到 Applications」快捷方式）
+#    → build/dist/TokenBar-v<版本>-macOS-universal.dmg
+./Scripts/make_dmg.sh
+
+# 要分发给别人：DMG 也走一遍公证并落票（本机自用可省略）
+./Scripts/make_dmg.sh --notarize
 ```
 
 公证凭据是一次性配置（App Store Connect API Key 存进钥匙串）：
@@ -69,11 +76,25 @@ xcrun notarytool store-credentials TokenBar-notary \
 说明：
 - 公证只接受 **Developer ID Application** 证书 + **Hardened Runtime** 签名；
   `--distribute` 找不到证书会直接报错，绝不静默降级。
+- `make_dmg.sh` 只接受 **Developer ID 签名的 app**（DMG 只是容器，里面 app 的签名
+  决定 Gatekeeper 是否放行）；未公证的 DMG 本机安装可直接用（拷贝安装不带
+  quarantine 属性），发给别人则必须加 `--notarize`，否则双击会被拦。
 - **推荐默认签名也用 Developer ID**（`signing.local.env` 的 `CODESIGN_IDENTITY`
   填同一张证书）：全机单一签名身份，钥匙串授权只有一套，开发版/分发版互通。
   从 Apple Development 切换过来的当天，旧钥匙串条目需要重新授权一轮
   （弹框点「始终允许」或在设置里重录），此后长期稳定。
 - 发布 zip 命名与 CI 一致，可直接作为 GitHub Release 附件替换 CI 的未签名产物。
+
+### 本机安装（自用）
+
+```bash
+# 从 DMG 安装到 /Applications（会先退出正在运行的 TokenBar）
+osascript -e 'tell application "TokenBar" to quit'
+MNT=$(hdiutil attach mac/build/dist/TokenBar-v<版本>-macOS-universal.dmg -nobrowse -readonly | grep -o '/Volumes/.*' | tail -1)
+rm -rf /Applications/TokenBar.app && cp -R "$MNT/TokenBar.app" /Applications/
+hdiutil detach "$MNT" -quiet
+open /Applications/TokenBar.app
+```
 
 ---
 
@@ -96,7 +117,9 @@ mac/
 ├── Package.swift                 # SPM 构建定义
 ├── README.md                     # 本说明文档
 ├── Scripts/
-│   └── build_app.sh              # Release 一键打包脚本
+│   ├── build_app.sh              # Release 一键打包脚本（--distribute 出分发签名版）
+│   ├── notarize_app.sh           # 公证 + 落票 + 发布 zip
+│   └── make_dmg.sh               # 打包 DMG 安装镜像（可选 --notarize）
 ├── Resources/
 │   └── Info.plist                # 应用包配置 (LSUIElement 等)
 ├── Sources/TokenBar/
