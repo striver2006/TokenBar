@@ -1,10 +1,10 @@
 ; TokenBar Windows 安装包脚本（Inno Setup 6.3+）
 ;
 ; CI 调用（release.yml 的 build-windows 矩阵任务）：
-;   ISCC.exe /DAppVersion=x.y.z /DArch=x64|arm64 /DSourceExe="<绝对路径>\pack\TokenBar.exe" tokenbar.iss
+;   ISCC.exe /DAppVersion=x.y.z /DArch=x64|arm64 /DSourceDir="<绝对路径>\publish" tokenbar.iss
 ;   注意：Source 路径相对 .iss 脚本目录解析，非工作目录——本地手动调用请传绝对路径。
-; 本地调用（需先 dotnet publish 单文件 exe 到 windows\pack\TokenBar.exe）：
-;   ISCC.exe /DAppVersion=1.4.0 /DArch=x64 tokenbar.iss
+; 本地调用（需先 dotnet publish 到 windows\publish 目录，见 windows\README.md）：
+;   ISCC.exe /DAppVersion=1.4.0 /DArch=x64 /DSourceDir="D:\Work\TokenBar\windows\publish" tokenbar.iss
 
 #ifndef AppVersion
 #define AppVersion "0.0.0"
@@ -14,8 +14,8 @@
 #define Arch "x64"
 #endif
 
-#ifndef SourceExe
-#define SourceExe "..\pack\TokenBar.exe"
+#ifndef SourceDir
+#define SourceDir "..\publish"
 #endif
 
 ; 设计约定：
@@ -66,7 +66,9 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
-Source: "{#SourceExe}"; DestDir: "{app}"; DestName: "{#AppExeName}"; Flags: ignoreversion
+; 发布目录整体安装：TokenBar.exe + 同目录原生 DLL（wpfgfx_cor3.dll 等），
+; 原生库不经手 %TEMP%，避免被清理工具删除后 WPF 渲染崩溃（DllNotFoundException）
+Source: "{#SourceDir}\*"; Excludes: "*.pdb"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Comment: "{#AppDesc}"

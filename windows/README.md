@@ -24,13 +24,20 @@ TokenBar Windows 客户端采用原生的 **.NET 8 / C# WPF** 架构构建，专
 dotnet run --project src/TokenBar/TokenBar.csproj
 ```
 
-### 2. 发布为独立单文件程序 (Self-contained Single File)
+### 2. 发布为独立程序 (Self-contained, exe + 同目录原生 DLL)
 
 ```bash
-dotnet publish src/TokenBar/TokenBar.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o ./publish
+dotnet publish src/TokenBar/TokenBar.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=false -o ./publish
 ```
 
-发布后的 `TokenBar.exe` 将输出到 `./publish` 目录中，目标机器无需安装 .NET 环境。
+发布后的 `TokenBar.exe` 与原生 DLL（`wpfgfx_cor3.dll`、`PresentationNative_cor3.dll`、`vcruntime140_cor3.dll` 等）将输出到 `./publish` 目录中，目标机器无需安装 .NET 环境。
+
+> ⚠️ **必须保留 `-p:IncludeNativeLibrariesForSelfExtract=false`**。
+> 若原生库打进单文件，运行时会解压到 `%TEMP%\.net\TokenBar\`，一旦被系统
+> 清理工具 / 杀毒软件删除，WPF 首次渲染（如悬停弹出浮窗）就会抛出
+> `System.DllNotFoundException: Dll was not found`。
+> 同样，若漏掉 `--self-contained true`（框架依赖发布），安装后启动会直接报
+> "The application to execute does not exist: TokenBar.dll"。
 
 ### 3. 单元测试 (xUnit)
 
@@ -41,9 +48,9 @@ dotnet test tests/TokenBar.Tests/TokenBar.Tests.csproj
 覆盖阿里云签名黄金向量（与 mac 端 `testAliyunSignerGoldenVector` 同向量）、Token Plan 三种响应形态解析、
 `SecretSaveAction` 分支、卡片排序、余额预测与 `RateLimitReset` 时长解析。
 
-> ⚠️ **必须使用上面的自包含单文件参数**。安装脚本只会复制一个 `TokenBar.exe`，
-> 如果漏掉 `--self-contained true -p:PublishSingleFile=true`（框架依赖发布产物是
-> 一个小 exe + 一堆 DLL），安装后启动会直接报
+> ⚠️ **必须使用上面的自包含发布参数**。安装脚本会复制整个 `publish\` 目录，
+> 如果漏掉 `--self-contained true`（框架依赖发布产物是一个小 exe + 一堆 DLL），
+> 安装后启动会直接报
 > "The application to execute does not exist: TokenBar.dll"。
 
 ---
@@ -53,14 +60,14 @@ dotnet test tests/TokenBar.Tests/TokenBar.Tests.csproj
 日常自用/升级推荐使用仓库自带的一键安装脚本（在 `windows/` 目录执行）：
 
 ```powershell
-dotnet publish src/TokenBar/TokenBar.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish
+dotnet publish src/TokenBar/TokenBar.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=false -o publish
 powershell -ExecutionPolicy Bypass -File install.ps1
 ```
 
 `install.ps1` 会自动完成：
 
 1. **停止正在运行的 TokenBar 实例**；
-2. 将 `publish\TokenBar.exe` 复制到 `%LOCALAPPDATA%\Programs\TokenBar\`；
+2. 将 `publish\` 目录内容（`TokenBar.exe` + 原生 DLL，排除 `.pdb`）复制到 `%LOCALAPPDATA%\Programs\TokenBar\`；
 3. 创建开始菜单与桌面快捷方式，并注册 Win+R 的 `TokenBar` 运行别名。
 
 安装完成后从开始菜单或安装目录启动即可。**请始终从安装目录运行安装版**，
@@ -86,7 +93,7 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 windows/
 ├── TokenBar.sln                  # Visual Studio 解决方案
 ├── README.md                     # 本说明文档
-├── install.ps1                   # 一键安装/升级脚本（复制单文件 exe + 快捷方式）
+├── install.ps1                   # 一键安装/升级脚本（复制发布目录 exe+DLL + 快捷方式）
 ├── tools/
 │   └── gui/                      # 托盘实机测试辅助脚本 (PowerShell)
 ├── tests/

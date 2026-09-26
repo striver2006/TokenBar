@@ -86,8 +86,8 @@ Prebuilt binaries are available for released versions — no build required:
 
 | Platform | Artifact | Notes |
 | --- | --- | --- |
-| Windows 10/11 (Intel/AMD) | `TokenBar-v*-win-x64.exe` | Self-contained single file, no .NET install needed — just run it. For shortcuts & uninstall entries, copy the downloaded exe to `windows/publish/TokenBar.exe` and run `windows/install.ps1` |
-| Windows 10/11 (ARM devices) | `TokenBar-v*-win-arm64.exe` | Same as above. ARM64 Windows can also run the x64 build via emulation, but the native build uses less memory |
+| Windows 10/11 (Intel/AMD) | `TokenBar-v*-win-x64.zip` | Self-contained, no .NET install needed — unzip to a fixed folder and run `TokenBar.exe` inside (native DLLs ship next to the exe; do not move the exe alone). For shortcuts & uninstall entries, unzip into `windows/publish` and run `windows/install.ps1` |
+| Windows 10/11 (ARM devices) | `TokenBar-v*-win-arm64.zip` | Same as above. ARM64 Windows can also run the x64 build via emulation, but the native build uses less memory |
 | macOS 13+ (Universal: Intel & Apple Silicon) | `TokenBar-v*-macOS-universal.zip` | Unzip and drag `TokenBar.app` into /Applications. The build is unsigned/notarized — on first launch allow it via System Settings → Privacy & Security → "Open Anyway" |
 
 Verify downloads with the `SHA256SUMS.txt` attached to each release.
@@ -123,10 +123,13 @@ cd windows
 # 1. Run & debug
 dotnet run --project src/TokenBar/TokenBar.csproj
 
-# 2. Publish self-contained single-file executable
-dotnet publish src/TokenBar/TokenBar.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o ./publish
+# 2. Publish self-contained app (exe + native DLLs side by side)
+#    Keep IncludeNativeLibrariesForSelfExtract=false: bundling the native libs
+#    (wpfgfx_cor3.dll etc.) makes the runtime extract them to %TEMP%, where
+#    cleanup tools may delete them and crash WPF rendering
+dotnet publish src/TokenBar/TokenBar.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=false -o ./publish
 
-# 3. (Optional) One-click local install/upgrade: stop old process, copy exe, create shortcuts
+# 3. (Optional) One-click local install/upgrade: stop old process, copy publish output, create shortcuts
 powershell -ExecutionPolicy Bypass -File install.ps1
 ```
 

@@ -8,12 +8,14 @@ param (
 $ErrorActionPreference = "Stop"
 
 $appName = "TokenBar"
-$publishExe = Join-Path $PSScriptRoot "publish\TokenBar.exe"
+$publishDir = Join-Path $PSScriptRoot "publish"
+$publishExe = Join-Path $publishDir "$appName.exe"
 
 if (-not (Test-Path $publishExe)) {
-    $candidate = Join-Path $PSScriptRoot "windows\publish\TokenBar.exe"
-    if (Test-Path $candidate) {
-        $publishExe = $candidate
+    $candidateDir = Join-Path $PSScriptRoot "windows\publish"
+    if (Test-Path (Join-Path $candidateDir "$appName.exe")) {
+        $publishDir = $candidateDir
+        $publishExe = Join-Path $candidateDir "$appName.exe"
     } else {
         throw "Cannot find compiled executable at: $publishExe. Please compile TokenBar first."
     }
@@ -35,10 +37,12 @@ if (-not (Test-Path $installDir)) {
     New-Item -ItemType Directory -Path $installDir -Force | Out-Null
 }
 
-# 3. Copy executable
+# 3. Copy publish output (exe + side-by-side native DLLs; natives must stay
+#    next to the exe so they are never extracted to %TEMP%)
 $targetExe = Join-Path $installDir "$appName.exe"
-Copy-Item -Path $publishExe -Destination $targetExe -Force
-Write-Host "Copied $appName.exe successfully." -ForegroundColor Green
+Get-ChildItem -Path $publishDir -File | Where-Object { $_.Extension -ne ".pdb" } |
+    Copy-Item -Destination $installDir -Force
+Write-Host "Copied publish output ($($appName).exe + native DLLs) successfully." -ForegroundColor Green
 
 # 4. Create uninstall script in install directory
 $uninstallScript = @"

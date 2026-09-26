@@ -32,32 +32,36 @@ jobs:
         with:
           dotnet-version: 8.0.x
 
-      - name: Publish single-file exe
-        run: dotnet publish windows/src/TokenBar/TokenBar.csproj -c Release -r ${{ matrix.rid }} --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish
+      # 注意：必须 IncludeNativeLibrariesForSelfExtract=false，让 wpfgfx_cor3.dll 等原生库
+      # 随 exe 同目录分发。若打进单文件，运行时会解压到 %TEMP%，被系统清理工具删掉后
+      # 会触发 "System.DllNotFoundException: Dll was not found"（WPF 渲染崩溃）。
+      - name: Publish self-contained app
+        run: dotnet publish windows/src/TokenBar/TokenBar.csproj -c Release -r ${{ matrix.rid }} --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=false -o publish
 
-      - name: Rename artifact and show SHA256
+      - name: Package portable zip and show SHA256
         shell: pwsh
         run: |
-          Move-Item publish/TokenBar.exe "TokenBar-$env:TAG_NAME-${{ matrix.rid }}.exe"
-          Get-FileHash "TokenBar-$env:TAG_NAME-${{ matrix.rid }}.exe" -Algorithm SHA256 | Format-List
+          Remove-Item publish/TokenBar.pdb
+          Compress-Archive -Path publish/* -DestinationPath "TokenBar-$env:TAG_NAME-${{ matrix.rid }}.zip"
+          Get-FileHash "TokenBar-$env:TAG_NAME-${{ matrix.rid }}.zip" -Algorithm SHA256 | Format-List
 
       - name: Build installer (Inno Setup)
         shell: pwsh
         run: |
           $version = $env:TAG_NAME.TrimStart("v")
           $arch = "${{ matrix.rid }}" -replace '^win-', ''
-          New-Item -ItemType Directory -Force -Path pack | Out-Null
-          Copy-Item "TokenBar-$env:TAG_NAME-${{ matrix.rid }}.exe" "pack\TokenBar.exe"
           $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) { $iscc = (Get-Command iscc).Source }
-          & $iscc /DAppVersion=$version /DArch=$arch /DSourceExe="$(Resolve-Path "pack\TokenBar.exe")" "windows\installer\tokenbar.iss"
+          & $iscc /DAppVersion=$version /DArch=$arch /DSourceDir="$(Resolve-Path publish)" "windows\installer\tokenbar.iss"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Move-Item "windows\installer\Output\*.exe" .
 
       - uses: actions/upload-artifact@v7
         with:
           name: windows-artifact-${{ matrix.rid }}
-          path: TokenBar-*-win-*.exe
+          path: |
+            TokenBar-*-win-*.zip
+            TokenBar-*-win-*-setup.exe
           if-no-files-found: error
 
   build-macos:
@@ -101,7 +105,7 @@ jobs:
 
             ### Windows
             - **推荐**：下载 `TokenBar-${{ env.TAG_NAME }}-win-x64-setup.exe`（Intel/AMD 电脑）或 `TokenBar-${{ env.TAG_NAME }}-win-arm64-setup.exe`（ARM 设备，如 Snapdragon 笔记本），双击安装——自动创建开始菜单快捷方式并注册系统卸载项（按用户安装，无需管理员权限）
-            - 便携版：下载 `TokenBar-${{ env.TAG_NAME }}-win-x64.exe` / `-win-arm64.exe`，单文件免安装，双击即可运行；如需注册快捷方式与卸载项可执行仓库中的 `windows/install.ps1`
+            - 便携版：下载 `TokenBar-${{ env.TAG_NAME }}-win-x64.zip` / `-win-arm64.zip`，解压到任意固定目录后运行其中的 `TokenBar.exe`（原生 DLL 与 exe 同目录分发，不经手系统临时目录；请勿单独移动 exe）；如需注册快捷方式与卸载项可执行仓库中的 `windows/install.ps1`
             - ARM64 Windows 也可通过系统模拟运行 x64 版，但原生 ARM64 版内存占用更低
 
             ### macOS (13+，Intel 与 Apple Silicon 通用)
@@ -112,6 +116,6 @@ jobs:
             - macOS / Linux：`shasum -a 256 -c SHA256SUMS.txt`
             - Windows (PowerShell)：`Get-FileHash <文件名> -Algorithm SHA256`
           files: |
-            TokenBar-*-win-*.exe
+            TokenBar-*-win-*
             TokenBar-*-macOS-universal.zip
             SHA256SUMS.txt

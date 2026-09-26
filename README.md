@@ -110,8 +110,8 @@ TokenBar/
 
 | 平台 | 下载产物 | 说明 |
 | --- | --- | --- |
-| Windows 10/11 (Intel/AMD) | `TokenBar-v*-win-x64.exe` | 单文件自包含，免装 .NET，双击即可运行；如需快捷方式与卸载项，将下载的 exe 复制为 `windows/publish/TokenBar.exe` 后执行 `windows/install.ps1` |
-| Windows 10/11 (ARM 设备) | `TokenBar-v*-win-arm64.exe` | 同上；ARM64 Windows 也可运行 x64 版（系统模拟），原生版内存占用更低 |
+| Windows 10/11 (Intel/AMD) | `TokenBar-v*-win-x64.zip` | 自包含免装 .NET，解压到固定目录后运行其中的 `TokenBar.exe`（原生 DLL 与 exe 同目录分发，请勿单独移动 exe）；如需快捷方式与卸载项，将下载的 zip 解压到 `windows/publish` 后执行 `windows/install.ps1` |
+| Windows 10/11 (ARM 设备) | `TokenBar-v*-win-arm64.zip` | 同上；ARM64 Windows 也可运行 x64 版（系统模拟），原生版内存占用更低 |
 | macOS 13+（Intel 与 Apple Silicon 通用） | `TokenBar-v*-macOS-universal.zip` | 解压后将 `TokenBar.app` 拖入「应用程序」；产物未公证，首次打开需在 系统设置 → 隐私与安全性 中「仍要打开」 |
 
 下载后可使用各 Release 附带的 `SHA256SUMS.txt` 校验文件完整性。
@@ -147,10 +147,12 @@ cd windows
 # 1. 启动调试
 dotnet run --project src/TokenBar/TokenBar.csproj
 
-# 2. 发布为独立免安装单文件 (.exe)
-dotnet publish src/TokenBar/TokenBar.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o ./publish
+# 2. 发布为独立免安装程序（exe + 同目录原生 DLL）
+#    注意 IncludeNativeLibrariesForSelfExtract=false 必须保留：原生库（wpfgfx_cor3.dll 等）
+#    若打进单文件，运行时会解压到 %TEMP%，被清理工具删除后 WPF 渲染会崩溃
+dotnet publish src/TokenBar/TokenBar.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=false -o ./publish
 
-# 3. （可选）一键安装/升级到本机：停旧进程 + 复制 exe + 建快捷方式
+# 3. （可选）一键安装/升级到本机：停旧进程 + 复制发布目录 + 建快捷方式
 powershell -ExecutionPolicy Bypass -File install.ps1
 ```
 
