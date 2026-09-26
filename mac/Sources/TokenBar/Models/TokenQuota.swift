@@ -194,6 +194,15 @@ public struct TokenWindow: Identifiable, Codable {
         }
     }
 
+    /// 卡片角标按窗口标题的周期语义推断：月度额度显示「每月」而不是槽位默认的「每周」；
+    /// 推断不出（如按模型圈定的周额度标题是模型名）时回退调用方按槽位给的默认角标。
+    public func badgeLabel(fallback: String) -> String {
+        if title.contains("5小时") { return I18n(.fiveHourWindow) }
+        if title.contains("月") { return I18n(.monthlyWindow) }
+        if title.contains("7天") || title.contains("周") { return I18n(.weeklyWindow) }
+        return fallback
+    }
+
     public var isExpired: Bool {
         if isIdle { return false }
         return Date() >= endTime

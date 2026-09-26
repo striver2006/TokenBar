@@ -1,5 +1,6 @@
 using System;
 using System.Text.Json;
+using TokenBar.I18n;
 using TokenBar.Models;
 using TokenBar.Services;
 using Xunit;
@@ -168,6 +169,7 @@ namespace TokenBar.Tests
 
         [Theory]
         [InlineData("sk-kimi-abc123def", "https://api.moonshot.cn/v1", true)]
+
         [InlineData("SK-KIMI-uppercase", "https://api.moonshot.cn/v1", true)]
         [InlineData("eyJhbGciOiJ.eyJzdWIiOiIx.kdskfj", "https://api.moonshot.cn/v1", true)]
         [InlineData("sk-abcdefghijklmnop", "https://api.kimi.com/coding/v1", true)]
@@ -179,6 +181,21 @@ namespace TokenBar.Tests
         public void ModeDetection(string apiKey, string endpoint, bool expected)
         {
             Assert.Equal(expected, KimiService.IsCodingSubscriptionMode(apiKey, endpoint));
+        }
+
+        [Fact]
+        public void BadgeLabelInfersCycleFromTitle()
+        {
+            // 卡片角标按窗口标题的周期语义推断：月度额度显示「每月」而非槽位默认的「每周」；
+            // 与 LocalizationManager 对比断言，避免依赖测试机的系统语言
+            var i18n = LocalizationManager.Instance;
+            Assert.Equal(i18n.MonthlyWindow, new TokenWindow { Title = "月度额度" }.BadgeLabel("FALLBACK"));
+            Assert.Equal(i18n.MonthlyWindow, new TokenWindow { Title = "每月额度" }.BadgeLabel("FALLBACK"));
+            Assert.Equal(i18n.WeeklyWindow, new TokenWindow { Title = "每周额度" }.BadgeLabel("FALLBACK"));
+            Assert.Equal(i18n.WeeklyWindow, new TokenWindow { Title = "7天额度" }.BadgeLabel("FALLBACK"));
+            Assert.Equal(i18n.FiveHourWindow, new TokenWindow { Title = "5小时额度" }.BadgeLabel("FALLBACK"));
+            // 推断不出（如按模型圈定的周额度，标题是模型名）→ 回退槽位默认角标
+            Assert.Equal("FALLBACK", new TokenWindow { Title = "Opus 4.5" }.BadgeLabel("FALLBACK"));
         }
     }
 }

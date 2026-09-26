@@ -176,7 +176,7 @@ struct WindowQuotaRow: View {
     let badgeText: String
 
     private var effectiveBadge: String {
-        window.isBalance ? I18n(.balanceBadge) : badgeText
+        window.isBalance ? I18n(.balanceBadge) : window.badgeLabel(fallback: badgeText)
     }
 
     var body: some View {

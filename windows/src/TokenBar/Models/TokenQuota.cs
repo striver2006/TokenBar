@@ -156,6 +156,17 @@ namespace TokenBar.Models
                 };
             }
         }
+
+        /// <summary>卡片角标按窗口标题的周期语义推断：月度额度显示「每月」而不是槽位默认的「每周」；
+        /// 推断不出（如按模型圈定的周额度标题是模型名）时回退传入的槽位默认角标。</summary>
+        public string BadgeLabel(string fallback)
+        {
+            if (Title.Contains("5小时")) return LocalizationManager.Instance.FiveHourWindow;
+            if (Title.Contains("月")) return LocalizationManager.Instance.MonthlyWindow;
+            if (Title.Contains("7天") || Title.Contains("周")) return LocalizationManager.Instance.WeeklyWindow;
+            return fallback;
+        }
+
         public double UsedPercentage { get; set; }
         public DateTime StartTime { get; set; }
         public DateTime EndTime { get; set; }

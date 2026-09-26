@@ -23,6 +23,20 @@ final class TokenBarTests: XCTestCase {
         XCTAssertFalse(window.timeRangeFormatted.isEmpty)
     }
 
+    /// 卡片角标按窗口标题的周期语义推断：月度额度应显示「每月」而非槽位默认的「每周」
+    func testWindowBadgeLabelInfersCycleFromTitle() {
+        func make(_ title: String) -> TokenWindow {
+            TokenWindow(title: title, usedPercentage: 0, startTime: Date(), endTime: Date())
+        }
+        XCTAssertEqual(make("月度额度").badgeLabel(fallback: "FALLBACK"), I18n(.monthlyWindow))
+        XCTAssertEqual(make("每月额度").badgeLabel(fallback: "FALLBACK"), I18n(.monthlyWindow))
+        XCTAssertEqual(make("每周额度").badgeLabel(fallback: "FALLBACK"), I18n(.weeklyWindow))
+        XCTAssertEqual(make("7天额度").badgeLabel(fallback: "FALLBACK"), I18n(.weeklyWindow))
+        XCTAssertEqual(make("5小时额度").badgeLabel(fallback: "FALLBACK"), I18n(.fiveHourWindow))
+        // 推断不出（如按模型圈定的周额度，标题是模型名）→ 回退槽位默认角标
+        XCTAssertEqual(make("Opus 4.5").badgeLabel(fallback: "FALLBACK"), "FALLBACK")
+    }
+
     func testExpiredTokenWindow() {
         let past = Date().addingTimeInterval(-3600)
         let expiredTime = Date().addingTimeInterval(-60)

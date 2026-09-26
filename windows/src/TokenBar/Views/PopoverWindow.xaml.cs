@@ -574,6 +574,11 @@ namespace TokenBar.Views
             {
                 badgeText = LocalizationManager.Instance.BalanceBadge;
             }
+            else
+            {
+                // 角标按窗口标题的周期语义推断：月度额度显示「每月」而不是槽位默认的「每周」
+                badgeText = window.BadgeLabel(badgeText);
+            }
 
             var rowStack = new StackPanel { Margin = new Thickness(0, 6, 0, 2) };
 

@@ -67,6 +67,7 @@ namespace TokenBar.I18n
         // Windows & Quotas
         public string FiveHourWindow => IsChinese ? "5小时" : "5-Hour";
         public string WeeklyWindow => IsChinese ? "每周" : "Weekly";
+        public string MonthlyWindow => IsChinese ? "每月" : "Monthly";
         public string Remaining => IsChinese ? "剩余" : "Left";
         public string UnusedFull => IsChinese ? "未消耗 / 100% 充足" : "Unused / 100% Available";
         public string ResetTimeReached => IsChinese ? "已到重置时间 / 刷新中" : "Reset time reached / Refreshing";

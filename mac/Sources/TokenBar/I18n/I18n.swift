@@ -39,6 +39,7 @@ public enum I18nKey: String {
     // Windows & Quotas
     case fiveHourWindow
     case weeklyWindow
+    case monthlyWindow
     case remaining
     case unusedFull
     case resetTimeReached
@@ -385,6 +386,8 @@ public final class LocalizationManager: ObservableObject {
             return isZh ? "5小时" : "5-Hour"
         case .weeklyWindow:
             return isZh ? "每周" : "Weekly"
+        case .monthlyWindow:
+            return isZh ? "每月" : "Monthly"
         case .remaining:
             return isZh ? "剩余" : "Left"
         case .unusedFull:
