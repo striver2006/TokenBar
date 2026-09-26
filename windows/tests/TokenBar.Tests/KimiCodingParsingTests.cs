@@ -74,8 +74,9 @@ namespace TokenBar.Tests
         public void TopLevelUsageWithResetFarAway_IsMonthly()
         {
             var monthlyReset = DateTimeOffset.UtcNow.AddDays(30).ToString("yyyy-MM-ddTHH:mm:ssZ");
-            var json = $$"""
-                {"usage":{"limit":"1000","used":"100","remaining":"900","resetTime":"{{monthlyReset}}"}}
+            // $$$ 插值（三个花括号），允许内容里出现连续两个 }（JSON 结尾的 "}}）
+            var json = $$$"""
+                {"usage":{"limit":"1000","used":"100","remaining":"900","resetTime":"{{{monthlyReset}}}"}}
                 """;
 
             var (_, longWindow) = Parse(json);
