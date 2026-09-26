@@ -109,7 +109,9 @@ TokenBar 独家支持双重模式：
 ### 3.4 国内主流厂商配置
 - **DeepSeek (深度求索)**：在 [platform.deepseek.com](https://platform.deepseek.com) 获取 API Key，填入后将自动同步账户可用余额。可在设置中配置「**余额提醒阈值**」：余额低于该值时托盘弹气泡提醒，看板金额变为橙/红色。
 - **火山方舟 (字节跳动)**：前往火山引擎大模型控制台获取 API Key，支持自定义 Endpoint。
-- **月之暗面 KIMI**：在 [platform.moonshot.cn](https://platform.moonshot.cn) 获取 Key，支持监测 RPM/TPM 限额与账户余额（同样支持余额提醒阈值）。
+- **月之暗面 KIMI**：支持两类 Key，TokenBar 会自动识别：
+  - **Kimi Code 订阅 Key**（[kimi.com/code/console](https://www.kimi.com/code/console) 创建，形如 `sk-kimi-...`，或粘贴 Kimi CLI 登录令牌 / `kimi-auth` JWT）：展示 **5 小时滚动额度**与**月度总额度**（重置时间与官网「用量」页一致，账号昵称与会员等级显示在卡片标题旁）。
+  - **Moonshot 开放平台 Key**（[platform.moonshot.cn](https://platform.moonshot.cn)，按量付费）：监测 RPM/TPM 限额与账户余额（同样支持余额提醒阈值）。
 - **智谱清言 GLM**：在 [open.bigmodel.cn](https://open.bigmodel.cn) 获取 API Key。
     > ⚠️ **剩余额度获取条件**：智谱（BigModel）仅对支持 **OpenAI Response 协议**的端点返回套餐剩余额度数据，普通 Chat Completions 端点拿不到该信息。请确保设置中填写的 API 端点支持 OpenAI Response 协议；若端点不支持该协议，TokenBar 将无法获取剩余额度，卡片只能显示「API 连接正常」状态点，而不会出现 5 小时 / 每周额度进度条。
 
@@ -229,7 +231,7 @@ OpenRouter 为纯按量扣费平台，TokenBar 以**美元余额**方式展示�
 
 ### 3.8 纯扣费厂商的余额监控说明（消耗统计与提醒）
 
-DeepSeek、KIMI、OpenRouter 等按量计费厂商没有"5 小时/每周"的时间窗口概念，TokenBar 使用不同的展示与提醒逻辑：
+DeepSeek、OpenRouter 等按量计费厂商没有"5 小时/每周"的时间窗口概念，TokenBar 使用不同的展示与提醒逻辑（KIMI 仅在配置 Moonshot 平台按量 Key 时走此逻辑；配置 Kimi Code 订阅 Key 时显示 5 小时 / 月度额度窗口）：
 
 - **金额展示**：看板直接显示余额金额，低于阈值变橙、低于阈值一半变红。
 - **低余额提醒**：余额首次跌破阈值时弹托盘气泡（macOS 为系统通知），恢复到阈值的 1.2 倍以上后重新武装，避免反复打扰。

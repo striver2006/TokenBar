@@ -504,7 +504,7 @@ public final class LocalizationManager: ObservableObject {
         case .kimiTitle:
             return isZh ? "KIMI (月之暗面)" : "KIMI (Moonshot AI)"
         case .kimiSubtitle:
-            return isZh ? "配置 Moonshot API Key，查询账户余额与 RPM/TPM 限额" : "Configure Moonshot API Key to monitor balance & limits"
+            return isZh ? "支持 Moonshot 平台 Key（余额 / RPM/TPM 限额）与 Kimi Code 订阅 Key（sk-kimi-，5 小时与月度额度）" : "Supports Moonshot platform key (balance / RPM/TPM) & Kimi Code key (sk-kimi-, 5-hour & monthly quota)"
         case .openRouterTitle:
             return "OpenRouter"
         case .openRouterSubtitle:

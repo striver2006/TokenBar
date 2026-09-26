@@ -140,7 +140,7 @@ namespace TokenBar.I18n
         public string VolcengineTitle => IsChinese ? "火山方舟 (字节跳动)" : "Volcengine Ark (ByteDance)";
         public string VolcengineSubtitle => IsChinese ? "配置火山方舟 API Key，监控大模型接入点与调用配额" : "Configure Ark API Key to monitor model endpoint quotas";
         public string KimiTitle => IsChinese ? "KIMI (月之暗面)" : "KIMI (Moonshot AI)";
-        public string KimiSubtitle => IsChinese ? "配置 Moonshot API Key，查询账户余额与 RPM/TPM 限额" : "Configure Moonshot API Key to monitor balance & limits";
+        public string KimiSubtitle => IsChinese ? "支持 Moonshot 平台 Key（余额 / RPM/TPM 限额）与 Kimi Code 订阅 Key（sk-kimi-，5 小时与月度额度）" : "Supports Moonshot platform key (balance / RPM/TPM) & Kimi Code key (sk-kimi-, 5-hour & monthly quota)";
         public string OpenRouterTitle => "OpenRouter";
         public string OpenRouterSubtitle => IsChinese
             ? "配置 OpenRouter API Key（查询账户余额需 Management Key），纯按量扣费美元余额监控"

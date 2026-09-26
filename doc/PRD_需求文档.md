@@ -62,7 +62,7 @@
 | **Google Gemini** | 免费/付费层速率、API 配额状态 | Google AI Studio API Key / 本地 `~/.gemini/` / OAuth 凭证 |
 | **DeepSeek (深度求索)** | 账户余额、TPM/RPM 速率、可用模型 | DeepSeek 开放平台 API Key |
 | **火山方舟 (字节跳动)** | 接入点推理配额、API 连通性 | 火山方舟 API Key |
-| **KIMI (月之暗面)** | 用户余额、8k/32k/128k 速率限额 | Moonshot API Key |
+| **KIMI (月之暗面)** | Kimi Code 订阅：5 小时滚动额度、月度总额度；开放平台：用户余额、8k/32k/128k 速率限额 | Kimi Code Key（`sk-kimi-`）/ Moonshot API Key |
 | **GLM (智谱清言)** | 账户调用状态、BigModel 接口健康度 | 智谱 API Key |
 | **阿里云百炼** | 百炼 Token Plan 包月额度、DashScope 兼容接口 | 百炼 API Key / 专属 Token Plan 端点 |
 | **国内厂商 / 自定义** | 支持 OpenAI Chat、OpenAI Response 与 Anthropic 协议 | 自建 OneAPI / NewAPI / 硅基流动 / MiniMax / 阶跃星辰 / 零一万物 / 百度千帆等 |
