@@ -874,7 +874,7 @@ public final class RefreshManager: ObservableObject {
             }
 
             quota.fiveHourWindow = res.fiveHour
-            quota.weeklyWindow = res.weekly
+            quota.weeklyWindow = res.longWindow
             quota.accountInfo = res.account
             quota.isAuthorized = true
             quota.hadRefreshError = false

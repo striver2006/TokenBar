@@ -140,6 +140,7 @@ namespace TokenBar.Models
                 return Title switch
                 {
                     "5小时额度" => "5-Hour Quota",
+                    "每月额度" or "月度额度" => "Monthly Quota",
                     "每周额度" => "Weekly Quota",
                     "7天额度" or "7天周期额度" => "7-Day Quota",
                     "账户可用余额" or "账户余额" => "Account Balance",

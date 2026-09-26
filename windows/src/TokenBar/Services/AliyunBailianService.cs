@@ -42,6 +42,9 @@ namespace TokenBar.Services
 
         private static readonly string[] QuotaKeys =
         {
+            // 2026-09 起 Token Plan 个人版改为订阅月限额（订阅日起 30 天），
+            // 实测（2026-09-26）接口只返回 per1Month* 字段；per1Week/per5Hour 保留给未迁移账号。
+            "per1MonthPercentage", "per1MonthResetTime",
             "per1WeekPercentage", "per5HourPercentage", "per1WeekResetTime", "per5HourResetTime"
         };
 

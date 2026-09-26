@@ -17,9 +17,9 @@ namespace TokenBar.Tests
                 {"per1WeekPercentage":0.125,"per1WeekResetTime":1789122720000,
                  "per5HourPercentage":0.5,"per5HourResetTime":1789000000000}
                 """, AliyunChannel.Cli);
-            Assert.NotNull(r.Weekly);
+            Assert.NotNull(r.LongWindow);
             Assert.NotNull(r.FiveHour);
-            Assert.Equal(12.5, r.Weekly!.UsedPercentage, 3);
+            Assert.Equal(12.5, r.LongWindow!.UsedPercentage, 3);
             Assert.Equal(50.0, r.FiveHour!.UsedPercentage, 3);
             Assert.Equal(AliyunChannel.Cli, r.Channel);
             Assert.Null(r.Note);
@@ -31,8 +31,8 @@ namespace TokenBar.Tests
             var r = Parse("""
                 {"data":{"data":{"per1WeekPercentage":0.25,"per1WeekResetTime":1789122720000}}}
                 """, AliyunChannel.Cookie);
-            Assert.NotNull(r.Weekly);
-            Assert.Equal(25.0, r.Weekly!.UsedPercentage, 3);
+            Assert.NotNull(r.LongWindow);
+            Assert.Equal(25.0, r.LongWindow!.UsedPercentage, 3);
             Assert.Null(r.FiveHour);
         }
 
@@ -47,11 +47,59 @@ namespace TokenBar.Tests
                   "success":true,"httpStatus":200,"errorCode":"","errorMsg":""},
                  "httpStatusCode":"200","successResponse":true}
                 """);
-            Assert.NotNull(r.Weekly);
-            Assert.Equal(100.0, r.Weekly!.UsedPercentage, 3);
-            Assert.Equal(1789122720000, new DateTimeOffset(r.Weekly.EndTime).ToUnixTimeMilliseconds());
+            Assert.NotNull(r.LongWindow);
+            Assert.Equal(100.0, r.LongWindow!.UsedPercentage, 3);
+            Assert.Equal(1789122720000, new DateTimeOffset(r.LongWindow.EndTime).ToUnixTimeMilliseconds());
             Assert.Null(r.FiveHour);
             Assert.Null(r.Note);
+        }
+
+        [Fact]
+        public void MonthlyShape()
+        {
+            // 2026-09 起订阅月限额的实测形状：只返回 per1Month*，旧字段整体消失
+            var r = Parse("""
+                {"code":"200","data":{"DataV2":{"ret":["SUCCESS::接口调用成功"],
+                  "data":{"msg":"Success.","code":"SUCCESS",
+                    "data":{"per1MonthPercentage":0.056,"per1MonthResetTime":1791129600000},
+                    "requestId":"x","success":true}},
+                  "success":true,"httpStatus":200,"errorCode":"","errorMsg":""},
+                 "httpStatusCode":"200","successResponse":true}
+                """);
+            Assert.NotNull(r.LongWindow);
+            Assert.Equal("月度额度", r.LongWindow!.Title);
+            Assert.Equal(5.6, r.LongWindow.UsedPercentage, 3);
+            Assert.Equal(1791129600000, new DateTimeOffset(r.LongWindow.EndTime).ToUnixTimeMilliseconds());
+            // 订阅月窗口按 30 天派生起点
+            Assert.Equal(TimeSpan.FromDays(30), r.LongWindow.EndTime - r.LongWindow.StartTime);
+            Assert.Null(r.FiveHour);
+            Assert.Null(r.Note);
+        }
+
+        [Fact]
+        public void MonthlyTakesPrecedenceOverWeekly()
+        {
+            // 月度与周字段并存（过渡期）时，月度优先占长窗口
+            var r = Parse("""
+                {"per1MonthPercentage":0.4,"per1MonthResetTime":1791129600000,
+                 "per1WeekPercentage":0.9,"per1WeekResetTime":1789122720000}
+                """);
+            Assert.NotNull(r.LongWindow);
+            Assert.Equal("月度额度", r.LongWindow!.Title);
+            Assert.Equal(40.0, r.LongWindow.UsedPercentage, 3);
+        }
+
+        [Fact]
+        public void FarFutureWeeklyResetRelabeledAsMonthly()
+        {
+            // 服务端沿用 per1Week 字段承载月度语义时的兜底：
+            // 重置点距今超过 8 天不可能是 7 天窗口，按订阅月（30 天）展示
+            var farReset = DateTimeOffset.Now.AddDays(20).ToUnixTimeMilliseconds();
+            var r = Parse($"{{\"per1WeekPercentage\":0.3,\"per1WeekResetTime\":{farReset}}}");
+            Assert.NotNull(r.LongWindow);
+            Assert.Equal("月度额度", r.LongWindow!.Title);
+            Assert.Equal(30.0, r.LongWindow.UsedPercentage, 3);
+            Assert.Equal(TimeSpan.FromDays(30), r.LongWindow.EndTime - r.LongWindow.StartTime);
         }
 
         [Fact]
@@ -70,7 +118,7 @@ namespace TokenBar.Tests
             var r = Parse("""
                 {"code":"200","data":{"DataV2":{"data":{"data":{},"success":true}},"success":true,"errorCode":""}}
                 """);
-            Assert.Null(r.Weekly);
+            Assert.Null(r.LongWindow);
             Assert.Null(r.FiveHour);
             Assert.NotNull(r.Note);
         }

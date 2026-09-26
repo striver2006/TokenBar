@@ -129,7 +129,8 @@ public struct AliyunCredentials: Sendable {
 /// 注意：TokenWindow 非 Sendable，故此结构体不标 Sendable（仅在同一 actor 上下文内流转）。
 public struct AliyunQuotaResult {
     public var fiveHour: TokenWindow?
-    public var weekly: TokenWindow?
+    /// 长周期窗口：新版订阅月（30 天）额度，或未迁移账号的 7 天周期额度。
+    public var longWindow: TokenWindow?
     public var account: String?
     /// 网关成功但没返回任何窗口数据时的说明文案（不是错误 —— 该窗口可能不限量）。
     public var note: String?
@@ -139,14 +140,14 @@ public struct AliyunQuotaResult {
 
     public init(
         fiveHour: TokenWindow? = nil,
-        weekly: TokenWindow? = nil,
+        longWindow: TokenWindow? = nil,
         account: String? = nil,
         note: String? = nil,
         channel: AliyunChannel,
         refreshedToken: String? = nil
     ) {
         self.fiveHour = fiveHour
-        self.weekly = weekly
+        self.longWindow = longWindow
         self.account = account
         self.note = note
         self.channel = channel

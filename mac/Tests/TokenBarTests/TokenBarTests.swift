@@ -252,14 +252,14 @@ final class TokenBarTests: XCTestCase {
         let result = try AliyunBailianService.parseTokenPlanResponse(
             data, accountLabel: "测试账号", channel: .cli)
 
-        guard let weekly = result.weekly, let fiveHour = result.fiveHour else {
-            XCTFail("weekly and fiveHour windows must not be nil")
+        guard let longWindow = result.longWindow, let fiveHour = result.fiveHour else {
+            XCTFail("longWindow and fiveHour windows must not be nil")
             return
         }
 
-        XCTAssertEqual(weekly.usedPercentage, 12.5, accuracy: 0.001)
-        XCTAssertEqual(weekly.remainingPercentage, 87.5, accuracy: 0.001)
-        XCTAssertEqual(weekly.title, "7天周期额度")
+        XCTAssertEqual(longWindow.usedPercentage, 12.5, accuracy: 0.001)
+        XCTAssertEqual(longWindow.remainingPercentage, 87.5, accuracy: 0.001)
+        XCTAssertEqual(longWindow.title, "7天周期额度")
 
         XCTAssertEqual(fiveHour.usedPercentage, 5.0, accuracy: 0.001)
         XCTAssertEqual(fiveHour.remainingPercentage, 95.0, accuracy: 0.001)
@@ -1228,7 +1228,7 @@ final class TokenBarTests: XCTestCase {
         {"per1WeekPercentage":0.125,"per1WeekResetTime":1789122720000,
          "per5HourPercentage":0.5,"per5HourResetTime":1789000000000}
         """, channel: .cli)
-        XCTAssertEqual(r.weekly?.usedPercentage ?? 0, 12.5, accuracy: 0.001)
+        XCTAssertEqual(r.longWindow?.usedPercentage ?? 0, 12.5, accuracy: 0.001)
         XCTAssertEqual(r.fiveHour?.usedPercentage ?? 0, 50.0, accuracy: 0.001)
         XCTAssertEqual(r.channel, .cli)
         XCTAssertNil(r.note)
@@ -1239,7 +1239,7 @@ final class TokenBarTests: XCTestCase {
         let r = try parseAliyun("""
         {"data":{"data":{"per1WeekPercentage":0.25,"per1WeekResetTime":1789122720000}}}
         """, channel: .cookie)
-        XCTAssertEqual(r.weekly?.usedPercentage ?? 0, 25.0, accuracy: 0.001)
+        XCTAssertEqual(r.longWindow?.usedPercentage ?? 0, 25.0, accuracy: 0.001)
         XCTAssertNil(r.fiveHour)
     }
 
@@ -1253,12 +1253,58 @@ final class TokenBarTests: XCTestCase {
           "success":true,"httpStatus":200,"errorCode":"","errorMsg":""},
          "httpStatusCode":"200","successResponse":true}
         """)
-        XCTAssertEqual(r.weekly?.usedPercentage ?? 0, 100.0, accuracy: 0.001)
+        XCTAssertEqual(r.longWindow?.usedPercentage ?? 0, 100.0, accuracy: 0.001)
         XCTAssertEqual(
-            r.weekly?.endTime.timeIntervalSince1970 ?? 0, 1789122720.0, accuracy: 0.001)
+            r.longWindow?.endTime.timeIntervalSince1970 ?? 0, 1789122720.0, accuracy: 0.001)
         // 5 小时窗口整段缺失，不是错误
         XCTAssertNil(r.fiveHour)
         XCTAssertNil(r.note)
+    }
+
+    /// 2026-09 起订阅月限额的实测形状：只返回 per1Month*，旧字段整体消失
+    func testAliyunParseMonthlyShape() throws {
+        let r = try parseAliyun("""
+        {"code":"200","data":{"DataV2":{"ret":["SUCCESS::接口调用成功"],
+          "data":{"msg":"Success.","code":"SUCCESS",
+            "data":{"per1MonthPercentage":0.056,"per1MonthResetTime":1791129600000},
+            "requestId":"x","success":true}},
+          "success":true,"httpStatus":200,"errorCode":"","errorMsg":""},
+         "httpStatusCode":"200","successResponse":true}
+        """)
+        XCTAssertEqual(r.longWindow?.title, "月度额度")
+        XCTAssertEqual(r.longWindow?.usedPercentage ?? 0, 5.6, accuracy: 0.001)
+        XCTAssertEqual(
+            r.longWindow?.endTime.timeIntervalSince1970 ?? 0, 1791129600.0, accuracy: 0.001)
+        // 订阅月窗口按 30 天派生起点
+        XCTAssertEqual(
+            r.longWindow.map { $0.endTime.timeIntervalSince($0.startTime) } ?? 0,
+            30 * 86400, accuracy: 1)
+        XCTAssertNil(r.fiveHour)
+        XCTAssertNil(r.note)
+    }
+
+    /// 月度与周字段并存（过渡期）时，月度优先占长窗口
+    func testAliyunParseMonthlyTakesPrecedenceOverWeekly() throws {
+        let r = try parseAliyun("""
+        {"per1MonthPercentage":0.4,"per1MonthResetTime":1791129600000,
+         "per1WeekPercentage":0.9,"per1WeekResetTime":1789122720000}
+        """)
+        XCTAssertEqual(r.longWindow?.title, "月度额度")
+        XCTAssertEqual(r.longWindow?.usedPercentage ?? 0, 40.0, accuracy: 0.001)
+    }
+
+    /// 服务端沿用 per1Week 字段承载月度语义时的兜底：
+    /// 重置点距今超过 8 天不可能是 7 天窗口，按订阅月（30 天）展示
+    func testAliyunParseFarFutureWeeklyResetRelabeledAsMonthly() throws {
+        let farReset = Int((Date().timeIntervalSince1970 + 20 * 86400) * 1000)
+        let r = try parseAliyun("""
+        {"per1WeekPercentage":0.3,"per1WeekResetTime":\(farReset)}
+        """)
+        XCTAssertEqual(r.longWindow?.title, "月度额度")
+        XCTAssertEqual(r.longWindow?.usedPercentage ?? 0, 30.0, accuracy: 0.001)
+        XCTAssertEqual(
+            r.longWindow.map { $0.endTime.timeIntervalSince($0.startTime) } ?? 0,
+            30 * 86400, accuracy: 1)
     }
 
     /// 网关将来再套一层壳时，BFS 兜底要能找到
@@ -1274,7 +1320,7 @@ final class TokenBarTests: XCTestCase {
         let r = try parseAliyun("""
         {"code":"200","data":{"DataV2":{"data":{"data":{},"success":true}},"success":true,"errorCode":""}}
         """)
-        XCTAssertNil(r.weekly)
+        XCTAssertNil(r.longWindow)
         XCTAssertNil(r.fiveHour)
         XCTAssertNotNil(r.note)
     }
@@ -1310,7 +1356,7 @@ final class TokenBarTests: XCTestCase {
         let r = try parseAliyun("""
         {"per1WeekPercentage":null,"per5HourPercentage":"0.05","per5HourResetTime":true}
         """)
-        XCTAssertNil(r.weekly)
+        XCTAssertNil(r.longWindow)
         XCTAssertEqual(r.fiveHour?.usedPercentage ?? 0, 5.0, accuracy: 0.001)
         // resetTime 是布尔 → 当作缺失，回落到「现在 + 5 小时」
         XCTAssertGreaterThan(r.fiveHour?.endTime ?? Date.distantPast, Date())

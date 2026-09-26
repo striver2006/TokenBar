@@ -176,6 +176,7 @@ public struct TokenWindow: Identifiable, Codable {
 
         switch title {
         case "5小时额度": return I18n(.fiveHourQuotaTitle)
+        case "每月额度", "月度额度": return I18n(.monthlyQuotaTitle)
         case "每周额度": return I18n(.weeklyQuotaTitle)
         case "7天额度", "7天周期额度": return I18n(.sevenDaysQuotaTitle)
         case "账户可用余额", "账户余额": return I18n(.accountBalanceTitle)

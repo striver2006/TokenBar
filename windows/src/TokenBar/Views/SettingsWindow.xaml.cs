@@ -1009,7 +1009,7 @@ namespace TokenBar.Views
             {
                 var s = RefreshManager.Instance.Settings;
                 await AliyunBailianService.Instance.FetchViaCliAsync(s.AliyunConsoleRegion, s.AliyunConsoleSite);
-                MessageBox.Show(i18n.IsChinese ? "百炼 CLI 配额读取成功！已检测到 7天 与 5小时额度。" : "Bailian CLI quota retrieved successfully! 7-day and 5-hour quotas detected.", i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Information);
+                MessageBox.Show(i18n.IsChinese ? "百炼 CLI 配额读取成功！已检测到额度窗口。" : "Bailian CLI quota retrieved successfully! Quota windows detected.", i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Information);
                 _ = RefreshManager.Instance.RefreshAliyunAsync();
             }
             catch (Exception ex)

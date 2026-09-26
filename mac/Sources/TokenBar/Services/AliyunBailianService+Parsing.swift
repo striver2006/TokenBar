@@ -9,6 +9,7 @@ import Foundation
 extension AliyunBailianService {
 
     static let quotaKeys = [
+        "per1MonthPercentage", "per1MonthResetTime",
         "per1WeekPercentage", "per5HourPercentage",
         "per1WeekResetTime", "per5HourResetTime"
     ]
@@ -127,6 +128,14 @@ extension AliyunBailianService {
         if let envelopeError = detectEnvelopeError(root) { throw envelopeError }
 
         let payload = unwrapTokenPlanPayload(root)
+        // 2026-09 起 Token Plan 个人版改为订阅月限额（订阅日起 30 天），
+        // 实测（2026-09-26）接口只返回 per1Month* 字段；per1Week/per5Hour 保留给未迁移账号。
+        let monthly = makeWindow(
+            titleZh: "月度额度",
+            percentage: doubleValue(payload["per1MonthPercentage"]),
+            resetMilliseconds: doubleValue(payload["per1MonthResetTime"]),
+            duration: 30 * 86400
+        )
         let weekly = makeWindow(
             titleZh: "7天周期额度",
             percentage: doubleValue(payload["per1WeekPercentage"]),
@@ -139,11 +148,20 @@ extension AliyunBailianService {
             resetMilliseconds: doubleValue(payload["per5HourResetTime"]),
             duration: 5 * 3600
         )
+        let longWindow = monthly
+            ?? (looksLikeMonthlyReset(doubleValue(payload["per1WeekResetTime"]))
+                ? makeWindow(
+                    titleZh: "月度额度",
+                    percentage: doubleValue(payload["per1WeekPercentage"]),
+                    resetMilliseconds: doubleValue(payload["per1WeekResetTime"]),
+                    duration: 30 * 86400
+                )
+                : weekly)
 
         // 两个窗口都没数据**不是错误** —— 官方 CLI 在这种情况下显示「该窗口可能不限量」。
         // 只要信封层是成功的，就照样算已授权，把说明放进 note。
         var note: String? = nil
-        if weekly == nil && fiveHour == nil {
+        if longWindow == nil && fiveHour == nil {
             let isZh = LocalizationManager.shared.effectiveLanguage == "zh"
             note = isZh
                 ? "本周期未返回限额数据（该窗口可能不限量），可在百炼 Token Plan 控制台核对。"
@@ -152,11 +170,18 @@ extension AliyunBailianService {
 
         return AliyunQuotaResult(
             fiveHour: fiveHour,
-            weekly: weekly,
+            longWindow: longWindow,
             account: accountLabel,
             note: note,
             channel: channel
         )
+    }
+
+    /// 真 7 天窗口的重置点距此刻不会超过 7 天；更远的只可能是订阅月（30 天）窗口。
+    /// 8 天阈值给时钟偏差留余量。服务端若沿用 per1Week 字段承载月度语义，靠这个识别。
+    static func looksLikeMonthlyReset(_ resetMilliseconds: Double?) -> Bool {
+        guard let resetMilliseconds, resetMilliseconds > 0 else { return false }
+        return Date(timeIntervalSince1970: resetMilliseconds / 1000).timeIntervalSinceNow > 8 * 86400
     }
 
     /// 百分比是 0~1 的小数，重置时间是 epoch 毫秒。

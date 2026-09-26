@@ -288,6 +288,7 @@ public enum I18nKey: String {
 
     // Quota Window Titles
     case fiveHourQuotaTitle
+    case monthlyQuotaTitle
     case weeklyQuotaTitle
     case sevenDaysQuotaTitle
     case accountBalanceTitle
@@ -843,6 +844,8 @@ public final class LocalizationManager: ObservableObject {
             return isZh ? "关闭窗口" : "Close Window"
         case .fiveHourQuotaTitle:
             return isZh ? "5小时额度" : "5-Hour Quota"
+        case .monthlyQuotaTitle:
+            return isZh ? "月度额度" : "Monthly Quota"
         case .weeklyQuotaTitle:
             return isZh ? "每周额度" : "Weekly Quota"
         case .sevenDaysQuotaTitle:

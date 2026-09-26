@@ -135,7 +135,8 @@ namespace TokenBar.Services
     public sealed class AliyunQuotaResult
     {
         public TokenWindow? FiveHour { get; set; }
-        public TokenWindow? Weekly { get; set; }
+        /// <summary>长周期窗口：新版订阅月（30 天）额度，或未迁移账号的 7 天周期额度。</summary>
+        public TokenWindow? LongWindow { get; set; }
         public string? Account { get; set; }
         /// <summary>网关成功但没返回任何窗口数据时的说明文案（不是错误 —— 该窗口可能不限量）。</summary>
         public string? Note { get; set; }

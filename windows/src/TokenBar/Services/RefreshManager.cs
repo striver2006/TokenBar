@@ -1329,7 +1329,7 @@ namespace TokenBar.Services
                 }
 
                 quota.FiveHourWindow = res.FiveHour;
-                quota.WeeklyWindow = res.Weekly;
+                quota.WeeklyWindow = res.LongWindow;
                 quota.AccountInfo = res.Account;
                 quota.IsAuthorized = true;
                 quota.HadRefreshError = false;

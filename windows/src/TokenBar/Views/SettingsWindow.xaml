@@ -456,7 +456,7 @@
                             <Path x:Name="IconAliyun" Width="20" Height="20" Stretch="Uniform" Fill="#9CA3AF" Margin="0,0,8,0" VerticalAlignment="Center" DockPanel.Dock="Left"/>
                             <StackPanel>
                                 <TextBlock x:Name="TxtAliyunTitle" TextWrapping="Wrap" Text="阿里云百炼 (Token Plan)" FontSize="16" FontWeight="Bold" Foreground="#111827"/>
-                                <TextBlock x:Name="TxtAliyunSubtitle" TextWrapping="Wrap" Text="配置百炼 CLI 或控制台 Cookie，实时同步 7天与 5小时周期额度" FontSize="11" Foreground="#6B7280" Margin="0,3,0,0"/>
+                                <TextBlock x:Name="TxtAliyunSubtitle" TextWrapping="Wrap" Text="配置百炼 CLI 或控制台 Cookie，实时同步月度与 5小时周期额度" FontSize="11" Foreground="#6B7280" Margin="0,3,0,0"/>
                             </StackPanel>
                         </DockPanel>
 

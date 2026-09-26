@@ -165,6 +165,10 @@ namespace TokenBar.Services
             if (envelopeError != null) throw envelopeError;
 
             var payload = UnwrapTokenPlanPayload(root);
+            var monthly = MakeWindow("月度额度",
+                DoubleValue(payload["per1MonthPercentage"]),
+                DoubleValue(payload["per1MonthResetTime"]),
+                TimeSpan.FromDays(30));
             var weekly = MakeWindow("7天周期额度",
                 DoubleValue(payload["per1WeekPercentage"]),
                 DoubleValue(payload["per1WeekResetTime"]),
@@ -173,11 +177,20 @@ namespace TokenBar.Services
                 DoubleValue(payload["per5HourPercentage"]),
                 DoubleValue(payload["per5HourResetTime"]),
                 TimeSpan.FromHours(5));
+            // 月度优先占长窗口；服务端若沿用 per1Week 字段承载月度语义，
+            // 靠「重置点不可能超出 7 天窗口」识别（与 mac 端一致）
+            TokenWindow? longWindow = monthly
+                ?? (LooksLikeMonthlyReset(DoubleValue(payload["per1WeekResetTime"]))
+                    ? MakeWindow("月度额度",
+                        DoubleValue(payload["per1WeekPercentage"]),
+                        DoubleValue(payload["per1WeekResetTime"]),
+                        TimeSpan.FromDays(30))
+                    : weekly);
 
             // 两个窗口都没数据不是错误 —— 官方 CLI 在这种情况下显示「该窗口可能不限量」。
             // 只要信封层是成功的，就照样算已授权，把说明放进 Note。
             string? note = null;
-            if (weekly == null && fiveHour == null)
+            if (longWindow == null && fiveHour == null)
             {
                 note = IsZh
                     ? "本周期未返回限额数据（该窗口可能不限量），可在百炼 Token Plan 控制台核对。"
@@ -187,11 +200,19 @@ namespace TokenBar.Services
             return new AliyunQuotaResult
             {
                 FiveHour = fiveHour,
-                Weekly = weekly,
+                LongWindow = longWindow,
                 Account = accountLabel,
                 Note = note,
                 Channel = channel
             };
+        }
+
+        /// <summary>真 7 天窗口的重置点距此刻不会超过 7 天；更远的只可能是订阅月（30 天）窗口。8 天阈值给时钟偏差留余量。</summary>
+        internal static bool LooksLikeMonthlyReset(double? resetMilliseconds)
+        {
+            if (!resetMilliseconds.HasValue || resetMilliseconds.Value <= 0) return false;
+            var resetDate = DateTimeOffset.FromUnixTimeMilliseconds((long)resetMilliseconds.Value);
+            return (resetDate - DateTimeOffset.Now).TotalSeconds > 8 * 86400;
         }
 
         private static string Truncate(string s) => s.Length > 200 ? s.Substring(0, 200) : s;
