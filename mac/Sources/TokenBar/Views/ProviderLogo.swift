@@ -312,3 +312,74 @@ public struct ProviderLogoView: View {
             .frame(width: size, height: size)
     }
 }
+
+// MARK: - 原生菜单图标(NSImage)
+
+extension ProviderLogo {
+    private static var menuIconCache: [SettingsTab: NSImage] = [:]
+
+    /// 设置页下拉菜单用的小尺寸 Logo 图像。macOS 原生菜单项只支持 SF Symbol 或
+    /// NSMenuItem.image(SwiftUI 自定义视图不渲染),因此离屏渲染成位图后经
+    /// NSPopUpButton 塞入;非厂商 Tab(自定义/显示顺序/通用)回退 SF Symbol。
+    public static func menuImage(for tab: SettingsTab) -> NSImage {
+        if let cached = menuIconCache[tab] { return cached }
+
+        let provider: ProviderType?
+        switch tab {
+        case .openAI: provider = .openAI
+        case .anthropic: provider = .claudeCode
+        case .gemini: provider = .gemini
+        case .deepseek: provider = .deepseek
+        case .volcengine: provider = .volcengine
+        case .kimi: provider = .kimi
+        case .openRouter: provider = .openRouter
+        case .glm: provider = .glm
+        case .aliyun: provider = .aliyunBailian
+        default: provider = nil
+        }
+
+        let image: NSImage
+        if let provider {
+            image = renderedImage(paths: paths(for: provider), color: NSColor(provider.themeColor))
+        } else if let symbol = NSImage(systemSymbolName: tab.icon, accessibilityDescription: nil) {
+            image = symbol
+        } else {
+            image = NSImage()
+        }
+        menuIconCache[tab] = image
+        return image
+    }
+
+    /// 把 Logo 路径渲染为 16pt 画布、内容约 14pt 的位图(@2x),供菜单项使用。
+    private static func renderedImage(paths: [String], color: NSColor, canvas: CGFloat = 16, glyph: CGFloat = 14) -> NSImage {
+        let pixels = Int(canvas) * 2
+        guard let rep = NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: pixels, pixelsHigh: pixels,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .calibratedRGB, bytesPerRow: 0, bitsPerPixel: 0
+        ) else { return NSImage(size: NSSize(width: canvas, height: canvas)) }
+        rep.size = NSSize(width: canvas, height: canvas)
+
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        if let context = NSGraphicsContext.current?.cgContext {
+            var combined = Path()
+            for d in paths { combined.addPath(SVGPathParser.parse(d)) }
+            context.saveGState()
+            // SVG 的 y 轴向下,位图坐标 y 向上:先翻转再按 glyph/24 缩放并居中
+            let scale = glyph / 24
+            context.translateBy(x: (canvas - glyph) / 2, y: canvas - (canvas - glyph) / 2)
+            context.scaleBy(x: scale, y: -scale)
+            context.addPath(combined.cgPath)
+            context.setFillColor(color.usingColorSpace(.deviceRGB)?.cgColor ?? NSColor.black.cgColor)
+            context.fillPath()
+            context.restoreGState()
+        }
+        NSGraphicsContext.current = nil
+        NSGraphicsContext.restoreGraphicsState()
+
+        let image = NSImage(size: NSSize(width: canvas, height: canvas))
+        image.addRepresentation(rep)
+        return image
+    }
+}
