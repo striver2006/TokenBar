@@ -30,12 +30,21 @@ public struct CustomProviderCardView: View {
         VStack(alignment: .leading, spacing: 10) {
             // Header
             HStack(spacing: 8) {
-                Image(systemName: quota.apiProtocol == .anthropic ? "network" : "cpu.fill")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(themeColor)
-                    .frame(width: 22, height: 22)
-                    .background(themeColor.opacity(0.12))
-                    .cornerRadius(6)
+                let presetLogo = ProviderLogo.presetLogo(forName: quota.name)
+                Group {
+                    if let logo = presetLogo {
+                        SVGPathShape(data: logo.paths)
+                            .fill(logo.color)
+                            .frame(width: 13, height: 13)
+                    } else {
+                        Image(systemName: quota.apiProtocol == .anthropic ? "network" : "cpu.fill")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(themeColor)
+                    }
+                }
+                .frame(width: 22, height: 22)
+                .background((presetLogo?.color ?? themeColor).opacity(0.12))
+                .cornerRadius(6)
 
                 Text(quota.name)
                     .font(.system(size: 13, weight: .bold))

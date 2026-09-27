@@ -394,24 +394,43 @@ namespace TokenBar.Views
             headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
+            var displayName = config.Name.Length > 0 ? config.Name : LocalizationManager.Instance.FallbackCustomProviderName;
+            var presetLogo = ProviderIcons.GetPresetLogo(displayName);
+            var badgeColor = presetLogo?.Color ?? Color.FromRgb(99, 102, 241); // Indigo
             var iconBadge = new Border
             {
                 Width = 22,
                 Height = 22,
                 CornerRadius = new CornerRadius(6),
-                Background = new SolidColorBrush(Color.FromArgb(30, 99, 102, 241)), // Indigo
+                Background = new SolidColorBrush(Color.FromArgb(30, badgeColor.R, badgeColor.G, badgeColor.B)),
                 Margin = new Thickness(0, 0, 8, 0)
             };
-            var displayName = config.Name.Length > 0 ? config.Name : LocalizationManager.Instance.FallbackCustomProviderName;
-            iconBadge.Child = new TextBlock
+            if (presetLogo != null)
             {
-                Text = displayName.Substring(0, 1),
-                FontSize = 11,
-                FontWeight = FontWeights.Bold,
-                Foreground = new SolidColorBrush(Color.FromRgb(99, 102, 241)),
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center
-            };
+                // 命中品牌预设:渲染官方 Logo(与内置厂商卡片同款 13x13 单色 glyph)
+                iconBadge.Child = new System.Windows.Shapes.Path
+                {
+                    Data = presetLogo.Value.Geometry,
+                    Fill = new SolidColorBrush(presetLogo.Value.Color),
+                    Stretch = Stretch.Uniform,
+                    Width = 13,
+                    Height = 13,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+            }
+            else
+            {
+                iconBadge.Child = new TextBlock
+                {
+                    Text = displayName.Substring(0, 1),
+                    FontSize = 11,
+                    FontWeight = FontWeights.Bold,
+                    Foreground = new SolidColorBrush(Color.FromRgb(99, 102, 241)),
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+            }
             Grid.SetColumn(iconBadge, 0);
             headerGrid.Children.Add(iconBadge);
 

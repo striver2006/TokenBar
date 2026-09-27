@@ -63,7 +63,7 @@ public enum ProviderType: String, CaseIterable, Identifiable, Codable {
         case .claudeCode: return Color(red: 0.85, green: 0.45, blue: 0.28) // Claude terracotta
         case .gemini: return Color(red: 0.25, green: 0.52, blue: 0.95)   // Google blue
         case .deepseek: return Color(red: 0.22, green: 0.48, blue: 0.96) // DeepSeek Royal Blue
-        case .volcengine: return Color(red: 0.94, green: 0.30, blue: 0.22) // Volcengine Red
+        case .volcengine: return Color(red: 0.0, green: 0.43, blue: 1.0)  // Volcengine Blue（官方品牌蓝 #006EFF）
         case .kimi: return Color(red: 0.55, green: 0.35, blue: 0.92)     // Moonshot Purple
         case .openRouter: return Color(red: 0.39, green: 0.40, blue: 0.95) // OpenRouter Indigo
         case .glm: return Color(red: 0.23, green: 0.72, blue: 0.53)      // GLM emerald green

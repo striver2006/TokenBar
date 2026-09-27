@@ -1255,7 +1255,15 @@ namespace TokenBar.Views
                 var nameRow = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
 
                 var builtinType = ProviderOrdering.ParseProviderType(key);
-                var iconColor = builtinType.HasValue ? builtinType.Value.GetThemeColor() : Color.FromRgb(99, 102, 241);
+                var displayName = builtinType.HasValue ? builtinType.Value.GetDisplayName() : key;
+                if (!builtinType.HasValue && ProviderOrdering.TryParseCustomKey(key, out var customId))
+                {
+                    displayName = settings.CustomProviders.FirstOrDefault(c => c.Id == customId)?.Name ?? key;
+                }
+                // 自定义预设命中品牌 Logo 时用官方图标与品牌色,否则维持 Indigo 通用图标
+                var presetLogo = builtinType.HasValue ? null : ProviderIcons.GetPresetLogo(displayName);
+                var iconColor = builtinType.HasValue ? builtinType.Value.GetThemeColor()
+                    : presetLogo?.Color ?? Color.FromRgb(99, 102, 241);
                 var iconBadge = new Border
                 {
                     Width = 20,
@@ -1269,7 +1277,7 @@ namespace TokenBar.Views
                 {
                     Data = builtinType.HasValue
                         ? ProviderIcons.GetIconGeometry(builtinType.Value)
-                        : ProviderIcons.GetTabIconGeometry(SettingsTab.Custom),
+                        : presetLogo?.Geometry ?? ProviderIcons.GetTabIconGeometry(SettingsTab.Custom),
                     Fill = new SolidColorBrush(iconColor),
                     Stretch = Stretch.Uniform,
                     Width = 12,
@@ -1279,11 +1287,6 @@ namespace TokenBar.Views
                 };
                 nameRow.Children.Add(iconBadge);
 
-                var displayName = builtinType.HasValue ? builtinType.Value.GetDisplayName() : key;
-                if (!builtinType.HasValue && ProviderOrdering.TryParseCustomKey(key, out var customId))
-                {
-                    displayName = settings.CustomProviders.FirstOrDefault(c => c.Id == customId)?.Name ?? key;
-                }
                 nameRow.Children.Add(new TextBlock
                 {
                     Text = displayName,

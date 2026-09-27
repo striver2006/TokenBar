@@ -64,7 +64,7 @@ namespace TokenBar.Models
             ProviderType.ClaudeCode => Color.FromRgb(217, 115, 71),   // Terracotta
             ProviderType.Gemini => Color.FromRgb(64, 133, 244),       // Google blue
             ProviderType.DeepSeek => Color.FromRgb(56, 122, 245),     // Royal Blue
-            ProviderType.Volcengine => Color.FromRgb(240, 77, 56),    // Volcengine Red
+            ProviderType.Volcengine => Color.FromRgb(0, 110, 255),    // Volcengine Blue（官方品牌蓝 #006EFF）
             ProviderType.Kimi => Color.FromRgb(140, 89, 235),        // Moonshot Purple
             ProviderType.OpenRouter => Color.FromRgb(100, 103, 242), // OpenRouter Indigo
             ProviderType.GLM => Color.FromRgb(59, 184, 135),         // Emerald green

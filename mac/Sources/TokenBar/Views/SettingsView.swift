@@ -2407,10 +2407,20 @@ public struct SettingsView: View {
 
     private func orderRow(key: String, index: Int, count: Int) -> some View {
         HStack(spacing: 10) {
-            Image(systemName: ProviderOrdering.parseProviderType(key)?.iconName ?? "network")
-                .font(.system(size: 12))
-                .foregroundColor(.accentColor)
-                .frame(width: 20)
+            if let type = ProviderOrdering.parseProviderType(key) {
+                ProviderLogoView(provider: type, size: 12)
+                    .frame(width: 20)
+            } else if let logo = ProviderLogo.presetLogo(forName: orderDisplayName(for: key)) {
+                SVGPathShape(data: logo.paths)
+                    .fill(logo.color)
+                    .frame(width: 12, height: 12)
+                    .frame(width: 20)
+            } else {
+                Image(systemName: "network")
+                    .font(.system(size: 12))
+                    .foregroundColor(.accentColor)
+                    .frame(width: 20)
+            }
             Text(orderDisplayName(for: key))
                 .font(.system(size: 12, weight: .semibold))
             Spacer()

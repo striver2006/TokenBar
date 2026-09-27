@@ -24,9 +24,7 @@ public struct ProviderCardView: View {
         VStack(alignment: .leading, spacing: 10) {
             // Header
             HStack(spacing: 8) {
-                Image(systemName: quota.provider.iconName)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(quota.provider.themeColor)
+                ProviderLogoView(provider: quota.provider, size: 14)
                     .frame(width: 22, height: 22)
                     .background(quota.provider.themeColor.opacity(0.12))
                     .cornerRadius(6)
