@@ -2009,6 +2009,126 @@ final class TokenBarTests: XCTestCase {
             timerIsValid: true, activeIntervalMinutes: 1, desiredIntervalMinutes: 1))
     }
 
+    // MARK: - 简单厂商表驱动刷新（SimpleQuotaTransition / ProviderRefreshDescriptor）
+
+    private func makeQuotaWindow(_ title: WindowTitle, used: Double) -> TokenWindow {
+        TokenWindow(title: title, usedPercentage: used, startTime: Date(), endTime: Date().addingTimeInterval(3600))
+    }
+
+    /// 成功一轮：两个窗口 + 账号串整体覆盖写入，错误态清掉、lastUpdated 推进、卡片停止转圈
+    func testSimpleQuotaTransitionSuccessOverwritesSlotsAndClearsErrorState() {
+        let stale = makeQuotaWindow(.fiveHour, used: 10)
+        var quota = ProviderQuota(provider: .glm)
+        quota.fiveHourWindow = stale
+        quota.weeklyWindow = stale
+        quota.accountInfo = "old-account"
+        quota.isAuthorized = false
+        quota.hadRefreshError = true
+        quota.errorMessage = "上一轮的错误"
+        quota.isLoading = true
+
+        quota = SimpleQuotaTransition.beginLoading(quota)
+        XCTAssertTrue(quota.isLoading)
+        XCTAssertNil(quota.errorMessage, "入口必须清掉上一轮文案，否则失败态会粘到成功轮上")
+
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        quota = SimpleQuotaTransition.success(
+            quota,
+            fiveHour: makeQuotaWindow(.fiveHour, used: 42),
+            weekly: nil,
+            account: "GLM • 1234",
+            now: now
+        )
+        quota = SimpleQuotaTransition.finishLoading(quota)
+
+        XCTAssertEqual(quota.fiveHourWindow?.usedPercentage, 42)
+        XCTAssertNil(quota.weeklyWindow, "service 返回 nil 时要覆盖旧窗口，不能留着上一轮的数据")
+        XCTAssertEqual(quota.accountInfo, "GLM • 1234")
+        XCTAssertTrue(quota.isAuthorized)
+        XCTAssertFalse(quota.hadRefreshError)
+        XCTAssertEqual(quota.lastUpdated, now, "refreshAll 靠 lastUpdated 是否推进判断本轮有无收获")
+        XCTAssertFalse(quota.isLoading)
+    }
+
+    /// Key 已配置但请求失败：只置 hadRefreshError，授权态与旧数据一律保留
+    /// （卡片显示「重试」而不是「去配置」，网络恢复前仍能看到上一次的额度）
+    func testSimpleQuotaTransitionFailureKeepsAuthorizationAndOldData() {
+        let previousUpdate = Date(timeIntervalSince1970: 1_600_000_000)
+        var quota = ProviderQuota(provider: .kimi, isAuthorized: true)
+        quota.weeklyWindow = makeQuotaWindow(.weekly, used: 55)
+        quota.accountInfo = "kimi-account"
+        quota.lastUpdated = previousUpdate
+        quota.isLoading = true
+
+        quota = SimpleQuotaTransition.beginLoading(quota)
+        quota = SimpleQuotaTransition.failure(quota, message: "The request timed out.")
+        quota = SimpleQuotaTransition.finishLoading(quota)
+
+        XCTAssertTrue(quota.hadRefreshError)
+        XCTAssertEqual(quota.errorMessage, "The request timed out.")
+        XCTAssertTrue(quota.isAuthorized, "刷新失败不能把已授权打成未配置")
+        XCTAssertEqual(quota.weeklyWindow?.usedPercentage, 55, "刷新失败要保留旧数据")
+        XCTAssertEqual(quota.accountInfo, "kimi-account")
+        XCTAssertEqual(quota.lastUpdated, previousUpdate, "失败不推进 lastUpdated，全失败轮次才不会显示「刚刚更新」")
+        XCTAssertFalse(quota.isLoading)
+    }
+
+    /// 空 Key：未配置态，且不置 hadRefreshError —— 否则「从没配过 Key」的厂商会让
+    /// 首刷退避重试与 anyRefreshError 一直为真
+    func testSimpleQuotaTransitionMissingKeyIsNotARefreshError() {
+        var quota = SimpleQuotaTransition.beginLoading(ProviderQuota(provider: .openAI, isAuthorized: true))
+        quota = SimpleQuotaTransition.missingKey(quota, message: "请输入 OpenAI API Key")
+        quota = SimpleQuotaTransition.finishLoading(quota)
+
+        XCTAssertFalse(quota.isAuthorized)
+        XCTAssertEqual(quota.errorMessage, "请输入 OpenAI API Key")
+        XCTAssertFalse(quota.hadRefreshError)
+        XCTAssertNil(quota.lastUpdated)
+        XCTAssertFalse(quota.isLoading)
+    }
+
+    /// 表项接线本身也要有回归网：复制粘贴最容易把「A 厂商读 B 的 Key」「余额挂错槽位」这类
+    /// 串位带进来，而它们的表象是另一个厂商莫名未配置，很难查到表上
+    func testProviderRefreshDescriptorTableWiring() {
+        var settings = AppSettings.defaultSettings
+        settings.glmApiKey = "glm-key"
+        settings.openAIApiKey = "openai-key"
+        settings.deepseekApiKey = "deepseek-key"
+        settings.volcengineApiKey = "volcengine-key"
+        settings.kimiApiKey = "kimi-key"
+        settings.openRouterApiKey = "openrouter-key"
+
+        let table: [(spec: ProviderRefreshDescriptor, expectedSecretKey: SecretKey, expectedMissing: I18nKey, expectedKey: String)] = [
+            (.glm, .glmApiKey, .errMissingGLMKey, "glm-key"),
+            (.openAI, .openAIApiKey, .errMissingOpenAIKey, "openai-key"),
+            (.deepseek, .deepseekApiKey, .errMissingDeepSeekKey, "deepseek-key"),
+            (.volcengine, .volcengineApiKey, .errMissingVolcengineKey, "volcengine-key"),
+            (.kimi, .kimiApiKey, .errMissingKimiKey, "kimi-key"),
+            (.openRouter, .openRouterApiKey, .errMissingOpenRouterKey, "openrouter-key"),
+        ]
+
+        for entry in table {
+            let name = entry.spec.type.rawValue
+            XCTAssertEqual(entry.spec.apiKey(settings), entry.expectedKey, "\(name) 读错了 settings 字段")
+            XCTAssertEqual(entry.spec.secretKey, entry.expectedSecretKey, "\(name) 的钥匙串键串位")
+            XCTAssertEqual(entry.spec.missingKeyMessage, entry.expectedMissing, "\(name) 的空 Key 文案串位")
+            // logName 必须与 refreshAll 里 runProvider 注册的名字一致，日志才对得上
+            XCTAssertEqual(entry.spec.logName, name.lowercased(), "\(name) 的日志标识与注册名不符")
+        }
+
+        // 余额槽位：DeepSeek / Kimi 的余额并入周窗口，OpenRouter 并入主窗口，其余三家没有余额
+        XCTAssertNil(ProviderRefreshDescriptor.glm.balance)
+        XCTAssertNil(ProviderRefreshDescriptor.openAI.balance)
+        XCTAssertNil(ProviderRefreshDescriptor.volcengine.balance)
+        XCTAssertEqual(ProviderRefreshDescriptor.deepseek.balance?.slot, .weekly)
+        XCTAssertEqual(ProviderRefreshDescriptor.kimi.balance?.slot, .weekly)
+        XCTAssertEqual(ProviderRefreshDescriptor.openRouter.balance?.slot, .fiveHour)
+        // providerKey 是余额历史与低余额通知去重的持久键，改动会让既有历史失联
+        XCTAssertEqual(ProviderRefreshDescriptor.deepseek.balance?.providerKey, "deepseek")
+        XCTAssertEqual(ProviderRefreshDescriptor.kimi.balance?.providerKey, "kimi")
+        XCTAssertEqual(ProviderRefreshDescriptor.openRouter.balance?.providerKey, "openrouter")
+    }
+
     // MARK: - KIMI Code 订阅（/coding/v1/usages）
 
     private func parseKimiUsages(_ json: String) -> (fiveHour: TokenWindow?, longWindow: TokenWindow?) {

@@ -1,16 +1,13 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using System.Net.NetworkInformation;
-using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Timer = System.Threading.Timer;
 using TokenBar.I18n;
 using TokenBar.Models;
-using TokenBar.Tray;
 
 namespace TokenBar.Services
 {
@@ -58,28 +55,22 @@ namespace TokenBar.Services
         private Timer? _timer;
         // 当前定时器生效的间隔，用于判断设置变更是否真的需要重建定时器
         private int? _activeIntervalMinutes;
-        private readonly string _configFilePath;
 
-        // 余额窗口的展示辅助状态（较上次差值 + 低余额提醒状态机），进程内有效
-        private readonly object _balanceLock = new();
-        private readonly Dictionary<string, decimal> _lastBalance = new();
-        private readonly HashSet<string> _balanceAlerted = new();
+        // settings.json 的加载与原子写（路径、损坏保留、临时文件替换都在里面）
+        private readonly SettingsStore _settingsStore = new();
+
+        // 余额窗口的展示辅助状态（较上次差值 + 低余额提醒状态机）+ 托盘气泡
+        private readonly BalanceMonitor _balanceMonitor = new();
 
         public event Action? OnQuotasUpdated;
 
         // ---------- 凭证托管状态（与 mac 端 RefreshManager 的 persistedSecrets / unreadableSecretKeys 同构） ----------
 
-        /// <summary>上次与凭据管理器对齐后的各键值；保存时据此算差异</summary>
-        private Dictionary<SecretKey, string> _persistedSecrets = new();
-        /// <summary>启动时读不到的键：这些键输入为空时绝不删（空只代表「没读到」）</summary>
-        private HashSet<SecretKey> _unreadableSecretKeys = new();
-        /// <summary>LoadSecretsFromStoreAsync 是否已跑过；之前的 SaveSettings 不做同步，避免拿空内存去删条目</summary>
-        private bool _secretsLoaded;
-        /// <summary>同一时刻只允许一轮凭据写/删，避免两次保存的写与删交错</summary>
-        private readonly SemaphoreSlim _secretSyncGate = new(1, 1);
+        // 凭据管理器的加载/迁移/差异同步编排；P/Invoke 在 CredentialSecretStore，状态在 SecretSync
+        private readonly SecretSync _secretSync;
 
         /// <summary>凭据管理器当前的错误态；null 表示正常。设置窗口据此显示橙色横幅。</summary>
-        public SecretStoreErrorKind? SecretStoreErrorState { get; private set; }
+        public SecretStoreErrorKind? SecretStoreErrorState => _secretSync.ErrorState;
 
         /// <summary>SecretStoreErrorState 对应的本地化文案（随当前语言变化），null 表示没有错误</summary>
         public string? SecretStoreError => SecretStoreErrorState switch
@@ -90,14 +81,17 @@ namespace TokenBar.Services
         };
 
         /// <summary>SecretStoreErrorState 变化时在 UI 线程触发</summary>
-        public event Action? OnSecretStoreErrorChanged;
+        public event Action? OnSecretStoreErrorChanged
+        {
+            add => _secretSync.ErrorChanged += value;
+            remove => _secretSync.ErrorChanged -= value;
+        }
 
         private RefreshManager()
         {
-            var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-            var folder = Path.Combine(appData, "TokenBar");
-            Directory.CreateDirectory(folder);
-            _configFilePath = Path.Combine(folder, "settings.json");
+            // Settings 会被 LoadSettings 整体替换，SecretSync 通过访问器现取；
+            // 重写 settings.json 走 PersistSettingsToDisk 回调（内部是 SettingsStore.Save）
+            _secretSync = new SecretSync(() => Settings, PersistSettingsToDisk);
         }
 
         public void Initialize()
@@ -195,193 +189,13 @@ namespace TokenBar.Services
             }
         }
 
-        // MARK: - 凭证与凭据管理器
+        // MARK: - 凭证与凭据管理器（加载/迁移/差异同步的编排在 SecretSync，这里只做转发）
 
         /// <summary>
         /// 启动时把全部凭证从凭据管理器读进 Settings，并把 settings.json 里的旧明文一次性迁进凭据管理器。
-        ///
-        /// 三态处理（AppSecrets.ResolveLoad）：
-        /// - Found：以凭据管理器为准；
-        /// - Absent + 旧明文非空：迁移（写入凭据管理器）；
-        /// - Unavailable：保留内存里的旧明文，什么都不写不删，SecretsInKeychain 保持 false，
-        ///   这样接下来任何一次 SaveSettings 仍会把明文写回 settings.json —— 在安全存储可用之前
-        ///   绝不丢用户凭证。全部键都可信且迁移都成功后才置 true 并重写 settings.json 把明文清掉。
+        /// 三态处理（Found / Migrate / KeepLegacy）与「绝不丢用户凭证」的兜底语义见 SecretSync.LoadFromStoreAsync。
         /// </summary>
-        public async Task LoadSecretsFromStoreAsync()
-        {
-            var keys = AppSecrets.Keys(Settings);
-            var lookups = await CredentialSecretStore.Instance.LookupAllAsync(keys).ConfigureAwait(false);
-            var legacy = AppSecrets.Extract(Settings);
-
-            var loaded = new Dictionary<SecretKey, string>();
-            var toMigrate = new Dictionary<SecretKey, string>();
-            var unreadable = new HashSet<SecretKey>();
-            foreach (var key in keys)
-            {
-                var lookup = lookups.TryGetValue(key, out var l) ? l : SecretLookup.Unavailable;
-                legacy.TryGetValue(key, out var legacyValue);
-                var action = AppSecrets.ResolveLoad(lookup, legacyValue);
-                switch (action.Kind)
-                {
-                    case AppSecrets.LoadActionKind.UseStored:
-                        loaded[key] = action.Value ?? string.Empty;
-                        break;
-                    case AppSecrets.LoadActionKind.Migrate:
-                        toMigrate[key] = action.Value ?? string.Empty;
-                        break;
-                    case AppSecrets.LoadActionKind.KeepLegacy:
-                        unreadable.Add(key);
-                        break;
-                    default:
-                        break;
-                }
-            }
-
-            var migrationFailed = false;
-            foreach (var kv in toMigrate)
-            {
-                if (await CredentialSecretStore.Instance.SetAsync(kv.Key, kv.Value).ConfigureAwait(false))
-                {
-                    loaded[kv.Key] = kv.Value;
-                }
-                else
-                {
-                    migrationFailed = true;
-                    Log.Error("lifecycle", $"凭证迁移写入凭据管理器失败 account={kv.Key}");
-                }
-            }
-
-            AppSecrets.Apply(loaded, Settings);
-            _persistedSecrets = loaded;
-            _unreadableSecretKeys = unreadable;
-            _secretsLoaded = true;
-
-            var allTrustworthy = unreadable.Count == 0 && !migrationFailed;
-            if (allTrustworthy != Settings.SecretsInKeychain || toMigrate.Count > 0)
-            {
-                Settings.SecretsInKeychain = allTrustworthy;
-                // 迁移成功后重写一次 settings.json 把明文清掉；失败则保持明文落盘，下次启动重试
-                PersistSettingsToDisk();
-            }
-            Log.Notice("lifecycle",
-                $"凭证加载完成：loaded={loaded.Count} migrated={toMigrate.Count} unreadable={unreadable.Count} secretsInKeychain={allTrustworthy}");
-            // 读不到与写不进是两种故障，横幅文案不同：读不到时凭证仍以旧明文运行，
-            // 写不进时是迁移没能落地。两者同时出现时以「读不到」为准（更根本）。
-            SetSecretStoreError(
-                unreadable.Count > 0 ? SecretStoreErrorKind.Unavailable
-                : migrationFailed ? SecretStoreErrorKind.WriteFailed
-                : null);
-        }
-
-        /// <summary>
-        /// 把内存里变更过的凭证同步到凭据管理器。失败时不降级明文进内存以外的地方：保留内存值、
-        /// 置 SecretStoreErrorState 提示用户，并把 SecretsInKeychain 打回 false 重写 settings.json 兜底，避免丢凭证。
-        /// </summary>
-        /// <param name="current">
-        /// 凭证快照，**必须由调用方在 UI 线程上取好再传进来**。在这里现取会让线程池线程读 Settings，
-        /// 与用户在设置页继续编辑形成竞态（mac 端整个流程都在 MainActor 上，天然没有这个问题）。
-        /// </param>
-        private async Task SyncSecretsToStoreAsync(Dictionary<SecretKey, string> current)
-        {
-            if (!_secretsLoaded) return;
-
-            await _secretSyncGate.WaitAsync().ConfigureAwait(false);
-            try
-            {
-                var keys = new HashSet<SecretKey>(current.Keys);
-                keys.UnionWith(_persistedSecrets.Keys);
-
-                var writes = new Dictionary<SecretKey, string>();
-                var deletes = new List<SecretKey>();
-                foreach (var key in keys)
-                {
-                    current.TryGetValue(key, out var cur);
-                    _persistedSecrets.TryGetValue(key, out var prev);
-                    var action = AppSecrets.ResolveSave(cur, prev, storeReadable: !_unreadableSecretKeys.Contains(key));
-                    switch (action.Kind)
-                    {
-                        case AppSecrets.SaveActionKind.Write:
-                            writes[key] = action.Value ?? string.Empty;
-                            break;
-                        case AppSecrets.SaveActionKind.Delete:
-                            deletes.Add(key);
-                            break;
-                        default:
-                            break;
-                    }
-                }
-                if (writes.Count == 0 && deletes.Count == 0) return;
-
-                var failed = false;
-                foreach (var kv in writes)
-                {
-                    if (await CredentialSecretStore.Instance.SetAsync(kv.Key, kv.Value).ConfigureAwait(false))
-                    {
-                        _persistedSecrets[kv.Key] = kv.Value;
-                        _unreadableSecretKeys.Remove(kv.Key);
-                    }
-                    else
-                    {
-                        failed = true;
-                        Log.Error("lifecycle", $"凭证写入凭据管理器失败 account={kv.Key}");
-                    }
-                }
-                foreach (var key in deletes)
-                {
-                    if (await CredentialSecretStore.Instance.DeleteAsync(key).ConfigureAwait(false))
-                    {
-                        _persistedSecrets.Remove(key);
-                    }
-                    else
-                    {
-                        failed = true;
-                        Log.Error("lifecycle", $"凭证从凭据管理器删除失败 account={key}");
-                    }
-                }
-
-                if (failed)
-                {
-                    SetSecretStoreError(SecretStoreErrorKind.WriteFailed);
-                    if (Settings.SecretsInKeychain)
-                    {
-                        Settings.SecretsInKeychain = false;
-                        PersistSettingsToDisk();
-                    }
-                }
-                else if (SecretStoreErrorState != null && _unreadableSecretKeys.Count == 0)
-                {
-                    SetSecretStoreError(null);
-                    if (!Settings.SecretsInKeychain)
-                    {
-                        Settings.SecretsInKeychain = true;
-                        PersistSettingsToDisk();
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Log.Error("lifecycle", $"同步凭证到凭据管理器异常: {ex}");
-            }
-            finally
-            {
-                _secretSyncGate.Release();
-            }
-        }
-
-        private void SetSecretStoreError(SecretStoreErrorKind? kind)
-        {
-            if (SecretStoreErrorState == kind) return;
-            SecretStoreErrorState = kind;
-            var app = System.Windows.Application.Current;
-            if (app != null && app.Dispatcher != null)
-            {
-                app.Dispatcher.InvokeAsync(() => OnSecretStoreErrorChanged?.Invoke());
-            }
-            else
-            {
-                OnSecretStoreErrorChanged?.Invoke();
-            }
-        }
+        public Task LoadSecretsFromStoreAsync() => _secretSync.LoadFromStoreAsync();
 
         private void SetupInitialData()
         {
@@ -411,64 +225,22 @@ namespace TokenBar.Services
 
         public void LoadSettings()
         {
-            try
-            {
-                if (File.Exists(_configFilePath))
-                {
-                    var json = File.ReadAllText(_configFilePath);
-                    var loaded = JsonSerializer.Deserialize<AppSettings>(json);
-                    if (loaded != null) Settings = loaded;
-                }
-            }
-            catch (Exception ex)
-            {
-                // 读坏了的配置不能原地覆盖：改名保留现场，用户还能从里面把 API Key 抄回来
-                Settings = new AppSettings();
-                Log.Error("settings", $"settings.json 读取失败，已改名保留: {ex.Message}");
-                try
-                {
-                    var corrupt = _configFilePath + ".corrupt-" + DateTime.Now.ToString("yyyyMMddHHmmss");
-                    File.Move(_configFilePath, corrupt, overwrite: true);
-                    Log.Error("settings", $"损坏文件已改名为 {Path.GetFileName(corrupt)}");
-                }
-                catch (Exception moveEx)
-                {
-                    Log.Error("settings", $"改名损坏的 settings.json 失败: {moveEx.Message}");
-                }
-            }
+            // 文件缺失/反序列化出 null 时 Load 原样返回当前 Settings（引用不变），
+            // 读取异常时返回全新 AppSettings 并把损坏文件改名保留 —— 与原实现逐字等价
+            Settings = _settingsStore.Load(Settings);
 
             LocalizationManager.Instance.CurrentLanguage = Settings.Language;
         }
 
-        private readonly object _saveLock = new();
-
         /// <summary>只写 settings.json（凭证字段是否落盘由 Settings.SecretsInKeychain 决定），不碰凭据管理器</summary>
-        private void PersistSettingsToDisk()
-        {
-            try
-            {
-                // SerializeForDisk 在 SecretsInKeychain 时序列化的是去掉凭证的副本，内存对象保持明文
-                var json = Settings.SerializeForDisk();
-                // 先写临时文件再原子替换：进程在写到一半时被杀，不会留下半截 JSON
-                lock (_saveLock)
-                {
-                    var tmp = _configFilePath + ".tmp";
-                    File.WriteAllText(tmp, json);
-                    File.Move(tmp, _configFilePath, overwrite: true);
-                }
-            }
-            catch (Exception ex)
-            {
-                Log.Error("settings", $"settings.json 写入失败: {ex.Message}");
-            }
-        }
+        private void PersistSettingsToDisk() => _settingsStore.Save(Settings);
 
         public void SaveSettings()
         {
             PersistSettingsToDisk();
             // 凭证差异写入凭据管理器在后台进行；失败会置 SecretStoreErrorState 并把明文重写回 settings.json 兜底。
             // 快照在这里（调用线程）取，后台任务只用这份不可变副本。
-            _ = SyncSecretsToStoreAsync(AppSecrets.Extract(Settings));
+            _ = _secretSync.SyncToStoreAsync(AppSecrets.Extract(Settings));
 
             try
             {
@@ -778,20 +550,139 @@ namespace TokenBar.Services
             return latest;
         }
 
-        public Task RefreshOpenAIAsync(CancellationToken ct = default, long? generation = null) =>
-            WithProviderLockAsync("openai", ct, () => RefreshOpenAICoreAsync(ct, generation));
+        // ---------- 六个简单厂商的表驱动 ----------
+        //
+        // OpenAI / DeepSeek / Volcengine / Kimi / OpenRouter / GLM 六份 Core 的骨架逐字相同：
+        // 置 IsLoading → 空 Key 检查 → Fetch → IsStaleGeneration → 写回 6 个字段（FiveHourWindow/
+        // WeeklyWindow/AccountInfo/IsAuthorized/HadRefreshError/LastUpdated）→ catch 记 HadRefreshError
+        // → finally 收尾 Notify。差异只有四点，全部收进 SimpleProviderSpec：
+        //   1) settings 的 Key 字段（ApiKey）；
+        //   2) 空 Key 文案（MissingKeyZh/En；GLM 中文是大写 "KEY"、英文是 "Key"，逐字保留）；
+        //   3) 服务调用签名（Fetch：参数个数/顺序不同，有的带 model / balanceAlertThreshold；
+        //      返回槽位名 (FiveHour,Weekly) 与 (Primary,Secondary) 只是元命名差异，写回目标字段相同）；
+        //   4) 成功写回后的余额提醒（AfterSuccess：DeepSeek/Kimi 用 WeeklyWindow，OpenRouter 用
+        //      FiveHourWindow，其余三家没有）。
+        // 错误分类（HadRefreshError=true + ErrorMessage=ex.Message + Log.Error）与 IsAuthorized 语义
+        // （空 Key → false；成功 → true；失败保留原状）六家完全一致，留在执行器里。
+        // Claude / Gemini / AliyunBailian / CustomProvider 有多授权通道、令牌刷新、MissingCredentials
+        // 特判等结构性差异，保留显式实现，不进表。
 
-        private async Task RefreshOpenAICoreAsync(CancellationToken ct, long? generation)
+        private sealed class SimpleProviderSpec
         {
-            var quota = Quotas[ProviderType.OpenAI];
+            /// <summary>锁名 / 日志名（与 WithProviderLockAsync、Log 里的 provider= 一致）</summary>
+            public required string Name { get; init; }
+            public required ProviderType Provider { get; init; }
+            public required Func<AppSettings, string?> ApiKey { get; init; }
+            public required string MissingKeyZh { get; init; }
+            public required string MissingKeyEn { get; init; }
+            public required Func<RefreshManager, CancellationToken, Task<(TokenWindow?, TokenWindow?, string?)>> Fetch { get; init; }
+            /// <summary>成功写回后的附加动作（余额提醒）；null 表示没有。在 try 内执行，与原实现一致。</summary>
+            public Action<RefreshManager, ProviderQuota>? AfterSuccess { get; init; }
+        }
+
+        private static readonly SimpleProviderSpec OpenAISpec = new()
+        {
+            Name = "openai",
+            Provider = ProviderType.OpenAI,
+            ApiKey = s => s.OpenAIApiKey,
+            MissingKeyZh = "请在配置中输入 OpenAI API Key",
+            MissingKeyEn = "Please configure OpenAI API Key",
+            Fetch = (m, ct) => OpenAIService.Instance.FetchQuotaAsync(
+                m.Settings.OpenAIApiKey,
+                m.Settings.OpenAIEndpoint,
+                m.Settings.OpenAIOrgId,
+                ct)
+        };
+
+        private static readonly SimpleProviderSpec DeepSeekSpec = new()
+        {
+            Name = "deepseek",
+            Provider = ProviderType.DeepSeek,
+            ApiKey = s => s.DeepSeekApiKey,
+            MissingKeyZh = "请在配置中输入 DeepSeek API Key",
+            MissingKeyEn = "Please configure DeepSeek API Key",
+            Fetch = (m, ct) => DeepSeekService.Instance.FetchQuotaAsync(
+                m.Settings.DeepSeekApiKey,
+                m.Settings.DeepSeekEndpoint,
+                m.Settings.DeepSeekModel,
+                m.Settings.DeepSeekBalanceAlertThreshold,
+                ct),
+            AfterSuccess = (m, q) => m.ProcessBalance("deepseek", ProviderType.DeepSeek.GetDisplayName(),
+                q.WeeklyWindow, m.Settings.DeepSeekBalanceAlertThreshold)
+        };
+
+        private static readonly SimpleProviderSpec VolcengineSpec = new()
+        {
+            Name = "volcengine",
+            Provider = ProviderType.Volcengine,
+            ApiKey = s => s.VolcengineApiKey,
+            MissingKeyZh = "请在配置中输入火山方舟 API Key",
+            MissingKeyEn = "Please configure Volcengine Ark API Key",
+            Fetch = (m, ct) => VolcengineService.Instance.FetchQuotaAsync(
+                m.Settings.VolcengineApiKey,
+                m.Settings.VolcengineEndpoint,
+                m.Settings.VolcengineModel,
+                ct)
+        };
+
+        private static readonly SimpleProviderSpec KimiSpec = new()
+        {
+            Name = "kimi",
+            Provider = ProviderType.Kimi,
+            ApiKey = s => s.KimiApiKey,
+            MissingKeyZh = "请在配置中输入 KIMI API Key",
+            MissingKeyEn = "Please configure KIMI API Key",
+            Fetch = (m, ct) => KimiService.Instance.FetchQuotaAsync(
+                m.Settings.KimiApiKey,
+                m.Settings.KimiEndpoint,
+                m.Settings.KimiModel,
+                m.Settings.KimiBalanceAlertThreshold,
+                ct),
+            AfterSuccess = (m, q) => m.ProcessBalance("kimi", ProviderType.Kimi.GetDisplayName(),
+                q.WeeklyWindow, m.Settings.KimiBalanceAlertThreshold)
+        };
+
+        private static readonly SimpleProviderSpec OpenRouterSpec = new()
+        {
+            Name = "openrouter",
+            Provider = ProviderType.OpenRouter,
+            ApiKey = s => s.OpenRouterApiKey,
+            MissingKeyZh = "请在配置中输入 OpenRouter API Key",
+            MissingKeyEn = "Please configure OpenRouter API Key",
+            Fetch = (m, ct) => OpenRouterService.Instance.FetchQuotaAsync(
+                m.Settings.OpenRouterApiKey,
+                m.Settings.OpenRouterEndpoint,
+                m.Settings.OpenRouterBalanceAlertThreshold,
+                ct),
+            AfterSuccess = (m, q) => m.ProcessBalance("openrouter", ProviderType.OpenRouter.GetDisplayName(),
+                q.FiveHourWindow, m.Settings.OpenRouterBalanceAlertThreshold)
+        };
+
+        private static readonly SimpleProviderSpec GLMSpec = new()
+        {
+            Name = "glm",
+            Provider = ProviderType.GLM,
+            ApiKey = s => s.GLMApiKey,
+            MissingKeyZh = "请在配置中输入 GLM API KEY",
+            MissingKeyEn = "Please configure GLM API Key",
+            Fetch = (m, ct) => GLMService.Instance.FetchQuotaAsync(
+                m.Settings.GLMApiKey,
+                m.Settings.GLMEndpoint,
+                ct)
+        };
+
+        /// <summary>六个简单厂商的唯一执行器，骨架逐字取自原六份 RefreshXxxCoreAsync。</summary>
+        private async Task RefreshSimpleProviderCoreAsync(SimpleProviderSpec spec, CancellationToken ct, long? generation)
+        {
+            var quota = Quotas[spec.Provider];
             quota.IsLoading = true;
             quota.ErrorMessage = null;
             NotifyQuotasUpdated();
 
-            if (string.IsNullOrWhiteSpace(Settings.OpenAIApiKey))
+            if (string.IsNullOrWhiteSpace(spec.ApiKey(Settings)))
             {
                 quota.IsAuthorized = false;
-                quota.ErrorMessage = LocalizationManager.Instance.IsChinese ? "请在配置中输入 OpenAI API Key" : "Please configure OpenAI API Key";
+                quota.ErrorMessage = LocalizationManager.Instance.IsChinese ? spec.MissingKeyZh : spec.MissingKeyEn;
                 quota.IsLoading = false;
                 NotifyQuotasUpdated();
                 return;
@@ -799,29 +690,28 @@ namespace TokenBar.Services
 
             try
             {
-                var (primary, secondary, account) = await OpenAIService.Instance.FetchQuotaAsync(
-                    Settings.OpenAIApiKey,
-                    Settings.OpenAIEndpoint,
-                    Settings.OpenAIOrgId,
-                    ct);
+                var (primary, secondary, account) = await spec.Fetch(this, ct);
 
-                if (IsStaleGeneration(generation, "openai")) return;
+                if (IsStaleGeneration(generation, spec.Name)) return;
+
                 quota.FiveHourWindow = primary;
                 quota.WeeklyWindow = secondary;
                 quota.AccountInfo = account;
                 quota.IsAuthorized = true;
                 quota.HadRefreshError = false;
                 quota.LastUpdated = DateTime.Now;
+
+                spec.AfterSuccess?.Invoke(this, quota);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex)
             {
-                if (IsStaleGeneration(generation, "openai")) return;
+                if (IsStaleGeneration(generation, spec.Name)) return;
                 // Key 已配置的失败按「刷新失败」处理：可能是开机网络未就绪等瞬时故障，
                 // 打回未授权会让卡片显示「去配置」误导用户。授权态与旧数据保留，成功后回落。
                 quota.HadRefreshError = true;
                 quota.ErrorMessage = ex.Message;
-                Log.Error("provider", $"provider=openai failed: {ex.Message}");
+                Log.Error("provider", $"provider={spec.Name} failed: {ex.Message}");
             }
             finally
             {
@@ -829,6 +719,9 @@ namespace TokenBar.Services
                 NotifyQuotasUpdated();
             }
         }
+
+        public Task RefreshOpenAIAsync(CancellationToken ct = default, long? generation = null) =>
+            WithProviderLockAsync(OpenAISpec.Name, ct, () => RefreshSimpleProviderCoreAsync(OpenAISpec, ct, generation));
 
         public Task RefreshClaudeAsync(CancellationToken ct = default, long? generation = null) =>
             WithProviderLockAsync("claude", ct, () => RefreshClaudeCoreAsync(ct, generation));
@@ -1047,269 +940,19 @@ namespace TokenBar.Services
         }
 
         public Task RefreshDeepSeekAsync(CancellationToken ct = default, long? generation = null) =>
-            WithProviderLockAsync("deepseek", ct, () => RefreshDeepSeekCoreAsync(ct, generation));
-
-        private async Task RefreshDeepSeekCoreAsync(CancellationToken ct, long? generation)
-        {
-            var quota = Quotas[ProviderType.DeepSeek];
-            quota.IsLoading = true;
-            quota.ErrorMessage = null;
-            NotifyQuotasUpdated();
-
-            if (string.IsNullOrWhiteSpace(Settings.DeepSeekApiKey))
-            {
-                quota.IsAuthorized = false;
-                quota.ErrorMessage = LocalizationManager.Instance.IsChinese ? "请在配置中输入 DeepSeek API Key" : "Please configure DeepSeek API Key";
-                quota.IsLoading = false;
-                NotifyQuotasUpdated();
-                return;
-            }
-
-            try
-            {
-                var (primary, secondary, account) = await DeepSeekService.Instance.FetchQuotaAsync(
-                    Settings.DeepSeekApiKey,
-                    Settings.DeepSeekEndpoint,
-                    Settings.DeepSeekModel,
-                    Settings.DeepSeekBalanceAlertThreshold,
-                    ct);
-
-                if (IsStaleGeneration(generation, "deepseek")) return;
-
-                quota.FiveHourWindow = primary;
-                quota.WeeklyWindow = secondary;
-                quota.AccountInfo = account;
-                quota.IsAuthorized = true;
-                quota.HadRefreshError = false;
-                quota.LastUpdated = DateTime.Now;
-
-                ProcessBalance("deepseek", ProviderType.DeepSeek.GetDisplayName(),
-                    quota.WeeklyWindow, Settings.DeepSeekBalanceAlertThreshold);
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-            catch (Exception ex)
-            {
-                if (IsStaleGeneration(generation, "deepseek")) return;
-                quota.HadRefreshError = true;
-                quota.ErrorMessage = ex.Message;
-                Log.Error("provider", $"provider=deepseek failed: {ex.Message}");
-            }
-            finally
-            {
-                quota.IsLoading = false;
-                NotifyQuotasUpdated();
-            }
-        }
+            WithProviderLockAsync(DeepSeekSpec.Name, ct, () => RefreshSimpleProviderCoreAsync(DeepSeekSpec, ct, generation));
 
         public Task RefreshVolcengineAsync(CancellationToken ct = default, long? generation = null) =>
-            WithProviderLockAsync("volcengine", ct, () => RefreshVolcengineCoreAsync(ct, generation));
-
-        private async Task RefreshVolcengineCoreAsync(CancellationToken ct, long? generation)
-        {
-            var quota = Quotas[ProviderType.Volcengine];
-            quota.IsLoading = true;
-            quota.ErrorMessage = null;
-            NotifyQuotasUpdated();
-
-            if (string.IsNullOrWhiteSpace(Settings.VolcengineApiKey))
-            {
-                quota.IsAuthorized = false;
-                quota.ErrorMessage = LocalizationManager.Instance.IsChinese ? "请在配置中输入火山方舟 API Key" : "Please configure Volcengine Ark API Key";
-                quota.IsLoading = false;
-                NotifyQuotasUpdated();
-                return;
-            }
-
-            try
-            {
-                var (primary, secondary, account) = await VolcengineService.Instance.FetchQuotaAsync(
-                    Settings.VolcengineApiKey,
-                    Settings.VolcengineEndpoint,
-                    Settings.VolcengineModel,
-                    ct);
-
-                if (IsStaleGeneration(generation, "volcengine")) return;
-
-                quota.FiveHourWindow = primary;
-                quota.WeeklyWindow = secondary;
-                quota.AccountInfo = account;
-                quota.IsAuthorized = true;
-                quota.HadRefreshError = false;
-                quota.LastUpdated = DateTime.Now;
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-            catch (Exception ex)
-            {
-                if (IsStaleGeneration(generation, "volcengine")) return;
-                quota.HadRefreshError = true;
-                quota.ErrorMessage = ex.Message;
-                Log.Error("provider", $"provider=volcengine failed: {ex.Message}");
-            }
-            finally
-            {
-                quota.IsLoading = false;
-                NotifyQuotasUpdated();
-            }
-        }
+            WithProviderLockAsync(VolcengineSpec.Name, ct, () => RefreshSimpleProviderCoreAsync(VolcengineSpec, ct, generation));
 
         public Task RefreshKimiAsync(CancellationToken ct = default, long? generation = null) =>
-            WithProviderLockAsync("kimi", ct, () => RefreshKimiCoreAsync(ct, generation));
-
-        private async Task RefreshKimiCoreAsync(CancellationToken ct, long? generation)
-        {
-            var quota = Quotas[ProviderType.Kimi];
-            quota.IsLoading = true;
-            quota.ErrorMessage = null;
-            NotifyQuotasUpdated();
-
-            if (string.IsNullOrWhiteSpace(Settings.KimiApiKey))
-            {
-                quota.IsAuthorized = false;
-                quota.ErrorMessage = LocalizationManager.Instance.IsChinese ? "请在配置中输入 KIMI API Key" : "Please configure KIMI API Key";
-                quota.IsLoading = false;
-                NotifyQuotasUpdated();
-                return;
-            }
-
-            try
-            {
-                var (primary, secondary, account) = await KimiService.Instance.FetchQuotaAsync(
-                    Settings.KimiApiKey,
-                    Settings.KimiEndpoint,
-                    Settings.KimiModel,
-                    Settings.KimiBalanceAlertThreshold,
-                    ct);
-
-                if (IsStaleGeneration(generation, "kimi")) return;
-
-                quota.FiveHourWindow = primary;
-                quota.WeeklyWindow = secondary;
-                quota.AccountInfo = account;
-                quota.IsAuthorized = true;
-                quota.HadRefreshError = false;
-                quota.LastUpdated = DateTime.Now;
-
-                ProcessBalance("kimi", ProviderType.Kimi.GetDisplayName(),
-                    quota.WeeklyWindow, Settings.KimiBalanceAlertThreshold);
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-            catch (Exception ex)
-            {
-                if (IsStaleGeneration(generation, "kimi")) return;
-                quota.HadRefreshError = true;
-                quota.ErrorMessage = ex.Message;
-                Log.Error("provider", $"provider=kimi failed: {ex.Message}");
-            }
-            finally
-            {
-                quota.IsLoading = false;
-                NotifyQuotasUpdated();
-            }
-        }
+            WithProviderLockAsync(KimiSpec.Name, ct, () => RefreshSimpleProviderCoreAsync(KimiSpec, ct, generation));
 
         public Task RefreshOpenRouterAsync(CancellationToken ct = default, long? generation = null) =>
-            WithProviderLockAsync("openrouter", ct, () => RefreshOpenRouterCoreAsync(ct, generation));
-
-        private async Task RefreshOpenRouterCoreAsync(CancellationToken ct, long? generation)
-        {
-            var quota = Quotas[ProviderType.OpenRouter];
-            quota.IsLoading = true;
-            quota.ErrorMessage = null;
-            NotifyQuotasUpdated();
-
-            if (string.IsNullOrWhiteSpace(Settings.OpenRouterApiKey))
-            {
-                quota.IsAuthorized = false;
-                quota.ErrorMessage = LocalizationManager.Instance.IsChinese ? "请在配置中输入 OpenRouter API Key" : "Please configure OpenRouter API Key";
-                quota.IsLoading = false;
-                NotifyQuotasUpdated();
-                return;
-            }
-
-            try
-            {
-                var (primary, secondary, account) = await OpenRouterService.Instance.FetchQuotaAsync(
-                    Settings.OpenRouterApiKey,
-                    Settings.OpenRouterEndpoint,
-                    Settings.OpenRouterBalanceAlertThreshold,
-                    ct);
-
-                if (IsStaleGeneration(generation, "openrouter")) return;
-
-                quota.FiveHourWindow = primary;
-                quota.WeeklyWindow = secondary;
-                quota.AccountInfo = account;
-                quota.IsAuthorized = true;
-                quota.HadRefreshError = false;
-                quota.LastUpdated = DateTime.Now;
-
-                ProcessBalance("openrouter", ProviderType.OpenRouter.GetDisplayName(),
-                    quota.FiveHourWindow, Settings.OpenRouterBalanceAlertThreshold);
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-            catch (Exception ex)
-            {
-                if (IsStaleGeneration(generation, "openrouter")) return;
-                quota.HadRefreshError = true;
-                quota.ErrorMessage = ex.Message;
-                Log.Error("provider", $"provider=openrouter failed: {ex.Message}");
-            }
-            finally
-            {
-                quota.IsLoading = false;
-                NotifyQuotasUpdated();
-            }
-        }
+            WithProviderLockAsync(OpenRouterSpec.Name, ct, () => RefreshSimpleProviderCoreAsync(OpenRouterSpec, ct, generation));
 
         public Task RefreshGLMAsync(CancellationToken ct = default, long? generation = null) =>
-            WithProviderLockAsync("glm", ct, () => RefreshGLMCoreAsync(ct, generation));
-
-        private async Task RefreshGLMCoreAsync(CancellationToken ct, long? generation)
-        {
-            var quota = Quotas[ProviderType.GLM];
-            quota.IsLoading = true;
-            quota.ErrorMessage = null;
-            NotifyQuotasUpdated();
-
-            if (string.IsNullOrWhiteSpace(Settings.GLMApiKey))
-            {
-                quota.IsAuthorized = false;
-                quota.ErrorMessage = LocalizationManager.Instance.IsChinese ? "请在配置中输入 GLM API KEY" : "Please configure GLM API Key";
-                quota.IsLoading = false;
-                NotifyQuotasUpdated();
-                return;
-            }
-
-            try
-            {
-                var (fiveHour, weekly, account) = await GLMService.Instance.FetchQuotaAsync(
-                    Settings.GLMApiKey,
-                    Settings.GLMEndpoint,
-                    ct);
-
-                if (IsStaleGeneration(generation, "glm")) return;
-
-                quota.FiveHourWindow = fiveHour;
-                quota.WeeklyWindow = weekly;
-                quota.AccountInfo = account;
-                quota.IsAuthorized = true;
-                quota.HadRefreshError = false;
-                quota.LastUpdated = DateTime.Now;
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-            catch (Exception ex)
-            {
-                if (IsStaleGeneration(generation, "glm")) return;
-                quota.HadRefreshError = true;
-                quota.ErrorMessage = ex.Message;
-                Log.Error("provider", $"provider=glm failed: {ex.Message}");
-            }
-            finally
-            {
-                quota.IsLoading = false;
-                NotifyQuotasUpdated();
-            }
-        }
+            WithProviderLockAsync(GLMSpec.Name, ct, () => RefreshSimpleProviderCoreAsync(GLMSpec, ct, generation));
 
         public Task RefreshAliyunAsync(CancellationToken ct = default, long? generation = null) =>
             WithProviderLockAsync("aliyun", ct, () => RefreshAliyunCoreAsync(ct, generation));
@@ -1464,58 +1107,11 @@ namespace TokenBar.Services
         }
 
         /// <summary>
-        /// 余额窗口刷新成功后的统一处理：
-        /// 1) 记录与上次刷新的差值（内存）；2) 写入本地历史并计算"预计可用天数"；
-        /// 3) 低余额时触发一次托盘气泡提醒，恢复到阈值 1.2 倍以上后重新武装。
+        /// 余额窗口刷新成功后的统一处理（差值记录 / 本地历史 / 低余额气泡提醒）。
+        /// 状态机与气泡的实现在 BalanceMonitor，这里只做转发，调用点保持不变。
         /// </summary>
-        private void ProcessBalance(string providerKey, string displayName, TokenWindow? window, decimal threshold)
-        {
-            if (window == null || window.Kind != TokenWindowKind.Balance || !window.BalanceAmount.HasValue) return;
-            var amount = window.BalanceAmount.Value;
-
-            lock (_balanceLock)
-            {
-                if (_lastBalance.TryGetValue(providerKey, out var prev))
-                {
-                    window.LastDelta = amount - prev;
-                }
-                _lastBalance[providerKey] = amount;
-            }
-
-            BalanceHistoryStore.Record(providerKey, amount);
-            window.ForecastDays = BalanceHistoryStore.GetForecastDays(providerKey, amount);
-
-            if (threshold <= 0) return;
-
-            bool fire = false;
-            lock (_balanceLock)
-            {
-                if (amount < threshold)
-                {
-                    fire = _balanceAlerted.Add(providerKey);
-                }
-                else if (amount >= threshold * 1.2m)
-                {
-                    _balanceAlerted.Remove(providerKey);
-                }
-            }
-
-            if (fire)
-            {
-                var i18n = LocalizationManager.Instance;
-                var title = i18n.LowBalanceTitle;
-                var body = string.Format(i18n.LowBalanceBody, displayName, window.BalanceFormatted);
-                var app = System.Windows.Application.Current;
-                if (app != null && app.Dispatcher != null)
-                {
-                    app.Dispatcher.InvokeAsync(() => TrayIconManager.Instance?.ShowBalloon(title, body));
-                }
-                else
-                {
-                    TrayIconManager.Instance?.ShowBalloon(title, body);
-                }
-            }
-        }
+        private void ProcessBalance(string providerKey, string displayName, TokenWindow? window, decimal threshold) =>
+            _balanceMonitor.Process(providerKey, displayName, window, threshold);
 
         public bool ImportClaudeFromLocal()
         {
@@ -1576,15 +1172,11 @@ namespace TokenBar.Services
         {
             Settings.CustomProviders.RemoveAll(c => c.Id == id);
             CustomQuotas.TryRemove(id, out _);
-            lock (_balanceLock)
-            {
-                _lastBalance.Remove($"custom:{id}");
-                _balanceAlerted.Remove($"custom:{id}");
-            }
+            _balanceMonitor.Forget($"custom:{id}");
             BalanceHistoryStore.Clear($"custom:{id}");
             // 该厂商的两个凭据条目由 SaveSettings 的差异同步删除：它们从 Extract 结果里消失、
-            // 但仍在 _persistedSecrets 中，ResolveSave 会判成 Delete。不要在这里另开一条删除路径 ——
-            // 那会在线程池上与 SyncSecretsToStoreAsync 并发改同一个字典。
+            // 但仍在 SecretSync 的 _persistedSecrets 中，ResolveSave 会判成 Delete。不要在这里另开一条删除路径 ——
+            // 那会在线程池上与 SecretSync.SyncToStoreAsync 并发改同一个字典。
             SaveSettings();
             NotifyQuotasUpdated();
         }
@@ -1606,7 +1198,7 @@ namespace TokenBar.Services
                 NetworkChange.NetworkAvailabilityChanged -= OnNetworkAvailabilityChanged;
                 _networkHooked = false;
             }
-            _secretSyncGate.Dispose();
+            _secretSync.Dispose();
             lock (_timerLock)
             {
                 _timer?.Dispose();

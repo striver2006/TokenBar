@@ -39,6 +39,177 @@ public enum RefreshTimerHealth {
     }
 }
 
+/// 简单厂商刷新里「本轮结果 → ProviderQuota」的纯映射，供 `RefreshManager.runSimpleRefresh` 使用。
+/// 抽成静态纯函数（对齐 `RefreshTimerHealth`）是为了能单测：这几处的字段集合一旦漂移，表现是
+/// 「刷新失败却显示未配置」「拿到数据后卡片还在转圈」这类看不出来源的状态。
+enum SimpleQuotaTransition {
+    /// 入口：置加载中，清掉上一轮的错误文案
+    static func beginLoading(_ quota: ProviderQuota) -> ProviderQuota {
+        var updated = quota
+        updated.isLoading = true
+        updated.errorMessage = nil
+        return updated
+    }
+
+    /// Key 为空：未配置态（区别于「刷新失败」，不碰 hadRefreshError）。文案由调用方选定后传入
+    static func missingKey(_ quota: ProviderQuota, message: String) -> ProviderQuota {
+        var updated = quota
+        updated.isAuthorized = false
+        updated.errorMessage = message
+        return updated
+    }
+
+    /// 拿到数据：整体覆盖两个窗口 + 账号串（nil 也覆盖，与各 Service 语义一致），清错误态并
+    /// 推进 lastUpdated —— refreshAll 靠它判断本轮是否真的有收获
+    static func success(
+        _ quota: ProviderQuota,
+        fiveHour: TokenWindow?,
+        weekly: TokenWindow?,
+        account: String?,
+        now: Date
+    ) -> ProviderQuota {
+        var updated = quota
+        updated.fiveHourWindow = fiveHour
+        updated.weeklyWindow = weekly
+        updated.accountInfo = account
+        updated.isAuthorized = true
+        updated.hadRefreshError = false
+        updated.lastUpdated = now
+        return updated
+    }
+
+    /// 请求失败：只置「刷新失败」+ 文案，**不动** isAuthorized / lastUpdated / 旧窗口，
+    /// 卡片才能显示「重试」而不是「去配置」，网络恢复后旧数据仍在
+    static func failure(_ quota: ProviderQuota, message: String) -> ProviderQuota {
+        var updated = quota
+        updated.hadRefreshError = true
+        updated.errorMessage = message
+        return updated
+    }
+
+    /// 收尾：无论成败都要把卡片从转圈里放出来
+    static func finishLoading(_ quota: ProviderQuota) -> ProviderQuota {
+        var updated = quota
+        updated.isLoading = false
+        return updated
+    }
+}
+
+/// 「简单厂商」的刷新差异描述符。GLM / OpenAI / DeepSeek / Volcengine / Kimi / OpenRouter 六个
+/// refreshXxx 曾各占 36-51 行，逐段对比后差异只剩：ProviderType、settings 字段、空 Key 文案、
+/// service 调用签名与返回槽位名（`(fiveHour,weekly,account)` vs `(primary,secondary,account)`）、
+/// 余额后处理挂在哪个槽位。差异装进描述符后，公共流程只在执行器里写一遍。
+///
+/// Claude / Gemini / Aliyun / Custom **不进这张表**：双通道回退、本地凭证合并、钥匙串预取、
+/// refresh_token 回写、余额独立通道都是实质分支，塞进描述符只是把 if 换成闭包，反而更难读。
+struct ProviderRefreshDescriptor {
+    /// 余额后处理写回哪个槽位：DeepSeek/Kimi 并入周窗口，OpenRouter 并入主窗口
+    enum BalanceSlot { case fiveHour, weekly }
+
+    struct Balance {
+        let slot: BalanceSlot
+        /// 余额历史 / 差值 / 低余额通知去重的持久键；改动会让既有历史失联，故与 logName 分开声明
+        let providerKey: String
+        let threshold: (AppSettings) -> Double
+    }
+
+    let type: ProviderType
+    /// 日志里的固定厂商标识（不含凭证），与 refreshAll 中 runProvider 的注册名一致
+    let logName: String
+    /// 内存里缺 Key 时，用它区分「钥匙串读不到」与「真的未配置」
+    let secretKey: SecretKey
+    let missingKeyMessage: I18nKey
+    let apiKey: (AppSettings) -> String
+    /// 调 service，并把各家返回的槽位名归一到 (fiveHour, weekly, account)
+    let fetch: (AppSettings) async throws -> (fiveHour: TokenWindow?, weekly: TokenWindow?, account: String?)
+    /// nil 表示该厂商没有余额窗口
+    let balance: Balance?
+}
+
+extension ProviderRefreshDescriptor {
+    static let glm = ProviderRefreshDescriptor(
+        type: .glm, logName: "glm",
+        secretKey: .glmApiKey, missingKeyMessage: .errMissingGLMKey,
+        apiKey: { $0.glmApiKey },
+        fetch: { settings in
+            let res = try await GLMService.shared.fetchQuota(
+                apiKey: settings.glmApiKey, endpoint: settings.glmEndpoint)
+            return (res.fiveHour, res.weekly, res.account)
+        },
+        balance: nil
+    )
+
+    static let openAI = ProviderRefreshDescriptor(
+        type: .openAI, logName: "openai",
+        secretKey: .openAIApiKey, missingKeyMessage: .errMissingOpenAIKey,
+        apiKey: { $0.openAIApiKey },
+        fetch: { settings in
+            let res = try await OpenAIService.shared.fetchQuota(
+                apiKey: settings.openAIApiKey, endpoint: settings.openAIEndpoint,
+                organizationId: settings.openAIOrgId)
+            return (res.primary, res.secondary, res.account)
+        },
+        balance: nil
+    )
+
+    static let deepseek = ProviderRefreshDescriptor(
+        type: .deepseek, logName: "deepseek",
+        secretKey: .deepseekApiKey, missingKeyMessage: .errMissingDeepSeekKey,
+        apiKey: { $0.deepseekApiKey },
+        fetch: { settings in
+            let res = try await DeepSeekService.shared.fetchQuota(
+                apiKey: settings.deepseekApiKey, endpoint: settings.deepseekEndpoint,
+                model: settings.deepseekModel,
+                balanceAlertThreshold: settings.deepseekBalanceAlertThreshold)
+            return (res.fiveHour, res.weekly, res.account)
+        },
+        balance: Balance(slot: .weekly, providerKey: "deepseek",
+                         threshold: { $0.deepseekBalanceAlertThreshold })
+    )
+
+    static let volcengine = ProviderRefreshDescriptor(
+        type: .volcengine, logName: "volcengine",
+        secretKey: .volcengineApiKey, missingKeyMessage: .errMissingVolcengineKey,
+        apiKey: { $0.volcengineApiKey },
+        fetch: { settings in
+            let res = try await VolcengineService.shared.fetchQuota(
+                apiKey: settings.volcengineApiKey, endpoint: settings.volcengineEndpoint,
+                model: settings.volcengineModel)
+            return (res.fiveHour, res.weekly, res.account)
+        },
+        balance: nil
+    )
+
+    static let kimi = ProviderRefreshDescriptor(
+        type: .kimi, logName: "kimi",
+        secretKey: .kimiApiKey, missingKeyMessage: .errMissingKimiKey,
+        apiKey: { $0.kimiApiKey },
+        fetch: { settings in
+            let res = try await KimiService.shared.fetchQuota(
+                apiKey: settings.kimiApiKey, endpoint: settings.kimiEndpoint,
+                model: settings.kimiModel,
+                balanceAlertThreshold: settings.kimiBalanceAlertThreshold)
+            return (res.fiveHour, res.weekly, res.account)
+        },
+        balance: Balance(slot: .weekly, providerKey: "kimi",
+                         threshold: { $0.kimiBalanceAlertThreshold })
+    )
+
+    static let openRouter = ProviderRefreshDescriptor(
+        type: .openRouter, logName: "openrouter",
+        secretKey: .openRouterApiKey, missingKeyMessage: .errMissingOpenRouterKey,
+        apiKey: { $0.openRouterApiKey },
+        fetch: { settings in
+            let res = try await OpenRouterService.shared.fetchQuota(
+                apiKey: settings.openRouterApiKey, endpoint: settings.openRouterEndpoint,
+                balanceAlertThreshold: settings.openRouterBalanceAlertThreshold)
+            return (res.primary, res.secondary, res.account)
+        },
+        balance: Balance(slot: .fiveHour, providerKey: "openrouter",
+                         threshold: { $0.openRouterBalanceAlertThreshold })
+    )
+}
+
 @MainActor
 public final class RefreshManager: ObservableObject {
     public static let shared = RefreshManager()
@@ -633,6 +804,66 @@ public final class RefreshManager: ObservableObject {
         return (providerDates + customDates).max()
     }
 
+    // MARK: - 简单厂商的表驱动刷新
+
+    /// 六个简单厂商共用的执行器，流程与原 refreshGLM / refreshOpenAI / refreshDeepSeek /
+    /// refreshVolcengine / refreshKimi / refreshOpenRouter 逐句一致：
+    /// 置 loading 并立即 commit（卡片先转圈）→ 空 Key 判未配置后直接收尾 → 调 service →
+    /// 写窗口/账号/授权态 →（有余额的厂商）过一遍 processBalance → 失败只置 hadRefreshError
+    /// （保留授权态与旧数据）→ 收尾 commit。
+    ///
+    /// 两次 commit 都用入口处捕获的 `gen`，被闸门抢占的旧轮次写回会被丢弃 —— 这条语义
+    /// 由 `commit(_:for:gen:)` 统一保证，不在描述符里。
+    private func runSimpleRefresh(_ spec: ProviderRefreshDescriptor) async {
+        let gen = refreshGeneration
+        var quota = quotas[spec.type] ?? ProviderQuota(provider: spec.type)
+        quota = SimpleQuotaTransition.beginLoading(quota)
+        commit(quota, for: spec.type, gen: gen)
+
+        guard !spec.apiKey(settings).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            let message = I18n(missingKeyMessage(key: spec.secretKey, missing: spec.missingKeyMessage))
+            quota = SimpleQuotaTransition.missingKey(quota, message: message)
+            quota = SimpleQuotaTransition.finishLoading(quota)
+            commit(quota, for: spec.type, gen: gen)
+            return
+        }
+
+        do {
+            let res = try await spec.fetch(settings)
+            quota = SimpleQuotaTransition.success(
+                quota,
+                fiveHour: res.fiveHour,
+                weekly: res.weekly,
+                account: res.account,
+                now: Date()
+            )
+
+            if let balance = spec.balance {
+                // 阈值与 displayName 必须在 await 之后读：与原实现一致，设置页在请求期间
+                // 改过阈值时，本轮就按新阈值判低余额
+                let window = balance.slot == .fiveHour ? quota.fiveHourWindow : quota.weeklyWindow
+                let updated = await processBalance(
+                    providerKey: balance.providerKey,
+                    displayName: spec.type.displayName,
+                    window: window,
+                    threshold: balance.threshold(settings)
+                )
+                if balance.slot == .fiveHour {
+                    quota.fiveHourWindow = updated
+                } else {
+                    quota.weeklyWindow = updated
+                }
+            }
+        } catch {
+            // Key 已配置的失败按「刷新失败」处理（可能是网络未就绪），不算未配置
+            quota = SimpleQuotaTransition.failure(quota, message: error.localizedDescription)
+            Log.provider.error("provider=\(spec.logName, privacy: .public) failed: \(error.localizedDescription)")
+        }
+
+        quota = SimpleQuotaTransition.finishLoading(quota)
+        commit(quota, for: spec.type, gen: gen)
+    }
+
     public func refreshClaude() async {
         let gen = refreshGeneration
         var quota = quotas[.claudeCode] ?? ProviderQuota(provider: .claudeCode)
@@ -804,41 +1035,9 @@ public final class RefreshManager: ObservableObject {
         commit(quota, for: .gemini, gen: gen)
     }
 
+    /// 表驱动：公共流程见 `runSimpleRefresh`，本厂商的差异见 `ProviderRefreshDescriptor.glm`
     public func refreshGLM() async {
-        let gen = refreshGeneration
-        var quota = quotas[.glm] ?? ProviderQuota(provider: .glm)
-        quota.isLoading = true
-        quota.errorMessage = nil
-        commit(quota, for: .glm, gen: gen)
-
-        guard !settings.glmApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            quota.isAuthorized = false
-            quota.errorMessage = I18n(missingKeyMessage(key: .glmApiKey, missing: .errMissingGLMKey))
-            quota.isLoading = false
-            commit(quota, for: .glm, gen: gen)
-            return
-        }
-
-        do {
-            let res = try await GLMService.shared.fetchQuota(
-                apiKey: settings.glmApiKey,
-                endpoint: settings.glmEndpoint
-            )
-            quota.fiveHourWindow = res.fiveHour
-            quota.weeklyWindow = res.weekly
-            quota.accountInfo = res.account
-            quota.isAuthorized = true
-            quota.hadRefreshError = false
-            quota.lastUpdated = Date()
-        } catch {
-            // Key 已配置的失败按「刷新失败」处理（可能是网络未就绪），不算未配置
-            quota.hadRefreshError = true
-            quota.errorMessage = error.localizedDescription
-            Log.provider.error("provider=glm failed: \(error.localizedDescription)")
-        }
-
-        quota.isLoading = false
-        commit(quota, for: .glm, gen: gen)
+        await runSimpleRefresh(.glm)
     }
 
     public func refreshAliyun() async {
@@ -992,213 +1191,29 @@ public final class RefreshManager: ObservableObject {
         await refreshGemini()
     }
 
+    /// 表驱动：公共流程见 `runSimpleRefresh`，本厂商的差异见 `ProviderRefreshDescriptor.openAI`
     public func refreshOpenAI() async {
-        let gen = refreshGeneration
-        var quota = quotas[.openAI] ?? ProviderQuota(provider: .openAI)
-        quota.isLoading = true
-        quota.errorMessage = nil
-        commit(quota, for: .openAI, gen: gen)
-
-        guard !settings.openAIApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            quota.isAuthorized = false
-            quota.errorMessage = I18n(missingKeyMessage(key: .openAIApiKey, missing: .errMissingOpenAIKey))
-            quota.isLoading = false
-            commit(quota, for: .openAI, gen: gen)
-            return
-        }
-
-        do {
-            let res = try await OpenAIService.shared.fetchQuota(
-                apiKey: settings.openAIApiKey,
-                endpoint: settings.openAIEndpoint,
-                organizationId: settings.openAIOrgId
-            )
-            quota.fiveHourWindow = res.primary
-            quota.weeklyWindow = res.secondary
-            quota.accountInfo = res.account
-            quota.isAuthorized = true
-            quota.hadRefreshError = false
-            quota.lastUpdated = Date()
-        } catch {
-            // Key 已配置的失败按「刷新失败」处理（可能是网络未就绪），不算未配置
-            quota.hadRefreshError = true
-            quota.errorMessage = error.localizedDescription
-            Log.provider.error("provider=openai failed: \(error.localizedDescription)")
-        }
-
-        quota.isLoading = false
-        commit(quota, for: .openAI, gen: gen)
+        await runSimpleRefresh(.openAI)
     }
 
+    /// 表驱动：公共流程见 `runSimpleRefresh`，本厂商的差异见 `ProviderRefreshDescriptor.deepseek`
     public func refreshDeepSeek() async {
-        let gen = refreshGeneration
-        var quota = quotas[.deepseek] ?? ProviderQuota(provider: .deepseek)
-        quota.isLoading = true
-        quota.errorMessage = nil
-        commit(quota, for: .deepseek, gen: gen)
-
-        guard !settings.deepseekApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            quota.isAuthorized = false
-            quota.errorMessage = I18n(missingKeyMessage(key: .deepseekApiKey, missing: .errMissingDeepSeekKey))
-            quota.isLoading = false
-            commit(quota, for: .deepseek, gen: gen)
-            return
-        }
-
-        do {
-            let res = try await DeepSeekService.shared.fetchQuota(
-                apiKey: settings.deepseekApiKey,
-                endpoint: settings.deepseekEndpoint,
-                model: settings.deepseekModel,
-                balanceAlertThreshold: settings.deepseekBalanceAlertThreshold
-            )
-            quota.fiveHourWindow = res.fiveHour
-            quota.weeklyWindow = res.weekly
-            quota.accountInfo = res.account
-            quota.isAuthorized = true
-            quota.hadRefreshError = false
-            quota.lastUpdated = Date()
-
-            quota.weeklyWindow = await processBalance(
-                providerKey: "deepseek",
-                displayName: ProviderType.deepseek.displayName,
-                window: quota.weeklyWindow,
-                threshold: settings.deepseekBalanceAlertThreshold
-            )
-        } catch {
-            quota.hadRefreshError = true
-            quota.errorMessage = error.localizedDescription
-            Log.provider.error("provider=deepseek failed: \(error.localizedDescription)")
-        }
-
-        quota.isLoading = false
-        commit(quota, for: .deepseek, gen: gen)
+        await runSimpleRefresh(.deepseek)
     }
 
+    /// 表驱动：公共流程见 `runSimpleRefresh`，本厂商的差异见 `ProviderRefreshDescriptor.openRouter`
     public func refreshOpenRouter() async {
-        let gen = refreshGeneration
-        var quota = quotas[.openRouter] ?? ProviderQuota(provider: .openRouter)
-        quota.isLoading = true
-        quota.errorMessage = nil
-        commit(quota, for: .openRouter, gen: gen)
-
-        guard !settings.openRouterApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            quota.isAuthorized = false
-            quota.errorMessage = I18n(missingKeyMessage(key: .openRouterApiKey, missing: .errMissingOpenRouterKey))
-            quota.isLoading = false
-            commit(quota, for: .openRouter, gen: gen)
-            return
-        }
-
-        do {
-            let res = try await OpenRouterService.shared.fetchQuota(
-                apiKey: settings.openRouterApiKey,
-                endpoint: settings.openRouterEndpoint,
-                balanceAlertThreshold: settings.openRouterBalanceAlertThreshold
-            )
-            quota.fiveHourWindow = res.primary
-            quota.weeklyWindow = res.secondary
-            quota.accountInfo = res.account
-            quota.isAuthorized = true
-            quota.hadRefreshError = false
-            quota.lastUpdated = Date()
-
-            quota.fiveHourWindow = await processBalance(
-                providerKey: "openrouter",
-                displayName: ProviderType.openRouter.displayName,
-                window: quota.fiveHourWindow,
-                threshold: settings.openRouterBalanceAlertThreshold
-            )
-        } catch {
-            quota.hadRefreshError = true
-            quota.errorMessage = error.localizedDescription
-            Log.provider.error("provider=openrouter failed: \(error.localizedDescription)")
-        }
-
-        quota.isLoading = false
-        commit(quota, for: .openRouter, gen: gen)
+        await runSimpleRefresh(.openRouter)
     }
 
+    /// 表驱动：公共流程见 `runSimpleRefresh`，本厂商的差异见 `ProviderRefreshDescriptor.volcengine`
     public func refreshVolcengine() async {
-        let gen = refreshGeneration
-        var quota = quotas[.volcengine] ?? ProviderQuota(provider: .volcengine)
-        quota.isLoading = true
-        quota.errorMessage = nil
-        commit(quota, for: .volcengine, gen: gen)
-
-        guard !settings.volcengineApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            quota.isAuthorized = false
-            quota.errorMessage = I18n(missingKeyMessage(key: .volcengineApiKey, missing: .errMissingVolcengineKey))
-            quota.isLoading = false
-            commit(quota, for: .volcengine, gen: gen)
-            return
-        }
-
-        do {
-            let res = try await VolcengineService.shared.fetchQuota(
-                apiKey: settings.volcengineApiKey,
-                endpoint: settings.volcengineEndpoint,
-                model: settings.volcengineModel
-            )
-            quota.fiveHourWindow = res.fiveHour
-            quota.weeklyWindow = res.weekly
-            quota.accountInfo = res.account
-            quota.isAuthorized = true
-            quota.hadRefreshError = false
-            quota.lastUpdated = Date()
-        } catch {
-            quota.hadRefreshError = true
-            quota.errorMessage = error.localizedDescription
-            Log.provider.error("provider=volcengine failed: \(error.localizedDescription)")
-        }
-
-        quota.isLoading = false
-        commit(quota, for: .volcengine, gen: gen)
+        await runSimpleRefresh(.volcengine)
     }
 
+    /// 表驱动：公共流程见 `runSimpleRefresh`，本厂商的差异见 `ProviderRefreshDescriptor.kimi`
     public func refreshKimi() async {
-        let gen = refreshGeneration
-        var quota = quotas[.kimi] ?? ProviderQuota(provider: .kimi)
-        quota.isLoading = true
-        quota.errorMessage = nil
-        commit(quota, for: .kimi, gen: gen)
-
-        guard !settings.kimiApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            quota.isAuthorized = false
-            quota.errorMessage = I18n(missingKeyMessage(key: .kimiApiKey, missing: .errMissingKimiKey))
-            quota.isLoading = false
-            commit(quota, for: .kimi, gen: gen)
-            return
-        }
-
-        do {
-            let res = try await KimiService.shared.fetchQuota(
-                apiKey: settings.kimiApiKey,
-                endpoint: settings.kimiEndpoint,
-                model: settings.kimiModel,
-                balanceAlertThreshold: settings.kimiBalanceAlertThreshold
-            )
-            quota.fiveHourWindow = res.fiveHour
-            quota.weeklyWindow = res.weekly
-            quota.accountInfo = res.account
-            quota.isAuthorized = true
-            quota.hadRefreshError = false
-            quota.lastUpdated = Date()
-
-            quota.weeklyWindow = await processBalance(
-                providerKey: "kimi",
-                displayName: ProviderType.kimi.displayName,
-                window: quota.weeklyWindow,
-                threshold: settings.kimiBalanceAlertThreshold
-            )
-        } catch {
-            quota.hadRefreshError = true
-            quota.errorMessage = error.localizedDescription
-            Log.provider.error("provider=kimi failed: \(error.localizedDescription)")
-        }
-
-        quota.isLoading = false
-        commit(quota, for: .kimi, gen: gen)
+        await runSimpleRefresh(.kimi)
     }
 
     public func refreshCustomProvider(config: CustomProviderConfig) async {
