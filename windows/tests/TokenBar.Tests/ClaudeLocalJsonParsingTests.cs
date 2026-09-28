@@ -217,7 +217,8 @@ namespace TokenBar.Tests
         public void InvalidJson_Throws_ForCallerToSwallow()
         {
             // ReadLocalClaudeJson 的 try/catch 负责兜底并返回 null；纯函数如实上抛
-            Assert.Throws<JsonException>(() => { ClaudeService.ParseLocalClaudeJson("{ not json", Now); });
+            //（实际类型是 JsonException 的子类 JsonReaderException，故用 ThrowsAny）
+            Assert.ThrowsAny<JsonException>(() => { ClaudeService.ParseLocalClaudeJson("{ not json", Now); });
         }
 
         [Fact]
