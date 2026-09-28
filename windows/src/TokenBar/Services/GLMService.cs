@@ -18,8 +18,8 @@ namespace TokenBar.Services
         private GLMService() { }
 
         /// <summary>
-        /// 只在探测阶段「可选失败」时抛出：例如配额接口 404 / 返回格式不符。
-        /// 鉴权失败与网络错误不属于这一类，必须上抛让卡片显示错误。
+        /// 只在探测阶段「可选失败」时抛出：例如配额接口 404 / 401 / 403 / 返回格式不符。
+        /// /models 的鉴权失败与网络错误不属于这一类，必须上抛让卡片显示错误。
         /// </summary>
         private sealed class OptionalProbeException : Exception
         {
@@ -131,8 +131,8 @@ namespace TokenBar.Services
                 }
             }
 
-            // 2. 配额接口 /api/monitor/usage/quota/limit —— 这是「可选探测」：接口不存在 / 格式不符时
-            //    静默降级到速率头；但鉴权与网络错误仍然上抛。
+            // 2. 配额接口 /api/monitor/usage/quota/limit —— 这是「可选探测」：接口不存在 / 鉴权范围不符 /
+            //    格式不符时静默降级到速率头；网络错误与取消仍然上抛。
             TokenWindow? fiveHourWindow = null;
             TokenWindow? weeklyWindow = null;
 
@@ -191,15 +191,17 @@ namespace TokenBar.Services
             using var quotaReq = new HttpRequestMessage(HttpMethod.Get, quotaUrl);
             quotaReq.Headers.Add("Authorization", $"Bearer {cleanKey}");
             quotaReq.Headers.Add("Accept", "application/json");
+            // 与 mac 端对齐：该接口对 UA 敏感，裸 TokenBar UA 可能拿不到数据
+            quotaReq.Headers.TryAddWithoutValidation("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) TokenBar/1.0");
 
             using var quotaResp = await Http.Shared.SendAsync(quotaReq, ct);
 
             if (quotaResp.StatusCode == System.Net.HttpStatusCode.Unauthorized ||
                 quotaResp.StatusCode == System.Net.HttpStatusCode.Forbidden)
             {
-                throw new Exception(LocalizationManager.Instance.IsChinese
-                    ? $"GLM 配额接口鉴权失败 (HTTP {(int)quotaResp.StatusCode})"
-                    : $"GLM quota endpoint rejected the key (HTTP {(int)quotaResp.StatusCode})");
+                // 与 mac 端对齐：/models 已做过鉴权探测并硬抛 401/403；走到这里说明 Key 本身有效，
+                // 只是配额接口对该账号不可用（权限范围不同），静默降级到速率头而不是整卡报错。
+                throw new OptionalProbeException($"配额接口鉴权拒绝 (HTTP {(int)quotaResp.StatusCode})");
             }
             if (!quotaResp.IsSuccessStatusCode)
             {
