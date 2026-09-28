@@ -186,7 +186,7 @@ public struct TokenWindow: Identifiable, Codable {
         case "TPM 速率配额", "TPM 速率剩余": return I18n(.tpmRateLimitTitle)
         case "Token 速率配额": return I18n(.tokenRateLimitTitle)
         case "5小时算力额度": return I18n(.fiveHourComputeQuotaTitle)
-        case "API 连接正常", "接口连接正常", "Anthropic 协议连接正常", "Anthropic API 连接正常", "DeepSeek 连接正常", "KIMI 连接正常", "接入点连接正常", "API 连接状态":
+        case "API 连接正常", "接口连接正常", "Anthropic 协议连接正常", "Anthropic API 连接正常", "DeepSeek 连接正常", "KIMI 连接正常", "OpenRouter 连接正常", "接入点连接正常", "API 连接状态":
             return I18n(.apiConnectedTitle)
         case "AI Studio 配额":
             return "AI Studio Quota"

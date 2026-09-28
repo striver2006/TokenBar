@@ -648,7 +648,12 @@ namespace TokenBar.Views
             UpdateOne(ProviderType.GLM, TxtGLMStatusDot, TxtGLMStatus, TxtGLMAccount);
             UpdateOne(ProviderType.AliyunBailian, TxtAliyunStatusDot, TxtAliyunStatus, TxtAliyunAccount);
 
-            RenderCustomProvidersList();
+            // 自定义厂商列表是整段重建：只有 Custom tab 正在显示时才值得做
+            //（切到 Custom tab 时 SwitchToTab 会自行渲染最新状态）。
+            if (_currentTab == SettingsTab.Custom)
+            {
+                RenderCustomProvidersList();
+            }
         }
 
         private static decimal ParseThreshold(string? text, decimal fallback)

@@ -24,6 +24,8 @@ namespace TokenBar.Views
     {
         // 浮窗是单实例复用的：普通 Close 只隐藏，只有 ForceClose（退出应用）才真正关闭
         private bool _allowClose;
+        // 隐藏期间收到配额通知不重建视觉树（一轮刷新 ≥20 次通知），记脏等显示时补一次
+        private bool _renderDirty;
 
         public PopoverWindow()
         {
@@ -31,6 +33,7 @@ namespace TokenBar.Views
             UpdateTexts();
             LocalizationManager.Instance.PropertyChanged += OnLanguageChanged;
             RefreshManager.Instance.OnQuotasUpdated += OnQuotasUpdated;
+            IsVisibleChanged += OnWindowIsVisibleChanged;
             Closing += OnClosingHideInstead;
             Closed += OnClosedUnsubscribe;
         }
@@ -52,6 +55,7 @@ namespace TokenBar.Views
         {
             LocalizationManager.Instance.PropertyChanged -= OnLanguageChanged;
             RefreshManager.Instance.OnQuotasUpdated -= OnQuotasUpdated;
+            IsVisibleChanged -= OnWindowIsVisibleChanged;
             Closing -= OnClosingHideInstead;
             Closed -= OnClosedUnsubscribe;
         }
@@ -81,7 +85,24 @@ namespace TokenBar.Views
                 TxtFooter.Text = i18n.Ready;
             }
 
-            RenderCards();
+            if (IsVisible)
+            {
+                RenderCards();
+                _renderDirty = false;
+            }
+            else
+            {
+                _renderDirty = true;
+            }
+        }
+
+        private void OnWindowIsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
+        {
+            if (IsVisible && _renderDirty)
+            {
+                _renderDirty = false;
+                UpdateTexts();
+            }
         }
 
         private void RenderCards()
