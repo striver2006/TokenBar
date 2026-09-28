@@ -32,7 +32,8 @@ namespace TokenBar.Tests
                 Budget, Grace);
 
             Assert.Equal(ProviderRunOutcome.TimedOut, result.Outcome);
-            Assert.IsType<OperationCanceledException>(result.Error);
+            // Task.Delay 取消抛的是 TaskCanceledException（OperationCanceledException 子类）
+            Assert.IsAssignableFrom<OperationCanceledException>(result.Error);
         }
 
         [Fact]
@@ -50,12 +51,13 @@ namespace TokenBar.Tests
         }
 
         [Fact]
-        public async Task ThrowingBodyIsFaulted()
+        public async Task SyncThrowingBodyIsStartFailed()
         {
+            // body 同步抛出（参数校验之类）：还没进入等待就失败，归类 StartFailed
             var result = await ProviderBudgetRunner.RunAsync(
                 _ => throw new InvalidOperationException("boom"), Budget, Grace);
 
-            Assert.Equal(ProviderRunOutcome.Faulted, result.Outcome);
+            Assert.Equal(ProviderRunOutcome.StartFailed, result.Outcome);
             Assert.IsType<InvalidOperationException>(result.Error);
         }
 
