@@ -5,6 +5,17 @@ import Foundation
 public final class ClaudeService: @unchecked Sendable {
     public static let shared = ClaudeService()
 
+    /// fetchAnthropicQuota 的 401/429/非2xx 文案（429 固定文案不解析 JSON；失败文案不带状态码；snippet 截 100）
+    static let anthropicErrorMessages = ProviderErrorMessages(
+        unauthorized: (zh: "Anthropic API Key 无效或未授权 (HTTP 401)", en: "Anthropic API Key is invalid or unauthorized (HTTP 401)"),
+        rateLimited: (zh: "Anthropic 请求频率或额度超限 (HTTP 429)", en: "Anthropic rate limit or quota exceeded (HTTP 429)"),
+        rateLimitUsesJSONDetail: false,
+        snippetLength: 100,
+        failure: { _, snippet, isZh in
+            isZh ? "Anthropic 接口响应异常: \(snippet)" : "Anthropic API response error: \(snippet)"
+        }
+    )
+
     private let isoFormatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -339,15 +350,9 @@ public final class ClaudeService: @unchecked Sendable {
             throw NSError(domain: "ClaudeService", code: 400, userInfo: [NSLocalizedDescriptionKey: isZh ? "请输入 Anthropic API Key" : "Please enter Anthropic API Key"])
         }
 
-        var baseEndpoint = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
-        if baseEndpoint.isEmpty {
-            baseEndpoint = "https://api.anthropic.com/v1"
-        }
-        while baseEndpoint.hasSuffix("/") {
-            baseEndpoint.removeLast()
-        }
+        let baseEndpoint = normalizeEndpoint(endpoint, fallback: "https://api.anthropic.com/v1")
 
-        let modelsURLStr = baseEndpoint.hasSuffix("/models") ? baseEndpoint : "\(baseEndpoint)/models"
+        let modelsURLStr = modelsURLString(base: baseEndpoint)
         guard let url = URL(string: modelsURLStr) else {
             throw URLError(.badURL)
         }
@@ -364,83 +369,35 @@ public final class ClaudeService: @unchecked Sendable {
             throw URLError(.badServerResponse)
         }
 
-        if httpResp.statusCode == 401 {
-            throw NSError(domain: "ClaudeService", code: 401, userInfo: [NSLocalizedDescriptionKey: isZh ? "Anthropic API Key 无效或未授权 (HTTP 401)" : "Anthropic API Key is invalid or unauthorized (HTTP 401)"])
-        }
+        try throwForStatus(httpResp, data: data, domain: "ClaudeService", messages: Self.anthropicErrorMessages)
 
-        if httpResp.statusCode == 429 {
-            throw NSError(domain: "ClaudeService", code: 429, userInfo: [NSLocalizedDescriptionKey: isZh ? "Anthropic 请求频率或额度超限 (HTTP 429)" : "Anthropic rate limit or quota exceeded (HTTP 429)"])
-        }
-
-        guard httpResp.statusCode >= 200 && httpResp.statusCode < 300 else {
-            let msg = String(data: data, encoding: .utf8) ?? "HTTP \(httpResp.statusCode)"
-            throw NSError(domain: "ClaudeService", code: httpResp.statusCode, userInfo: [NSLocalizedDescriptionKey: isZh ? "Anthropic 接口响应异常: \(msg.prefix(100))" : "Anthropic API response error: \(msg.prefix(100))"])
-        }
-
-        let allHeaders = httpResp.allHeaderFields
-        func getHeader(_ name: String) -> String? {
-            let target = name.lowercased()
-            for (k, v) in allHeaders {
-                if let keyStr = k as? String, keyStr.lowercased() == target {
-                    return String(describing: v)
-                }
-            }
-            return nil
-        }
-
-        let limitTokensStr = getHeader("anthropic-ratelimit-tokens-limit")
-        let remainingTokensStr = getHeader("anthropic-ratelimit-tokens-remaining")
-
-        let limitReqsStr = getHeader("anthropic-ratelimit-requests-limit")
-        let remainingReqsStr = getHeader("anthropic-ratelimit-requests-remaining")
-
+        // Anthropic 不返回 reset 头，两个窗口都按固定 60s 计
         var primaryWindow: TokenWindow? = nil
         var secondaryWindow: TokenWindow? = nil
 
-        if let limitTokens = Double(limitTokensStr ?? ""),
-           let remainingTokens = Double(remainingTokensStr ?? ""),
-           limitTokens > 0 {
-            let used = max(0.0, limitTokens - remainingTokens)
-            let usedPct = min(max((used / limitTokens) * 100.0, 0.0), 100.0)
-            let duration: TimeInterval = 60
-            let now = Date()
+        primaryWindow = RateLimitWindowBuilder.build(
+            response: httpResp,
+            limitHeader: "anthropic-ratelimit-tokens-limit",
+            remainingHeader: "anthropic-ratelimit-tokens-remaining",
+            reset: .fixed(60),
+            title: .tpmRate,
+            unit: "tokens"
+        )
 
-            primaryWindow = TokenWindow(
-                title: .tpmRate,
-                usedPercentage: usedPct,
-                startTime: now,
-                endTime: now.addingTimeInterval(duration),
-                usedAmount: used,
-                totalLimit: limitTokens,
-                unit: "tokens",
-                isIdle: used == 0.0
-            )
-        }
-
-        if let limitReqs = Double(limitReqsStr ?? ""),
-           let remainingReqs = Double(remainingReqsStr ?? ""),
-           limitReqs > 0 {
-            let used = max(0.0, limitReqs - remainingReqs)
-            let usedPct = min(max((used / limitReqs) * 100.0, 0.0), 100.0)
-            let now = Date()
-
-            secondaryWindow = TokenWindow(
-                title: .rpmRate,
-                usedPercentage: usedPct,
-                startTime: now,
-                endTime: now.addingTimeInterval(60),
-                usedAmount: used,
-                totalLimit: limitReqs,
-                unit: "req/min",
-                isIdle: used == 0.0
-            )
-        }
+        secondaryWindow = RateLimitWindowBuilder.build(
+            response: httpResp,
+            limitHeader: "anthropic-ratelimit-requests-limit",
+            remainingHeader: "anthropic-ratelimit-requests-remaining",
+            reset: .fixed(60),
+            title: .rpmRate,
+            unit: "req/min"
+        )
 
         if primaryWindow == nil && secondaryWindow == nil {
             primaryWindow = TokenWindow.status(title: .connected(subject: "Anthropic API"))
         }
 
-        let keySuffix = cleanKey.count > 6 ? String(cleanKey.suffix(4)) : cleanKey
+        let keySuffix = keySuffixMask(cleanKey)
         let account = isZh ? "Anthropic API (尾号 \(keySuffix))" : "Anthropic API (... \(keySuffix))"
 
         return (primaryWindow, secondaryWindow, account)

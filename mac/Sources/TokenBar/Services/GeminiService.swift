@@ -1035,13 +1035,7 @@ public actor GeminiService {
             throw NSError(domain: "GeminiService", code: 401, userInfo: [NSLocalizedDescriptionKey: isZh ? "请输入有效的 Google AI Studio API Key" : "Please enter a valid Google AI Studio API Key"])
         }
 
-        var cleanBase = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
-        if cleanBase.isEmpty {
-            cleanBase = "https://generativelanguage.googleapis.com"
-        }
-        while cleanBase.hasSuffix("/") {
-            cleanBase.removeLast()
-        }
+        let cleanBase = normalizeEndpoint(endpoint, fallback: "https://generativelanguage.googleapis.com")
 
         let urlString: String
         if cleanBase.hasSuffix("/v1beta") || cleanBase.hasSuffix("/v1") {

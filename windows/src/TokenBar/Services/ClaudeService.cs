@@ -432,15 +432,9 @@ namespace TokenBar.Services
                 throw new ArgumentException(LocalizationManager.Instance.IsChinese ? "请输入 Anthropic API Key" : "Please enter Anthropic API Key");
             }
 
-            var baseEndpoint = endpoint.Trim().TrimEnd('/');
-            if (string.IsNullOrEmpty(baseEndpoint))
-            {
-                baseEndpoint = "https://api.anthropic.com/v1";
-            }
+            var baseEndpoint = ProviderShared.NormalizeEndpoint(endpoint, "https://api.anthropic.com/v1");
 
-            var modelsUrl = baseEndpoint.EndsWith("/models", StringComparison.OrdinalIgnoreCase)
-                ? baseEndpoint
-                : $"{baseEndpoint}/models";
+            var modelsUrl = ProviderShared.ModelsUrl(baseEndpoint);
 
             using var req = new HttpRequestMessage(HttpMethod.Get, modelsUrl);
             req.Headers.Add("x-api-key", cleanKey);
@@ -450,88 +444,20 @@ namespace TokenBar.Services
             using var resp = await Http.Shared.SendAsync(req, ct);
             var body = await resp.Content.ReadAsStringAsync(ct);
 
-            if (resp.StatusCode == System.Net.HttpStatusCode.Unauthorized)
-            {
-                throw new Exception(LocalizationManager.Instance.IsChinese ? "Anthropic API Key 无效或未授权 (HTTP 401)" : "Anthropic API Key is invalid or unauthorized (HTTP 401)");
-            }
+            ProviderHttpErrors.ThrowForStatus(resp, body, ProviderHttpErrorOptions.Anthropic);
 
-            if ((int)resp.StatusCode == 429)
-            {
-                throw new Exception(LocalizationManager.Instance.IsChinese ? "Anthropic 请求频率或额度超限 (HTTP 429)" : "Anthropic rate limit or quota exceeded (HTTP 429)");
-            }
+            TokenWindow? primaryWindow = resp.BuildRateLimitWindow(
+                RateLimitHeaderSet.AnthropicFixedWindow("tokens"), WindowTitle.TpmRate, "tokens");
 
-            if (!resp.IsSuccessStatusCode)
-            {
-                var snippet = body.Length > 100 ? body.Substring(0, 100) : body;
-                throw new Exception(LocalizationManager.Instance.IsChinese ? $"Anthropic 接口响应异常: {snippet}" : $"Anthropic API response error: {snippet}");
-            }
-
-            string? GetHeader(string name)
-            {
-                if (resp.Headers.TryGetValues(name, out var values))
-                    return values.FirstOrDefault();
-                if (resp.Content.Headers.TryGetValues(name, out var cv))
-                    return cv.FirstOrDefault();
-                return null;
-            }
-
-            var limitTokensStr = GetHeader("anthropic-ratelimit-tokens-limit");
-            var remainingTokensStr = GetHeader("anthropic-ratelimit-tokens-remaining");
-
-            var limitReqsStr = GetHeader("anthropic-ratelimit-requests-limit");
-            var remainingReqsStr = GetHeader("anthropic-ratelimit-requests-remaining");
-
-            TokenWindow? primaryWindow = null;
-            TokenWindow? secondaryWindow = null;
-
-            if (double.TryParse(limitTokensStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var limitTokens) &&
-                double.TryParse(remainingTokensStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var remainingTokens) &&
-                limitTokens > 0)
-            {
-                var used = Math.Max(0.0, limitTokens - remainingTokens);
-                var usedPct = Math.Clamp((used / limitTokens) * 100.0, 0.0, 100.0);
-                var now = DateTime.Now;
-
-                primaryWindow = new TokenWindow
-                {
-                    Title = WindowTitle.TpmRate,
-                    UsedPercentage = usedPct,
-                    StartTime = now,
-                    EndTime = now.AddMinutes(1),
-                    UsedAmount = used,
-                    TotalLimit = limitTokens,
-                    Unit = "tokens",
-                    IsIdle = used == 0.0
-                };
-            }
-
-            if (double.TryParse(limitReqsStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var limitReqs) &&
-                double.TryParse(remainingReqsStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var remReqs) &&
-                limitReqs > 0)
-            {
-                var used = Math.Max(0.0, limitReqs - remReqs);
-                var usedPct = Math.Clamp((used / limitReqs) * 100.0, 0.0, 100.0);
-                var now = DateTime.Now;
-
-                secondaryWindow = new TokenWindow
-                {
-                    Title = WindowTitle.RpmRate,
-                    UsedPercentage = usedPct,
-                    StartTime = now,
-                    EndTime = now.AddMinutes(1),
-                    UsedAmount = used,
-                    TotalLimit = limitReqs,
-                    Unit = "req/min",
-                    IsIdle = used == 0.0
-                };
-            }
+            TokenWindow? secondaryWindow = resp.BuildRateLimitWindow(
+                RateLimitHeaderSet.AnthropicFixedWindow("requests"), WindowTitle.RpmRate, "req/min");
 
             if (primaryWindow == null && secondaryWindow == null)
             {
                 primaryWindow = TokenWindow.Status(WindowTitle.ConnectedFor("Anthropic API"));
             }
 
-            var keySuffix = cleanKey.Length > 6 ? cleanKey[^4..] : cleanKey;
+            var keySuffix = ProviderShared.KeySuffixMask(cleanKey);
             var account = LocalizationManager.Instance.IsChinese ? $"Anthropic API (尾号 {keySuffix})" : $"Anthropic API (...{keySuffix})";
 
             return (primaryWindow, secondaryWindow, account);

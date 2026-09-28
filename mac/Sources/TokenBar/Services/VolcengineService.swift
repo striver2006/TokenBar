@@ -5,6 +5,17 @@ public final class VolcengineService: @unchecked Sendable {
 
     public init() {}
 
+    /// 401/429/非2xx 文案（429 固定文案不解析 JSON；失败文案带状态码；snippet 截 100）
+    static let errorMessages = ProviderErrorMessages(
+        unauthorized: (zh: "火山方舟 API Key 无效或未授权 (HTTP 401)", en: "Volcengine Ark API Key is invalid or unauthorized (HTTP 401)"),
+        rateLimited: (zh: "火山方舟并发或速率超限 (HTTP 429)", en: "Volcengine Ark concurrency or rate limit exceeded (HTTP 429)"),
+        rateLimitUsesJSONDetail: false,
+        snippetLength: 100,
+        failure: { code, snippet, isZh in
+            isZh ? "火山方舟响应异常 (\(code)): \(snippet)" : "Volcengine Ark response error (\(code)): \(snippet)"
+        }
+    )
+
     public func fetchQuota(
         apiKey: String,
         endpoint: String = "https://ark.cn-beijing.volces.com/api/v3",
@@ -16,15 +27,9 @@ public final class VolcengineService: @unchecked Sendable {
             throw NSError(domain: "VolcengineService", code: 400, userInfo: [NSLocalizedDescriptionKey: isZh ? "请输入火山方舟 API Key" : "Please enter Volcengine Ark API Key"])
         }
 
-        var baseEndpoint = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
-        if baseEndpoint.isEmpty {
-            baseEndpoint = "https://ark.cn-beijing.volces.com/api/v3"
-        }
-        while baseEndpoint.hasSuffix("/") {
-            baseEndpoint.removeLast()
-        }
+        let baseEndpoint = normalizeEndpoint(endpoint, fallback: "https://ark.cn-beijing.volces.com/api/v3")
 
-        let modelsURLStr = baseEndpoint.hasSuffix("/models") ? baseEndpoint : "\(baseEndpoint)/models"
+        let modelsURLStr = modelsURLString(base: baseEndpoint)
         guard let url = URL(string: modelsURLStr) else {
             throw URLError(.badURL)
         }
@@ -41,56 +46,19 @@ public final class VolcengineService: @unchecked Sendable {
         }
 
         let isZh = LocalizationManager.shared.effectiveLanguage == "zh"
-        if httpResp.statusCode == 401 {
-            throw NSError(domain: "VolcengineService", code: 401, userInfo: [NSLocalizedDescriptionKey: isZh ? "火山方舟 API Key 无效或未授权 (HTTP 401)" : "Volcengine Ark API Key is invalid or unauthorized (HTTP 401)"])
-        }
-
-        if httpResp.statusCode == 429 {
-            throw NSError(domain: "VolcengineService", code: 429, userInfo: [NSLocalizedDescriptionKey: isZh ? "火山方舟并发或速率超限 (HTTP 429)" : "Volcengine Ark concurrency or rate limit exceeded (HTTP 429)"])
-        }
-
-        guard httpResp.statusCode >= 200 && httpResp.statusCode < 300 else {
-            let msg = String(data: data, encoding: .utf8) ?? "HTTP \(httpResp.statusCode)"
-            throw NSError(domain: "VolcengineService", code: httpResp.statusCode, userInfo: [NSLocalizedDescriptionKey: isZh ? "火山方舟响应异常 (\(httpResp.statusCode)): \(msg.prefix(100))" : "Volcengine Ark response error (\(httpResp.statusCode)): \(msg.prefix(100))"])
-        }
-
-        let allHeaders = httpResp.allHeaderFields
-        func getHeader(_ name: String) -> String? {
-            let target = name.lowercased()
-            for (k, v) in allHeaders {
-                if let keyStr = k as? String, keyStr.lowercased() == target {
-                    return String(describing: v)
-                }
-            }
-            return nil
-        }
-
-        let limitTokensStr = getHeader("x-ratelimit-limit-tokens")
-        let remainingTokensStr = getHeader("x-ratelimit-remaining-tokens")
-        let resetTokensStr = getHeader("x-ratelimit-reset-tokens")
+        try throwForStatus(httpResp, data: data, domain: "VolcengineService", messages: Self.errorMessages)
 
         var primaryWindow: TokenWindow? = nil
         let secondaryWindow: TokenWindow? = nil
 
-        if let limitTokens = Double(limitTokensStr ?? ""),
-           let remainingTokens = Double(remainingTokensStr ?? ""),
-           limitTokens > 0 {
-            let used = max(0.0, limitTokens - remainingTokens)
-            let usedPct = min(max((used / limitTokens) * 100.0, 0.0), 100.0)
-            let duration = OpenAIService.shared.parseDurationString(resetTokensStr ?? "1s")
-            let now = Date()
-
-            primaryWindow = TokenWindow(
-                title: .tpmRate,
-                usedPercentage: usedPct,
-                startTime: now,
-                endTime: now.addingTimeInterval(duration),
-                usedAmount: used,
-                totalLimit: limitTokens,
-                unit: "tokens",
-                isIdle: used == 0.0
-            )
-        }
+        primaryWindow = RateLimitWindowBuilder.build(
+            response: httpResp,
+            limitHeader: "x-ratelimit-limit-tokens",
+            remainingHeader: "x-ratelimit-remaining-tokens",
+            reset: .header("x-ratelimit-reset-tokens", fallback: "1s"),
+            title: .tpmRate,
+            unit: "tokens"
+        )
 
         var modelCount = 0
         if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -102,7 +70,7 @@ public final class VolcengineService: @unchecked Sendable {
             primaryWindow = TokenWindow.status(title: .connected(subject: "接入点"))
         }
 
-        let keySuffix = cleanKey.count > 6 ? String(cleanKey.suffix(4)) : cleanKey
+        let keySuffix = keySuffixMask(cleanKey)
         let modelLabel = !model.isEmpty ? model : (isZh ? "模型数: \(modelCount)" : "\(modelCount) models")
         let account = isZh ? "火山方舟 (\(modelLabel) • 尾号 \(keySuffix))" : "Volcengine Ark (\(modelLabel) • ...\(keySuffix))"
 

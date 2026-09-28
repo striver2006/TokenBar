@@ -56,6 +56,13 @@ public enum RateLimitReset {
         return sawUnit ? clamp(total) : nil
     }
 
+    /// 带兜底的解析：无法解析按 1 秒处理，且结果不小于 `minimum`
+    /// （毫秒级重置对倒计时没有意义，沿用旧 OpenAIService.parseDurationString 的下限）。
+    /// 跨服务的调用点统一走这里；OpenAIService.parseDurationString 保留为转发（有测试引用）。
+    public static func parseOrDefault(_ str: String, minimum: TimeInterval = 0.1) -> TimeInterval {
+        max(minimum, parse(str) ?? 1.0)
+    }
+
     private static func clamp(_ v: TimeInterval) -> TimeInterval {
         min(max(v, 0), maxSeconds)
     }

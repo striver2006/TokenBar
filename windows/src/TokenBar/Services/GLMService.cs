@@ -37,7 +37,8 @@ namespace TokenBar.Services
                 throw new ArgumentException(LocalizationManager.Instance.IsChinese ? "API Key 不能为空" : "API Key cannot be empty");
             }
 
-            var trimmedEndpoint = endpoint.Trim().TrimEnd('/');
+            // GLM 无默认 endpoint 兜底：传空 fallback 与原来「只 trim 不兜底」逐字等价
+            var trimmedEndpoint = ProviderShared.NormalizeEndpoint(endpoint, string.Empty);
             string baseHost;
             string openAIEndpoint;
 
@@ -57,7 +58,7 @@ namespace TokenBar.Services
                 openAIEndpoint = $"{trimmedEndpoint}/api/v1";
             }
 
-            var keySuffix = cleanKey.Length > 6 ? cleanKey[^4..] : cleanKey;
+            var keySuffix = ProviderShared.KeySuffixMask(cleanKey);
             var account = $"GLM (...{keySuffix})";
             var isZh = LocalizationManager.Instance.IsChinese;
 
@@ -75,16 +76,10 @@ namespace TokenBar.Services
                 using var openAiResp = await Http.Shared.SendAsync(openAiReq, ct);
                 var openAiData = await openAiResp.Content.ReadAsStringAsync(ct);
 
-                if (openAiResp.StatusCode == System.Net.HttpStatusCode.Unauthorized ||
-                    openAiResp.StatusCode == System.Net.HttpStatusCode.Forbidden)
-                {
-                    throw new Exception(isZh ? $"GLM API Key 无效或未授权 (HTTP {(int)openAiResp.StatusCode})" : $"GLM API Key is invalid or unauthorized (HTTP {(int)openAiResp.StatusCode})");
-                }
-
-                if ((int)openAiResp.StatusCode == 429)
-                {
-                    throw new Exception(isZh ? "GLM 请求过于频繁或额度已耗尽 (HTTP 429)" : "GLM rate limit reached or quota exhausted (HTTP 429)");
-                }
+                // 三段式错误分类共用 ProviderHttpErrors，但 GLM 必须在 429 与非2xx 之间
+                // 插入「HTTP 200 里的 code:1001 鉴权失败」检查，故逐段调用保持原判定顺序。
+                ProviderHttpErrors.ThrowIfUnauthorized(openAiResp, ProviderHttpErrorOptions.GLM);
+                ProviderHttpErrors.ThrowIfRateLimited(openAiResp, openAiData, ProviderHttpErrorOptions.GLM);
 
                 // 智谱在 200 里也可能返回 {"code":1001,"msg":"..."} 表示鉴权失败
                 string? authFailureMsg = null;
@@ -109,12 +104,12 @@ namespace TokenBar.Services
                     throw new Exception(isZh ? $"身份验证失败: {authFailureMsg}" : $"Authentication failed: {authFailureMsg}");
                 }
 
-                if (!openAiResp.IsSuccessStatusCode)
-                {
-                    var snippet = openAiData.Length > 120 ? openAiData.Substring(0, 120) : openAiData;
-                    throw new Exception(isZh ? $"GLM 接口请求失败 ({(int)openAiResp.StatusCode}): {snippet}" : $"GLM request failed ({(int)openAiResp.StatusCode}): {snippet}");
-                }
+                ProviderHttpErrors.ThrowIfNotSuccess(openAiResp, openAiData, ProviderHttpErrorOptions.GLM);
 
+                // 速率头有意不走 ProviderShared.BuildRateLimitWindow：GLM 只读 response headers
+                // （不查 content headers）、usedPct 用 (1 - remaining/total) 公式、UsedAmount 不做
+                // Math.Max(0,…) 下限、IsIdle 依据 usedPct 而非 used、reset 缺失时兜底 60s 而非 1s，
+                // 且窗口在配额接口失败后才回退构造 —— 与共享 builder 的语义差异是刻意保留的行为。
                 if (openAiResp.Headers.TryGetValues("x-ratelimit-remaining-tokens", out var remVals) &&
                     double.TryParse(remVals.FirstOrDefault(), NumberStyles.Float, CultureInfo.InvariantCulture, out var rem))
                 {

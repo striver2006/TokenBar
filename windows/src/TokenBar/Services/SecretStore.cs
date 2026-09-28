@@ -306,6 +306,33 @@ namespace TokenBar.Services
             }
         }
 
+        /// <summary>
+        /// 按任意 TargetName 直读凭据 blob（UTF-8 字符串）。绕过 "TokenBar/" 前缀与三态语义：
+        /// 条目不存在 / blob 为空返回 null；读取过程中的异常原样上抛，由调用方自行捕获与记日志。
+        /// 目前仅供 GeminiService 读取第三方工具写入的 Antigravity 凭证（target "gemini:antigravity"），
+        /// 取代它此前自己复制的一份 CredRead/CredFree P/Invoke。
+        /// </summary>
+        internal static string? ReadRawCredentialBlob(string targetName)
+        {
+            if (!CredRead(targetName, CRED_TYPE_GENERIC, 0, out var ptr))
+                return null;
+
+            try
+            {
+                var cred = Marshal.PtrToStructure<CREDENTIAL>(ptr);
+                if (cred.CredentialBlobSize <= 0 || cred.CredentialBlob == IntPtr.Zero)
+                    return null;
+
+                var bytes = new byte[cred.CredentialBlobSize];
+                Marshal.Copy(cred.CredentialBlob, bytes, 0, cred.CredentialBlobSize);
+                return Encoding.UTF8.GetString(bytes);
+            }
+            finally
+            {
+                CredFree(ptr);
+            }
+        }
+
         // MARK: - 后台访问
         //
         // P/Invoke 的 Cred* 是同步阻塞调用。在 UI 线程上调用会卡住设置窗口；

@@ -5,6 +5,17 @@ public final class KimiService: @unchecked Sendable {
 
     public init() {}
 
+    /// 401/429/非2xx 文案（legacy 与 Kimi Code 订阅链路共用；429 固定文案；snippet 截 100）
+    static let errorMessages = ProviderErrorMessages(
+        unauthorized: (zh: "KIMI API Key 无效或未授权 (HTTP 401)", en: "KIMI API Key is invalid or unauthorized (HTTP 401)"),
+        rateLimited: (zh: "KIMI 请求并发超限或额度不足 (HTTP 429)", en: "KIMI concurrency or quota limit exceeded (HTTP 429)"),
+        rateLimitUsesJSONDetail: false,
+        snippetLength: 100,
+        failure: { code, snippet, isZh in
+            isZh ? "KIMI 接口响应异常 (\(code)): \(snippet)" : "KIMI API response error (\(code)): \(snippet)"
+        }
+    )
+
     public func fetchQuota(
         apiKey: String,
         endpoint: String = "https://api.moonshot.cn/v1",
@@ -23,13 +34,7 @@ public final class KimiService: @unchecked Sendable {
             return try await fetchCodingSubscription(apiKey: cleanKey, endpoint: endpoint)
         }
 
-        var baseEndpoint = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
-        if baseEndpoint.isEmpty {
-            baseEndpoint = "https://api.moonshot.cn/v1"
-        }
-        while baseEndpoint.hasSuffix("/") {
-            baseEndpoint.removeLast()
-        }
+        let baseEndpoint = normalizeEndpoint(endpoint, fallback: "https://api.moonshot.cn/v1")
 
         // 1. Fetch user balance via /users/me/balance
         let balance = await fetchBalance(apiKey: cleanKey, baseEndpoint: baseEndpoint)
@@ -39,7 +44,7 @@ public final class KimiService: @unchecked Sendable {
         }
 
         // 2. Fetch models and rate limits via GET /models
-        let modelsURLStr = baseEndpoint.hasSuffix("/models") ? baseEndpoint : "\(baseEndpoint)/models"
+        let modelsURLStr = modelsURLString(base: baseEndpoint)
         guard let url = URL(string: modelsURLStr) else {
             throw URLError(.badURL)
         }
@@ -56,33 +61,7 @@ public final class KimiService: @unchecked Sendable {
         }
 
         let isZh = LocalizationManager.shared.effectiveLanguage == "zh"
-        if httpResp.statusCode == 401 {
-            throw NSError(domain: "KimiService", code: 401, userInfo: [NSLocalizedDescriptionKey: isZh ? "KIMI API Key 无效或未授权 (HTTP 401)" : "KIMI API Key is invalid or unauthorized (HTTP 401)"])
-        }
-
-        if httpResp.statusCode == 429 {
-            throw NSError(domain: "KimiService", code: 429, userInfo: [NSLocalizedDescriptionKey: isZh ? "KIMI 请求并发超限或额度不足 (HTTP 429)" : "KIMI concurrency or quota limit exceeded (HTTP 429)"])
-        }
-
-        guard httpResp.statusCode >= 200 && httpResp.statusCode < 300 else {
-            let msg = String(data: data, encoding: .utf8) ?? "HTTP \(httpResp.statusCode)"
-            throw NSError(domain: "KimiService", code: httpResp.statusCode, userInfo: [NSLocalizedDescriptionKey: isZh ? "KIMI 接口响应异常 (\(httpResp.statusCode)): \(msg.prefix(100))" : "KIMI API response error (\(httpResp.statusCode)): \(msg.prefix(100))"])
-        }
-
-        let allHeaders = httpResp.allHeaderFields
-        func getHeader(_ name: String) -> String? {
-            let target = name.lowercased()
-            for (k, v) in allHeaders {
-                if let keyStr = k as? String, keyStr.lowercased() == target {
-                    return String(describing: v)
-                }
-            }
-            return nil
-        }
-
-        let limitTokensStr = getHeader("x-ratelimit-limit-tokens")
-        let remainingTokensStr = getHeader("x-ratelimit-remaining-tokens")
-        let resetTokensStr = getHeader("x-ratelimit-reset-tokens")
+        try throwForStatus(httpResp, data: data, domain: "KimiService", messages: Self.errorMessages)
 
         var primaryWindow: TokenWindow? = nil
         var secondaryWindow: TokenWindow? = nil
@@ -97,31 +76,20 @@ public final class KimiService: @unchecked Sendable {
             )
         }
 
-        if let limitTokens = Double(limitTokensStr ?? ""),
-           let remainingTokens = Double(remainingTokensStr ?? ""),
-           limitTokens > 0 {
-            let used = max(0.0, limitTokens - remainingTokens)
-            let usedPct = min(max((used / limitTokens) * 100.0, 0.0), 100.0)
-            let duration = OpenAIService.shared.parseDurationString(resetTokensStr ?? "1s")
-            let now = Date()
-
-            primaryWindow = TokenWindow(
-                title: .tpmRate,
-                usedPercentage: usedPct,
-                startTime: now,
-                endTime: now.addingTimeInterval(duration),
-                usedAmount: used,
-                totalLimit: limitTokens,
-                unit: "tokens",
-                isIdle: used == 0.0
-            )
-        }
+        primaryWindow = RateLimitWindowBuilder.build(
+            response: httpResp,
+            limitHeader: "x-ratelimit-limit-tokens",
+            remainingHeader: "x-ratelimit-remaining-tokens",
+            reset: .header("x-ratelimit-reset-tokens", fallback: "1s"),
+            title: .tpmRate,
+            unit: "tokens"
+        )
 
         if primaryWindow == nil && secondaryWindow == nil {
             primaryWindow = TokenWindow.status(title: .connected(subject: "KIMI"))
         }
 
-        let keySuffix = cleanKey.count > 6 ? String(cleanKey.suffix(4)) : cleanKey
+        let keySuffix = keySuffixMask(cleanKey)
         let account = balanceString != nil ? (isZh ? "余额: \(balanceString!)" : "Balance: \(balanceString!)") : (isZh ? "KIMI (尾号 \(keySuffix))" : "KIMI (... \(keySuffix))")
 
         return (primaryWindow, secondaryWindow, account)
@@ -129,29 +97,11 @@ public final class KimiService: @unchecked Sendable {
 
     /// 查询 Moonshot 账户余额（人民币），失败返回 nil
     private func fetchBalance(apiKey: String, baseEndpoint: String) async -> Double? {
-        let balanceURLStr = "\(baseEndpoint)/users/me/balance"
-        guard let url = URL(string: balanceURLStr) else { return nil }
-
-        var req = URLRequest(url: url)
-        req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        req.timeoutInterval = 5
-
-        guard let (data, resp) = try? await HTTPClient.data(for: req),
-              let http = resp as? HTTPURLResponse, http.statusCode == 200,
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let dataDict = json["data"] as? [String: Any] else {
-            return nil
-        }
-
-        if let available = dataDict["available_balance"] as? Double {
-            return available
-        } else if let availableStr = dataDict["available_balance"] as? String,
-                  let parsed = Double(availableStr) {
-            return parsed
-        } else if let cash = dataDict["cash_balance"] as? Double {
-            return cash
-        }
-        return nil
+        await ProviderBalance.fetchMoonshotBalance(
+            apiKey: apiKey,
+            balanceURL: "\(baseEndpoint)/users/me/balance",
+            fallbackToCashBalance: true
+        )
     }
 
     // MARK: - Kimi Code 订阅（/coding/v1）
@@ -168,10 +118,8 @@ public final class KimiService: @unchecked Sendable {
     /// 订阅模式 base：用户端点含 /coding 就用用户的；否则强制官方 coding 网关
     /// （用户填了订阅 Key 但端点还是默认 api.moonshot.cn 时也要能工作）
     static func codingSubscriptionBase(endpoint: String) -> String {
-        var base = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
-        while base.hasSuffix("/") {
-            base.removeLast()
-        }
+        // fallback 传空串：这里允许 trim 后为空（下面会兜底到官方 coding 网关），不做端点替换
+        let base = normalizeEndpoint(endpoint, fallback: "")
         if !base.isEmpty && base.lowercased().contains("/coding") {
             return base
         }
@@ -337,18 +285,7 @@ public final class KimiService: @unchecked Sendable {
             throw URLError(.badServerResponse)
         }
 
-        if httpResp.statusCode == 401 {
-            throw NSError(domain: "KimiService", code: 401, userInfo: [NSLocalizedDescriptionKey: isZh ? "KIMI API Key 无效或未授权 (HTTP 401)" : "KIMI API Key is invalid or unauthorized (HTTP 401)"])
-        }
-
-        if httpResp.statusCode == 429 {
-            throw NSError(domain: "KimiService", code: 429, userInfo: [NSLocalizedDescriptionKey: isZh ? "KIMI 请求并发超限或额度不足 (HTTP 429)" : "KIMI concurrency or quota limit exceeded (HTTP 429)"])
-        }
-
-        guard httpResp.statusCode >= 200 && httpResp.statusCode < 300 else {
-            let msg = String(data: data, encoding: .utf8) ?? "HTTP \(httpResp.statusCode)"
-            throw NSError(domain: "KimiService", code: httpResp.statusCode, userInfo: [NSLocalizedDescriptionKey: isZh ? "KIMI 接口响应异常 (\(httpResp.statusCode)): \(msg.prefix(100))" : "KIMI API response error (\(httpResp.statusCode)): \(msg.prefix(100))"])
-        }
+        try throwForStatus(httpResp, data: data, domain: "KimiService", messages: Self.errorMessages)
 
         var fiveHour: TokenWindow? = nil
         var longWindow: TokenWindow? = nil
@@ -364,7 +301,7 @@ public final class KimiService: @unchecked Sendable {
         }
 
         // /me 失败沿用现有「KIMI (尾号 xxxx)」逻辑
-        let keySuffix = apiKey.count > 6 ? String(apiKey.suffix(4)) : apiKey
+        let keySuffix = keySuffixMask(apiKey)
         let fallbackAccount = isZh ? "KIMI (尾号 \(keySuffix))" : "KIMI (... \(keySuffix))"
         let account = (await accountTask) ?? fallbackAccount
 

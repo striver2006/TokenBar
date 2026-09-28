@@ -17,13 +17,8 @@ public final class CustomProviderService: @unchecked Sendable {
             )
         }
 
-        var endpoint = config.endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
-        if endpoint.isEmpty {
-            endpoint = config.apiProtocol == .anthropic ? "https://api.anthropic.com/v1" : "https://api.deepseek.com/v1"
-        }
-        while endpoint.hasSuffix("/") {
-            endpoint.removeLast()
-        }
+        let fallbackEndpoint = config.apiProtocol == .anthropic ? "https://api.anthropic.com/v1" : "https://api.deepseek.com/v1"
+        let endpoint = normalizeEndpoint(config.endpoint, fallback: fallbackEndpoint)
 
         switch config.apiProtocol {
         case .openAIChat:
@@ -63,7 +58,7 @@ public final class CustomProviderService: @unchecked Sendable {
         }
 
         if endpoint.contains("deepseek.com") {
-            if let balance = await fetchDeepSeekBalance(apiKey: apiKey) {
+            if let balance = await ProviderBalance.fetchDeepSeekBalance(apiKey: apiKey) {
                 useBalance(
                     title: .accountBalance,
                     amount: balance.amount,
@@ -72,7 +67,7 @@ public final class CustomProviderService: @unchecked Sendable {
                 )
             }
         } else if endpoint.contains("moonshot.cn") {
-            if let balance = await fetchMoonshotBalance(apiKey: apiKey) {
+            if let balance = await ProviderBalance.fetchMoonshotBalance(apiKey: apiKey, balanceURL: "https://api.moonshot.cn/v1/users/me/balance", fallbackToCashBalance: false) {
                 useBalance(title: .accountBalance, amount: balance, currency: "CNY", formatted: String(format: "¥%.2f", balance))
             }
         } else if endpoint.contains("siliconflow.cn") {
@@ -117,8 +112,8 @@ public final class CustomProviderService: @unchecked Sendable {
         }
 
         // 2. Request /models to test connectivity and retrieve rate limits
-        let modelsURLString = endpoint.hasSuffix("/models") ? endpoint : "\(endpoint)/models"
-        guard let url = URL(string: modelsURLString) else {
+        let modelsURLStr = modelsURLString(base: endpoint)
+        guard let url = URL(string: modelsURLStr) else {
             throw URLError(.badURL)
         }
 
@@ -133,72 +128,33 @@ public final class CustomProviderService: @unchecked Sendable {
             throw URLError(.badServerResponse)
         }
 
-        if httpResp.statusCode == 401 {
-            throw NSError(
-                domain: "CustomProviderService",
-                code: 401,
-                userInfo: [NSLocalizedDescriptionKey: isZh ? "\(config.name) API Key 认证失败 (HTTP 401)，请核对密钥" : "\(config.name) API Key authentication failed (HTTP 401). Please check the key"]
-            )
-        }
-
-        if httpResp.statusCode == 429 {
-            var msg = isZh ? "请求过于频繁或额度不足 (HTTP 429)" : "Rate limit reached or quota insufficient (HTTP 429)"
-            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let err = json["error"] as? [String: Any],
-               let detail = err["message"] as? String {
-                msg = detail
-            }
-            throw NSError(domain: "CustomProviderService", code: 429, userInfo: [NSLocalizedDescriptionKey: msg])
-        }
-
-        guard httpResp.statusCode >= 200 && httpResp.statusCode < 300 else {
-            let errorText = String(data: data, encoding: .utf8) ?? "HTTP \(httpResp.statusCode)"
-            throw NSError(
-                domain: "CustomProviderService",
-                code: httpResp.statusCode,
-                userInfo: [NSLocalizedDescriptionKey: isZh ? "请求端点失败 (\(httpResp.statusCode)): \(errorText.prefix(100))" : "Endpoint request failed (\(httpResp.statusCode)): \(errorText.prefix(100))"]
-            )
-        }
-
-        // Inspect headers for rate limits
-        let allHeaders = httpResp.allHeaderFields
-        func getHeader(_ name: String) -> String? {
-            let lower = name.lowercased()
-            for (k, v) in allHeaders {
-                if let key = k as? String, key.lowercased() == lower {
-                    return String(describing: v)
+        try throwForStatus(
+            httpResp,
+            data: data,
+            domain: "CustomProviderService",
+            messages: ProviderErrorMessages(
+                unauthorized: (zh: "\(config.name) API Key 认证失败 (HTTP 401)，请核对密钥", en: "\(config.name) API Key authentication failed (HTTP 401). Please check the key"),
+                rateLimited: (zh: "请求过于频繁或额度不足 (HTTP 429)", en: "Rate limit reached or quota insufficient (HTTP 429)"),
+                rateLimitUsesJSONDetail: true,
+                snippetLength: 100,
+                failure: { code, snippet, isZh in
+                    isZh ? "请求端点失败 (\(code)): \(snippet)" : "Endpoint request failed (\(code)): \(snippet)"
                 }
-            }
-            return nil
-        }
-
-        let limitTokensStr = getHeader("x-ratelimit-limit-tokens")
-        let remainingTokensStr = getHeader("x-ratelimit-remaining-tokens")
-        let resetTokensStr = getHeader("x-ratelimit-reset-tokens")
+            )
+        )
 
         // 槽位优先级：订阅窗口（Token Plan 百分比）> 余额（金额）> 速率头
         var primaryWindow: TokenWindow? = planWindow ?? balanceWindow
         var secondaryWindow: TokenWindow? = planWindow != nil ? balanceWindow : nil
 
-        if let limitTokens = Double(limitTokensStr ?? ""),
-           let remainingTokens = Double(remainingTokensStr ?? ""),
-           limitTokens > 0 {
-            let used = max(0.0, limitTokens - remainingTokens)
-            let usedPct = min(max((used / limitTokens) * 100.0, 0.0), 100.0)
-            let duration = OpenAIService.shared.parseDurationString(resetTokensStr ?? "1s")
-            let now = Date()
-
-            let rateWindow = TokenWindow(
-                title: .tpmRate,
-                usedPercentage: usedPct,
-                startTime: now,
-                endTime: now.addingTimeInterval(duration),
-                usedAmount: used,
-                totalLimit: limitTokens,
-                unit: "tokens",
-                isIdle: used == 0.0
-            )
-
+        if let rateWindow = RateLimitWindowBuilder.build(
+            response: httpResp,
+            limitHeader: "x-ratelimit-limit-tokens",
+            remainingHeader: "x-ratelimit-remaining-tokens",
+            reset: .header("x-ratelimit-reset-tokens", fallback: "1s"),
+            title: .tpmRate,
+            unit: "tokens"
+        ) {
             if primaryWindow == nil {
                 primaryWindow = rateWindow
             } else if secondaryWindow == nil {
@@ -232,8 +188,8 @@ public final class CustomProviderService: @unchecked Sendable {
         endpoint: String,
         config: CustomProviderConfig
     ) async throws -> (primary: TokenWindow?, secondary: TokenWindow?, account: String?) {
-        let modelsURLString = endpoint.hasSuffix("/models") ? endpoint : "\(endpoint)/models"
-        guard let url = URL(string: modelsURLString) else {
+        let modelsURLStr = modelsURLString(base: endpoint)
+        guard let url = URL(string: modelsURLStr) else {
             throw URLError(.badURL)
         }
 
@@ -250,91 +206,41 @@ public final class CustomProviderService: @unchecked Sendable {
         }
 
         let isZh = LocalizationManager.shared.effectiveLanguage == "zh"
-        if httpResp.statusCode == 401 {
-            throw NSError(
-                domain: "CustomProviderService",
-                code: 401,
-                userInfo: [NSLocalizedDescriptionKey: isZh ? "\(config.name) Anthropic API Key 无效或未授权 (HTTP 401)" : "\(config.name) Anthropic API Key invalid or unauthorized (HTTP 401)"]
-            )
-        }
-
-        if httpResp.statusCode == 429 {
-            var msg = isZh ? "Anthropic 接口请求已触发速率限制 (HTTP 429)" : "Anthropic rate limit exceeded (HTTP 429)"
-            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let err = json["error"] as? [String: Any],
-               let detail = err["message"] as? String {
-                msg = detail
-            }
-            throw NSError(domain: "CustomProviderService", code: 429, userInfo: [NSLocalizedDescriptionKey: msg])
-        }
-
-        guard httpResp.statusCode >= 200 && httpResp.statusCode < 300 else {
-            let errorText = String(data: data, encoding: .utf8) ?? "HTTP \(httpResp.statusCode)"
-            throw NSError(
-                domain: "CustomProviderService",
-                code: httpResp.statusCode,
-                userInfo: [NSLocalizedDescriptionKey: isZh ? "Anthropic 兼容端点响应异常 (\(httpResp.statusCode)): \(errorText.prefix(100))" : "Anthropic compatible endpoint error (\(httpResp.statusCode)): \(errorText.prefix(100))"]
-            )
-        }
-
-        let allHeaders = httpResp.allHeaderFields
-        func getHeader(_ name: String) -> String? {
-            let lower = name.lowercased()
-            for (k, v) in allHeaders {
-                if let key = k as? String, key.lowercased() == lower {
-                    return String(describing: v)
+        try throwForStatus(
+            httpResp,
+            data: data,
+            domain: "CustomProviderService",
+            messages: ProviderErrorMessages(
+                unauthorized: (zh: "\(config.name) Anthropic API Key 无效或未授权 (HTTP 401)", en: "\(config.name) Anthropic API Key invalid or unauthorized (HTTP 401)"),
+                rateLimited: (zh: "Anthropic 接口请求已触发速率限制 (HTTP 429)", en: "Anthropic rate limit exceeded (HTTP 429)"),
+                rateLimitUsesJSONDetail: true,
+                snippetLength: 100,
+                failure: { code, snippet, isZh in
+                    isZh ? "Anthropic 兼容端点响应异常 (\(code)): \(snippet)" : "Anthropic compatible endpoint error (\(code)): \(snippet)"
                 }
-            }
-            return nil
-        }
-
-        let tokenLimitStr = getHeader("anthropic-ratelimit-tokens-limit")
-        let tokenRemainingStr = getHeader("anthropic-ratelimit-tokens-remaining")
-        let tokenResetStr = getHeader("anthropic-ratelimit-tokens-reset")
-
-        let reqLimitStr = getHeader("anthropic-ratelimit-requests-limit")
-        let reqRemainingStr = getHeader("anthropic-ratelimit-requests-remaining")
+            )
+        )
 
         var primaryWindow: TokenWindow? = nil
         var secondaryWindow: TokenWindow? = nil
 
-        if let limit = Double(tokenLimitStr ?? ""),
-           let remaining = Double(tokenRemainingStr ?? ""),
-           limit > 0 {
-            let used = max(0.0, limit - remaining)
-            let usedPct = min(max((used / limit) * 100.0, 0.0), 100.0)
-            let duration = OpenAIService.shared.parseDurationString(tokenResetStr ?? "1s")
-            let now = Date()
+        primaryWindow = RateLimitWindowBuilder.build(
+            response: httpResp,
+            limitHeader: "anthropic-ratelimit-tokens-limit",
+            remainingHeader: "anthropic-ratelimit-tokens-remaining",
+            reset: .header("anthropic-ratelimit-tokens-reset", fallback: "1s"),
+            title: .tokenRate,
+            unit: "tokens"
+        )
 
-            primaryWindow = TokenWindow(
-                title: .tokenRate,
-                usedPercentage: usedPct,
-                startTime: now,
-                endTime: now.addingTimeInterval(duration),
-                usedAmount: used,
-                totalLimit: limit,
-                unit: "tokens",
-                isIdle: used == 0.0
-            )
-        }
-
-        if let reqLimit = Double(reqLimitStr ?? ""),
-           let reqRemaining = Double(reqRemainingStr ?? ""),
-           reqLimit > 0 {
-            let used = max(0.0, reqLimit - reqRemaining)
-            let usedPct = min(max((used / reqLimit) * 100.0, 0.0), 100.0)
-
-            secondaryWindow = TokenWindow(
-                title: .rpmRate,
-                usedPercentage: usedPct,
-                startTime: Date(),
-                endTime: Date().addingTimeInterval(60),
-                usedAmount: used,
-                totalLimit: reqLimit,
-                unit: "req",
-                isIdle: used == 0.0
-            )
-        }
+        secondaryWindow = RateLimitWindowBuilder.build(
+            response: httpResp,
+            limitHeader: "anthropic-ratelimit-requests-limit",
+            remainingHeader: "anthropic-ratelimit-requests-remaining",
+            reset: .fixed(60),
+            title: .rpmRate,
+            unit: "req"
+        )
 
         var modelCount = 0
         if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -425,50 +331,7 @@ public final class CustomProviderService: @unchecked Sendable {
     }
 
     // MARK: - Vendor Specific Balance Probing
-    private func fetchDeepSeekBalance(apiKey: String) async -> (amount: Double, currency: String)? {
-        guard let url = URL(string: "https://api.deepseek.com/user/balance") else { return nil }
-        var req = URLRequest(url: url)
-        req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        req.timeoutInterval = 5
-        guard let (data, resp) = try? await HTTPClient.data(for: req),
-              let http = resp as? HTTPURLResponse, http.statusCode == 200,
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let infos = json["balance_infos"] as? [[String: Any]],
-              let first = infos.first else {
-            return nil
-        }
-
-        var totalValue: Double? = nil
-        if let totalStr = first["total_balance"] as? String {
-            totalValue = Double(totalStr)
-        } else if let totalNum = first["total_balance"] as? NSNumber {
-            totalValue = totalNum.doubleValue
-        }
-        guard let amount = totalValue else { return nil }
-
-        let currency = (first["currency"] as? String) ?? "CNY"
-        return (amount, currency)
-    }
-
-    private func fetchMoonshotBalance(apiKey: String) async -> Double? {
-        guard let url = URL(string: "https://api.moonshot.cn/v1/users/me/balance") else { return nil }
-        var req = URLRequest(url: url)
-        req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        req.timeoutInterval = 5
-        guard let (data, resp) = try? await HTTPClient.data(for: req),
-              let http = resp as? HTTPURLResponse, http.statusCode == 200,
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let dataObj = json["data"] as? [String: Any] else {
-            return nil
-        }
-        if let available = (dataObj["available_balance"] as? NSNumber)?.doubleValue {
-            return available
-        }
-        if let availableStr = dataObj["available_balance"] as? String, let parsed = Double(availableStr) {
-            return parsed
-        }
-        return nil
-    }
+    // DeepSeek / Moonshot 余额查询已收敛到 ProviderBalance（ProviderShared.swift）
 
     private func fetchSiliconFlowBalance(apiKey: String) async -> Double? {
         guard let url = URL(string: "https://api.siliconflow.cn/v1/user/info") else { return nil }

@@ -5,6 +5,17 @@ public final class DeepSeekService: @unchecked Sendable {
 
     public init() {}
 
+    /// 401/429/非2xx 文案（429 固定文案不解析 JSON；失败文案不带状态码；snippet 截 100）
+    static let errorMessages = ProviderErrorMessages(
+        unauthorized: (zh: "DeepSeek API Key 无效或未授权 (HTTP 401)", en: "DeepSeek API Key is invalid or unauthorized (HTTP 401)"),
+        rateLimited: (zh: "DeepSeek 请求达到速率限制或额度不足 (HTTP 429)", en: "DeepSeek rate limit reached or quota insufficient (HTTP 429)"),
+        rateLimitUsesJSONDetail: false,
+        snippetLength: 100,
+        failure: { _, snippet, isZh in
+            isZh ? "DeepSeek 接口异常: \(snippet)" : "DeepSeek API error: \(snippet)"
+        }
+    )
+
     public func fetchQuota(
         apiKey: String,
         endpoint: String = "https://api.deepseek.com/v1",
@@ -17,23 +28,17 @@ public final class DeepSeekService: @unchecked Sendable {
             throw NSError(domain: "DeepSeekService", code: 400, userInfo: [NSLocalizedDescriptionKey: isZh ? "请输入 DeepSeek API Key" : "Please enter DeepSeek API Key"])
         }
 
-        var baseEndpoint = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
-        if baseEndpoint.isEmpty {
-            baseEndpoint = "https://api.deepseek.com/v1"
-        }
-        while baseEndpoint.hasSuffix("/") {
-            baseEndpoint.removeLast()
-        }
+        let baseEndpoint = normalizeEndpoint(endpoint, fallback: "https://api.deepseek.com/v1")
 
         // 1. Fetch user balance
-        let balance = await fetchBalance(apiKey: cleanKey)
+        let balance = await ProviderBalance.fetchDeepSeekBalance(apiKey: cleanKey)
         var balanceString: String? = nil
         if let bal = balance {
             balanceString = String(format: "%@%.2f", bal.currency == "USD" ? "$" : "¥", bal.amount)
         }
 
         // 2. Fetch models and rate limits via GET /models
-        let modelsURLStr = baseEndpoint.hasSuffix("/models") ? baseEndpoint : "\(baseEndpoint)/models"
+        let modelsURLStr = modelsURLString(base: baseEndpoint)
         guard let url = URL(string: modelsURLStr) else {
             throw URLError(.badURL)
         }
@@ -49,33 +54,7 @@ public final class DeepSeekService: @unchecked Sendable {
             throw URLError(.badServerResponse)
         }
 
-        if httpResp.statusCode == 401 {
-            throw NSError(domain: "DeepSeekService", code: 401, userInfo: [NSLocalizedDescriptionKey: isZh ? "DeepSeek API Key 无效或未授权 (HTTP 401)" : "DeepSeek API Key is invalid or unauthorized (HTTP 401)"])
-        }
-
-        if httpResp.statusCode == 429 {
-            throw NSError(domain: "DeepSeekService", code: 429, userInfo: [NSLocalizedDescriptionKey: isZh ? "DeepSeek 请求达到速率限制或额度不足 (HTTP 429)" : "DeepSeek rate limit reached or quota insufficient (HTTP 429)"])
-        }
-
-        guard httpResp.statusCode >= 200 && httpResp.statusCode < 300 else {
-            let msg = String(data: data, encoding: .utf8) ?? "HTTP \(httpResp.statusCode)"
-            throw NSError(domain: "DeepSeekService", code: httpResp.statusCode, userInfo: [NSLocalizedDescriptionKey: isZh ? "DeepSeek 接口异常: \(msg.prefix(100))" : "DeepSeek API error: \(msg.prefix(100))"])
-        }
-
-        let allHeaders = httpResp.allHeaderFields
-        func getHeader(_ name: String) -> String? {
-            let target = name.lowercased()
-            for (k, v) in allHeaders {
-                if let keyStr = k as? String, keyStr.lowercased() == target {
-                    return String(describing: v)
-                }
-            }
-            return nil
-        }
-
-        let limitTokensStr = getHeader("x-ratelimit-limit-tokens")
-        let remainingTokensStr = getHeader("x-ratelimit-remaining-tokens")
-        let resetTokensStr = getHeader("x-ratelimit-reset-tokens")
+        try throwForStatus(httpResp, data: data, domain: "DeepSeekService", messages: Self.errorMessages)
 
         var primaryWindow: TokenWindow? = nil
         var secondaryWindow: TokenWindow? = nil
@@ -90,59 +69,22 @@ public final class DeepSeekService: @unchecked Sendable {
             )
         }
 
-        if let limitTokens = Double(limitTokensStr ?? ""),
-           let remainingTokens = Double(remainingTokensStr ?? ""),
-           limitTokens > 0 {
-            let used = max(0.0, limitTokens - remainingTokens)
-            let usedPct = min(max((used / limitTokens) * 100.0, 0.0), 100.0)
-            let duration = OpenAIService.shared.parseDurationString(resetTokensStr ?? "1s")
-            let now = Date()
-
-            primaryWindow = TokenWindow(
-                title: .tpmRate,
-                usedPercentage: usedPct,
-                startTime: now,
-                endTime: now.addingTimeInterval(duration),
-                usedAmount: used,
-                totalLimit: limitTokens,
-                unit: "tokens",
-                isIdle: used == 0.0
-            )
-        }
+        primaryWindow = RateLimitWindowBuilder.build(
+            response: httpResp,
+            limitHeader: "x-ratelimit-limit-tokens",
+            remainingHeader: "x-ratelimit-remaining-tokens",
+            reset: .header("x-ratelimit-reset-tokens", fallback: "1s"),
+            title: .tpmRate,
+            unit: "tokens"
+        )
 
         if primaryWindow == nil && secondaryWindow == nil {
             primaryWindow = TokenWindow.status(title: .connected(subject: "DeepSeek"))
         }
 
-        let keySuffix = cleanKey.count > 6 ? String(cleanKey.suffix(4)) : cleanKey
+        let keySuffix = keySuffixMask(cleanKey)
         let account = balanceString != nil ? (isZh ? "余额: \(balanceString!)" : "Balance: \(balanceString!)") : (isZh ? "已授权 (... \(keySuffix))" : "Authorized (... \(keySuffix))")
 
         return (primaryWindow, secondaryWindow, account)
-    }
-
-    /// 查询 DeepSeek 账户余额，返回 (金额, 币种)；失败返回 nil
-    private func fetchBalance(apiKey: String) async -> (amount: Double, currency: String)? {
-        guard let url = URL(string: "https://api.deepseek.com/user/balance") else { return nil }
-        var req = URLRequest(url: url)
-        req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        req.timeoutInterval = 5
-        guard let (data, resp) = try? await HTTPClient.data(for: req),
-              let http = resp as? HTTPURLResponse, http.statusCode == 200,
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let infos = json["balance_infos"] as? [[String: Any]],
-              let first = infos.first else {
-            return nil
-        }
-
-        var totalValue: Double? = nil
-        if let totalStr = first["total_balance"] as? String {
-            totalValue = Double(totalStr)
-        } else if let totalNum = first["total_balance"] as? NSNumber {
-            totalValue = totalNum.doubleValue
-        }
-        guard let amount = totalValue else { return nil }
-
-        let currency = (first["currency"] as? String) ?? "CNY"
-        return (amount, currency)
     }
 }

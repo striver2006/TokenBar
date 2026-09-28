@@ -30,11 +30,7 @@ namespace TokenBar.Services
                 throw new ArgumentException(LocalizationManager.Instance.IsChinese ? "请输入 KIMI / Moonshot API Key" : "Please enter KIMI / Moonshot API Key");
             }
 
-            var baseEndpoint = endpoint.Trim().TrimEnd('/');
-            if (string.IsNullOrEmpty(baseEndpoint))
-            {
-                baseEndpoint = "https://api.moonshot.cn/v1";
-            }
+            var baseEndpoint = ProviderShared.NormalizeEndpoint(endpoint, "https://api.moonshot.cn/v1");
 
             // Kimi Code 订阅模式（sk-kimi- Key / OAuth JWT / kimi coding 端点）走 coding 接口；
             // 其余按量付费 Key 保持 legacy 逻辑（余额 + /models 速率头）不变。
@@ -52,9 +48,7 @@ namespace TokenBar.Services
             }
 
             // 2. Fetch models & rate limits
-            var modelsUrl = baseEndpoint.EndsWith("/models", StringComparison.OrdinalIgnoreCase)
-                ? baseEndpoint
-                : $"{baseEndpoint}/models";
+            var modelsUrl = ProviderShared.ModelsUrl(baseEndpoint);
 
             using var req = new HttpRequestMessage(HttpMethod.Get, modelsUrl);
             req.Headers.Add("Authorization", $"Bearer {cleanKey}");
@@ -63,34 +57,7 @@ namespace TokenBar.Services
             using var resp = await Http.Shared.SendAsync(req, ct);
             var body = await resp.Content.ReadAsStringAsync(ct);
 
-            if (resp.StatusCode == System.Net.HttpStatusCode.Unauthorized)
-            {
-                throw new Exception(LocalizationManager.Instance.IsChinese ? "KIMI API Key 无效或未授权 (HTTP 401)" : "KIMI API Key is invalid or unauthorized (HTTP 401)");
-            }
-
-            if ((int)resp.StatusCode == 429)
-            {
-                throw new Exception(LocalizationManager.Instance.IsChinese ? "KIMI 请求并发超限或额度不足 (HTTP 429)" : "KIMI concurrency limit reached or quota insufficient (HTTP 429)");
-            }
-
-            if (!resp.IsSuccessStatusCode)
-            {
-                var snippet = body.Length > 100 ? body.Substring(0, 100) : body;
-                throw new Exception(LocalizationManager.Instance.IsChinese ? $"KIMI 接口响应异常 ({(int)resp.StatusCode}): {snippet}" : $"KIMI API response error ({(int)resp.StatusCode}): {snippet}");
-            }
-
-            string? GetHeader(string name)
-            {
-                if (resp.Headers.TryGetValues(name, out var values))
-                    return values.FirstOrDefault();
-                if (resp.Content.Headers.TryGetValues(name, out var cv))
-                    return cv.FirstOrDefault();
-                return null;
-            }
-
-            var limitTokensStr = GetHeader("x-ratelimit-limit-tokens");
-            var remainingTokensStr = GetHeader("x-ratelimit-remaining-tokens");
-            var resetTokensStr = GetHeader("x-ratelimit-reset-tokens");
+            ProviderHttpErrors.ThrowForStatus(resp, body, ProviderHttpErrorOptions.Kimi);
 
             TokenWindow? primaryWindow = null;
             TokenWindow? secondaryWindow = null;
@@ -110,34 +77,14 @@ namespace TokenBar.Services
                 };
             }
 
-            if (double.TryParse(limitTokensStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var limitTokens) &&
-                double.TryParse(remainingTokensStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var remainingTokens) &&
-                limitTokens > 0)
-            {
-                var used = Math.Max(0.0, limitTokens - remainingTokens);
-                var usedPct = Math.Clamp((used / limitTokens) * 100.0, 0.0, 100.0);
-                var duration = TimeSpan.FromSeconds(RateLimitReset.Parse(resetTokensStr) ?? 1);
-                var now = DateTime.Now;
-
-                primaryWindow = new TokenWindow
-                {
-                    Title = WindowTitle.TpmRate,
-                    UsedPercentage = usedPct,
-                    StartTime = now,
-                    EndTime = now.Add(duration),
-                    UsedAmount = used,
-                    TotalLimit = limitTokens,
-                    Unit = "tokens",
-                    IsIdle = used == 0.0
-                };
-            }
+            primaryWindow = resp.BuildRateLimitWindow(RateLimitHeaderSet.OpenAI("tokens"), WindowTitle.TpmRate, "tokens");
 
             if (primaryWindow == null && secondaryWindow == null)
             {
                 primaryWindow = TokenWindow.Status(WindowTitle.ConnectedFor("KIMI"));
             }
 
-            var keySuffix = cleanKey.Length > 6 ? cleanKey[^4..] : cleanKey;
+            var keySuffix = ProviderShared.KeySuffixMask(cleanKey);
             var isZh = LocalizationManager.Instance.IsChinese;
             var account = balanceString != null
                 ? (isZh ? $"余额: {balanceString}" : $"Balance: {balanceString}")
@@ -146,48 +93,15 @@ namespace TokenBar.Services
             return (primaryWindow, secondaryWindow, account);
         }
 
-        /// <summary>查询 Moonshot 账户余额（人民币），失败返回 null。</summary>
-        private async Task<decimal?> FetchBalanceAsync(string apiKey, string baseEndpoint, CancellationToken ct)
-        {
-            try
-            {
-                var balanceUrl = $"{baseEndpoint}/users/me/balance";
-                using var req = new HttpRequestMessage(HttpMethod.Get, balanceUrl);
-                req.Headers.Add("Authorization", $"Bearer {apiKey}");
-
-                using var resp = await Http.Shared.SendAsync(req, ct);
-                if (!resp.IsSuccessStatusCode) return null;
-
-                var body = await resp.Content.ReadAsStringAsync(ct);
-                using var doc = JsonDocument.Parse(body);
-                if (doc.RootElement.TryGetProperty("data", out var dataObj))
-                {
-                    if (dataObj.TryGetProperty("available_balance", out var avProp))
-                    {
-                        if (avProp.ValueKind == JsonValueKind.Number)
-                        {
-                            return (decimal)avProp.GetDouble();
-                        }
-                        if (avProp.ValueKind == JsonValueKind.String &&
-                            decimal.TryParse(avProp.GetString(), NumberStyles.Any, CultureInfo.InvariantCulture, out var parsed))
-                        {
-                            return parsed;
-                        }
-                    }
-                    if (dataObj.TryGetProperty("cash_balance", out var cashProp) && cashProp.ValueKind == JsonValueKind.Number)
-                    {
-                        return (decimal)cashProp.GetDouble();
-                    }
-                }
-            }
-            catch (OperationCanceledException) { throw; }
-            catch (Exception ex)
-            {
-                Log.Warn("provider", $"kimi 余额查询失败: {ex.Message}");
-            }
-
-            return null;
-        }
+        /// <summary>查询 Moonshot 账户余额（人民币），失败返回 null。实现收敛到 ProviderShared，
+        /// 保留 Kimi 侧差异：endpoint 跟随用户配置、available_balance 缺失时回退 cash_balance、日志前缀 "kimi"。</summary>
+        private Task<decimal?> FetchBalanceAsync(string apiKey, string baseEndpoint, CancellationToken ct) =>
+            ProviderShared.FetchMoonshotBalanceAsync(
+                apiKey,
+                $"{baseEndpoint}/users/me/balance",
+                allowCashBalanceFallback: true,
+                logFailurePrefix: "kimi 余额查询失败",
+                ct);
 
         /// <summary>
         /// 判定是否走 Kimi Code 订阅模式：sk-kimi- 前缀的 Key、JWT 形态的 OAuth token，
@@ -289,7 +203,6 @@ namespace TokenBar.Services
         /// <summary>请求 {base}/usages，错误处理与 legacy 路径一致（401/429/其它非 2xx 带 body 摘要）。</summary>
         private static async Task<string> FetchUsagesBodyAsync(string apiKey, string codingBase, CancellationToken ct)
         {
-            var isZh = LocalizationManager.Instance.IsChinese;
             using var req = new HttpRequestMessage(HttpMethod.Get, $"{codingBase}/usages");
             req.Headers.Add("Authorization", $"Bearer {apiKey}");
             req.Headers.Add("Accept", "application/json");
@@ -299,21 +212,7 @@ namespace TokenBar.Services
             using var resp = await Http.Shared.SendAsync(req, ct);
             var body = await resp.Content.ReadAsStringAsync(ct);
 
-            if (resp.StatusCode == System.Net.HttpStatusCode.Unauthorized)
-            {
-                throw new Exception(isZh ? "KIMI API Key 无效或未授权 (HTTP 401)" : "KIMI API Key is invalid or unauthorized (HTTP 401)");
-            }
-
-            if ((int)resp.StatusCode == 429)
-            {
-                throw new Exception(isZh ? "KIMI 请求并发超限或额度不足 (HTTP 429)" : "KIMI concurrency limit reached or quota insufficient (HTTP 429)");
-            }
-
-            if (!resp.IsSuccessStatusCode)
-            {
-                var snippet = body.Length > 100 ? body.Substring(0, 100) : body;
-                throw new Exception(isZh ? $"KIMI 接口响应异常 ({(int)resp.StatusCode}): {snippet}" : $"KIMI API response error ({(int)resp.StatusCode}): {snippet}");
-            }
+            ProviderHttpErrors.ThrowForStatus(resp, body, ProviderHttpErrorOptions.Kimi);
 
             return body;
         }
@@ -367,7 +266,7 @@ namespace TokenBar.Services
                 }
             }
 
-            var keySuffix = cleanKey.Length > 6 ? cleanKey[^4..] : cleanKey;
+            var keySuffix = ProviderShared.KeySuffixMask(cleanKey);
             return isZh ? $"KIMI (尾号 {keySuffix})" : $"KIMI (...{keySuffix})";
         }
 

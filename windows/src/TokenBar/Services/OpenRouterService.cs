@@ -31,11 +31,7 @@ namespace TokenBar.Services
                 throw new ArgumentException(LocalizationManager.Instance.IsChinese ? "请输入 OpenRouter API Key" : "Please enter OpenRouter API Key");
             }
 
-            var baseEndpoint = endpoint.Trim().TrimEnd('/');
-            if (string.IsNullOrEmpty(baseEndpoint))
-            {
-                baseEndpoint = "https://openrouter.ai/api/v1";
-            }
+            var baseEndpoint = ProviderShared.NormalizeEndpoint(endpoint, "https://openrouter.ai/api/v1");
 
             var isZh = LocalizationManager.Instance.IsChinese;
 

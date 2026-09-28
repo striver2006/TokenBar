@@ -30,7 +30,7 @@ public final class GLMService {
             openAIEndpoint = "\(trimmedEndpoint)/api/v1"
         }
 
-        let keySuffix = cleanKey.count > 6 ? String(cleanKey.suffix(4)) : cleanKey
+        let keySuffix = keySuffixMask(cleanKey)
         let account = "GLM (...  \(keySuffix))"
 
         // 1. Verify OpenAI Response Protocol via GET /models

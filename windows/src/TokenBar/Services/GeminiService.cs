@@ -4,7 +4,6 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
-using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -150,50 +149,13 @@ namespace TokenBar.Services
             public QuotaAuthException() : base("quota auth rejected") { }
         }
 
-        [DllImport("advapi32.dll", EntryPoint = "CredReadW", CharSet = CharSet.Unicode, SetLastError = true)]
-        private static extern bool CredRead(string target, int type, int reservedFlag, out IntPtr credentialPtr);
-
-        [DllImport("advapi32.dll", EntryPoint = "CredFree", SetLastError = true)]
-        private static extern void CredFree(IntPtr buffer);
-
-        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-        private struct CREDENTIAL
-        {
-            public int Flags;
-            public int Type;
-            public string TargetName;
-            public string Comment;
-            public long LastWritten;
-            public int CredentialBlobSize;
-            public IntPtr CredentialBlob;
-            public int Persist;
-            public int AttributeCount;
-            public IntPtr Attributes;
-            public string TargetAlias;
-            public string UserName;
-        }
-
         private static string? ReadCredential(string target)
         {
             try
             {
-                if (CredRead(target, 1, 0, out var ptr))
-                {
-                    try
-                    {
-                        var cred = Marshal.PtrToStructure<CREDENTIAL>(ptr);
-                        if (cred.CredentialBlobSize > 0 && cred.CredentialBlob != IntPtr.Zero)
-                        {
-                            var bytes = new byte[cred.CredentialBlobSize];
-                            Marshal.Copy(cred.CredentialBlob, bytes, 0, cred.CredentialBlobSize);
-                            return System.Text.Encoding.UTF8.GetString(bytes);
-                        }
-                    }
-                    finally
-                    {
-                        CredFree(ptr);
-                    }
-                }
+                // 复用 SecretStore 的 CredRead/CredFree P/Invoke（此前本文件自带一份拷贝）。
+                // 语义保持原样：条目不存在 / blob 为空返回 null；异常在此捕获并按原文案记日志。
+                return CredentialSecretStore.ReadRawCredentialBlob(target);
             }
             catch (Exception ex)
             {
@@ -328,11 +290,7 @@ namespace TokenBar.Services
                 throw new ArgumentException(LocalizationManager.Instance.IsChinese ? "请输入有效的 Google AI Studio API Key" : "Please enter a valid Google AI Studio API Key");
             }
 
-            var cleanBase = endpoint.Trim().TrimEnd('/');
-            if (string.IsNullOrEmpty(cleanBase))
-            {
-                cleanBase = "https://generativelanguage.googleapis.com";
-            }
+            var cleanBase = ProviderShared.NormalizeEndpoint(endpoint, "https://generativelanguage.googleapis.com");
 
             var urlString = (cleanBase.EndsWith("/v1beta", StringComparison.OrdinalIgnoreCase) ||
                              cleanBase.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
@@ -384,38 +342,9 @@ namespace TokenBar.Services
                 Log.Warn("provider", $"gemini /models 响应不是 JSON: {ex.Message}");
             }
 
-            string? GetHeader(string name)
-            {
-                if (resp.Headers.TryGetValues(name, out var values))
-                    return values.FirstOrDefault();
-                if (resp.Content.Headers.TryGetValues(name, out var cv))
-                    return cv.FirstOrDefault();
-                return null;
-            }
-
-            var limitReqsStr = GetHeader("x-ratelimit-limit-requests") ?? GetHeader("x-ratelimit-limit-rpm");
-            var remReqsStr = GetHeader("x-ratelimit-remaining-requests") ?? GetHeader("x-ratelimit-remaining-rpm");
-
-            TokenWindow? rpmWindow = null;
-            if (double.TryParse(limitReqsStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var limitReqs) &&
-                double.TryParse(remReqsStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var remReqs) &&
-                limitReqs > 0)
-            {
-                var used = Math.Max(0.0, limitReqs - remReqs);
-                var usedPct = Math.Clamp((used / limitReqs) * 100.0, 0.0, 100.0);
-                var nowTime = DateTime.Now;
-                rpmWindow = new TokenWindow
-                {
-                    Title = WindowTitle.RpmRate,
-                    UsedPercentage = usedPct,
-                    StartTime = nowTime,
-                    EndTime = nowTime.AddMinutes(1),
-                    UsedAmount = used,
-                    TotalLimit = limitReqs,
-                    Unit = "req/min",
-                    IsIdle = used == 0.0
-                };
-            }
+            // RPM 窗口：requests 头缺失时回退 rpm 头（候选顺序与原 GetHeader ?? 链一致），固定 1 分钟窗口
+            TokenWindow? rpmWindow = resp.BuildRateLimitWindow(
+                RateLimitHeaderSet.OpenAIFixedWindow("requests", "rpm"), WindowTitle.RpmRate, "req/min");
 
             // AI Studio 的 API Key 没有任何可查询的周期额度：
             // 没有速率头时只显示「API 连接正常」状态窗口；第二行用「可用模型 (N)」状态窗口，

@@ -19,13 +19,7 @@ public final class OpenRouterService: @unchecked Sendable {
             throw NSError(domain: "OpenRouterService", code: 400, userInfo: [NSLocalizedDescriptionKey: isZh ? "请输入 OpenRouter API Key" : "Please enter OpenRouter API Key"])
         }
 
-        var baseEndpoint = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
-        if baseEndpoint.isEmpty {
-            baseEndpoint = "https://openrouter.ai/api/v1"
-        }
-        while baseEndpoint.hasSuffix("/") {
-            baseEndpoint.removeLast()
-        }
+        let baseEndpoint = normalizeEndpoint(endpoint, fallback: "https://openrouter.ai/api/v1")
 
         // 1. 账户余额（Management Key 专属；普通 Key 会收到 403）
         var accountBalance: Double? = nil

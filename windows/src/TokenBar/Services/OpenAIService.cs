@@ -29,15 +29,9 @@ namespace TokenBar.Services
                 throw new ArgumentException(LocalizationManager.Instance.IsChinese ? "请输入 OpenAI API Key" : "Please enter OpenAI API Key");
             }
 
-            var baseEndpoint = endpoint.Trim().TrimEnd('/');
-            if (string.IsNullOrEmpty(baseEndpoint))
-            {
-                baseEndpoint = "https://api.openai.com/v1";
-            }
+            var baseEndpoint = ProviderShared.NormalizeEndpoint(endpoint, "https://api.openai.com/v1");
 
-            var targetUrl = baseEndpoint.EndsWith("/models", StringComparison.OrdinalIgnoreCase)
-                ? baseEndpoint
-                : $"{baseEndpoint}/models";
+            var targetUrl = ProviderShared.ModelsUrl(baseEndpoint);
 
             using var request = new HttpRequestMessage(HttpMethod.Get, targetUrl);
             request.Headers.Add("Authorization", $"Bearer {trimmedKey}");
@@ -66,106 +60,18 @@ namespace TokenBar.Services
             {
                 var responseBody = await response.Content.ReadAsStringAsync(ct);
 
-                if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
-                {
-                    throw new Exception(LocalizationManager.Instance.IsChinese ? "OpenAI API Key 无效或已过期 (HTTP 401)" : "OpenAI API Key is invalid or expired (HTTP 401)");
-                }
-
-                if ((int)response.StatusCode == 429)
-                {
-                    var msg = LocalizationManager.Instance.IsChinese ? "请求过于频繁或额度已耗尽 (HTTP 429)" : "Rate limit reached or quota exhausted (HTTP 429)";
-                    try
-                    {
-                        using var doc = JsonDocument.Parse(responseBody);
-                        if (doc.RootElement.TryGetProperty("error", out var err) &&
-                            err.TryGetProperty("message", out var errDetail))
-                        {
-                            msg = errDetail.GetString() ?? msg;
-                        }
-                    }
-                    catch (JsonException ex)
-                    {
-                        Log.Warn("provider", $"openai 429 响应不是 JSON: {ex.Message}");
-                    }
-                    throw new Exception(msg);
-                }
-
-                if (!response.IsSuccessStatusCode)
-                {
-                    var snippet = responseBody.Length > 120 ? responseBody.Substring(0, 120) : responseBody;
-                    throw new Exception(LocalizationManager.Instance.IsChinese ? $"OpenAI 接口请求失败 ({(int)response.StatusCode}): {snippet}" : $"OpenAI request failed ({(int)response.StatusCode}): {snippet}");
-                }
+                ProviderHttpErrors.ThrowForStatus(response, responseBody, ProviderHttpErrorOptions.OpenAI);
 
                 // Parse rate limit headers
-                string? GetHeader(string name)
-                {
-                    if (response.Headers.TryGetValues(name, out var values))
-                        return values.FirstOrDefault();
-                    if (response.Content.Headers.TryGetValues(name, out var contentValues))
-                        return contentValues.FirstOrDefault();
-                    return null;
-                }
-
-                var limitTokensStr = GetHeader("x-ratelimit-limit-tokens");
-                var remainingTokensStr = GetHeader("x-ratelimit-remaining-tokens");
-                var resetTokensStr = GetHeader("x-ratelimit-reset-tokens");
-
-                var limitReqStr = GetHeader("x-ratelimit-limit-requests");
-                var remainingReqStr = GetHeader("x-ratelimit-remaining-requests");
-                var resetReqStr = GetHeader("x-ratelimit-reset-requests");
-
-                var orgHeader = GetHeader("openai-organization");
-
-                TokenWindow? primaryWindow = null;
-                TokenWindow? secondaryWindow = null;
+                var orgHeader = response.GetHeader("openai-organization");
 
                 // 1. Tokens Rate Limit Window (TPM)
-                if (double.TryParse(limitTokensStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var limitTokens) &&
-                    double.TryParse(remainingTokensStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var remainingTokens) &&
-                    limitTokens > 0)
-                {
-                    var used = Math.Max(0.0, limitTokens - remainingTokens);
-                    var usedPct = Math.Clamp((used / limitTokens) * 100.0, 0.0, 100.0);
-                    var resetSec = RateLimitReset.Parse(resetTokensStr) ?? 1;
-                    var now = DateTime.Now;
-                    var resetDate = now.AddSeconds(resetSec);
-
-                    primaryWindow = new TokenWindow
-                    {
-                        Title = WindowTitle.TpmRemaining,
-                        UsedPercentage = usedPct,
-                        StartTime = now,
-                        EndTime = resetDate,
-                        UsedAmount = used,
-                        TotalLimit = limitTokens,
-                        Unit = "tokens",
-                        IsIdle = used == 0.0
-                    };
-                }
+                TokenWindow? primaryWindow = response.BuildRateLimitWindow(
+                    RateLimitHeaderSet.OpenAI("tokens"), WindowTitle.TpmRemaining, "tokens");
 
                 // 2. Requests Rate Limit Window (RPM)
-                if (double.TryParse(limitReqStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var limitReq) &&
-                    double.TryParse(remainingReqStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var remainingReq) &&
-                    limitReq > 0)
-                {
-                    var used = Math.Max(0.0, limitReq - remainingReq);
-                    var usedPct = Math.Clamp((used / limitReq) * 100.0, 0.0, 100.0);
-                    var resetSec = RateLimitReset.Parse(resetReqStr) ?? 1;
-                    var now = DateTime.Now;
-                    var resetDate = now.AddSeconds(resetSec);
-
-                    secondaryWindow = new TokenWindow
-                    {
-                        Title = WindowTitle.RpmRequest,
-                        UsedPercentage = usedPct,
-                        StartTime = now,
-                        EndTime = resetDate,
-                        UsedAmount = used,
-                        TotalLimit = limitReq,
-                        Unit = "req",
-                        IsIdle = used == 0.0
-                    };
-                }
+                TokenWindow? secondaryWindow = response.BuildRateLimitWindow(
+                    RateLimitHeaderSet.OpenAI("requests"), WindowTitle.RpmRequest, "req");
 
                 int modelCount = 0;
                 try

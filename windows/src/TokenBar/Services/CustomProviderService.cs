@@ -25,11 +25,9 @@ namespace TokenBar.Services
                 throw new ArgumentException(LocalizationManager.Instance.IsChinese ? $"请在配置中填入 {config.Name} 的 API KEY" : $"Please enter the API KEY for {config.Name}");
             }
 
-            var endpoint = config.Endpoint.Trim().TrimEnd('/');
-            if (string.IsNullOrEmpty(endpoint))
-            {
-                endpoint = config.Protocol == ApiProtocol.Anthropic ? "https://api.anthropic.com/v1" : "https://api.deepseek.com/v1";
-            }
+            var endpoint = ProviderShared.NormalizeEndpoint(
+                config.Endpoint,
+                config.Protocol == ApiProtocol.Anthropic ? "https://api.anthropic.com/v1" : "https://api.deepseek.com/v1");
 
             return config.Protocol switch
             {
@@ -128,9 +126,7 @@ namespace TokenBar.Services
                 }
             }
 
-            var modelsUrl = endpoint.EndsWith("/models", StringComparison.OrdinalIgnoreCase)
-                ? endpoint
-                : $"{endpoint}/models";
+            var modelsUrl = ProviderShared.ModelsUrl(endpoint);
 
             using var request = new HttpRequestMessage(HttpMethod.Get, modelsUrl);
             request.Headers.Add("Authorization", $"Bearer {apiKey}");
@@ -139,74 +135,15 @@ namespace TokenBar.Services
             using var resp = await Http.Shared.SendAsync(request, ct);
             var body = await resp.Content.ReadAsStringAsync(ct);
 
-            if (resp.StatusCode == System.Net.HttpStatusCode.Unauthorized)
-            {
-                throw new Exception(LocalizationManager.Instance.IsChinese ? $"{config.Name} API Key 认证失败 (HTTP 401)，请核对密钥" : $"{config.Name} API Key authentication failed (HTTP 401). Please check the key");
-            }
-
-            if ((int)resp.StatusCode == 429)
-            {
-                var msg = LocalizationManager.Instance.IsChinese ? "请求过于频繁或额度不足 (HTTP 429)" : "Rate limit reached or quota insufficient (HTTP 429)";
-                try
-                {
-                    using var doc = JsonDocument.Parse(body);
-                    if (doc.RootElement.TryGetProperty("error", out var err) &&
-                        err.TryGetProperty("message", out var detail))
-                    {
-                        msg = detail.GetString() ?? msg;
-                    }
-                }
-                catch (JsonException ex)
-                {
-                    Log.Warn("provider", $"custom 429 响应不是 JSON: {ex.Message}");
-                }
-                throw new Exception(msg);
-            }
-
-            if (!resp.IsSuccessStatusCode)
-            {
-                var snippet = body.Length > 100 ? body.Substring(0, 100) : body;
-                throw new Exception(LocalizationManager.Instance.IsChinese ? $"请求端点失败 ({(int)resp.StatusCode}): {snippet}" : $"Endpoint request failed ({(int)resp.StatusCode}): {snippet}");
-            }
-
-            string? GetHeader(string name)
-            {
-                if (resp.Headers.TryGetValues(name, out var values))
-                    return values.FirstOrDefault();
-                if (resp.Content.Headers.TryGetValues(name, out var cv))
-                    return cv.FirstOrDefault();
-                return null;
-            }
-
-            var limitTokensStr = GetHeader("x-ratelimit-limit-tokens");
-            var remainingTokensStr = GetHeader("x-ratelimit-remaining-tokens");
-            var resetTokensStr = GetHeader("x-ratelimit-reset-tokens");
+            ProviderHttpErrors.ThrowForStatus(resp, body, ProviderHttpErrorOptions.CustomOpenAI(config.Name));
 
             // 槽位优先级：订阅窗口（Token Plan 百分比）> 余额（金额）> 速率头
             TokenWindow? primaryWindow = planWindow ?? balanceWindow;
             TokenWindow? secondaryWindow = planWindow != null ? balanceWindow : null;
 
-            if (double.TryParse(limitTokensStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var limitTokens) &&
-                double.TryParse(remainingTokensStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var remainingTokens) &&
-                limitTokens > 0)
+            var rateWindow = resp.BuildRateLimitWindow(RateLimitHeaderSet.OpenAI("tokens"), WindowTitle.TpmRate, "tokens");
+            if (rateWindow != null)
             {
-                var used = Math.Max(0.0, limitTokens - remainingTokens);
-                var usedPct = Math.Clamp((used / limitTokens) * 100.0, 0.0, 100.0);
-                var duration = TimeSpan.FromSeconds(RateLimitReset.Parse(resetTokensStr) ?? 1);
-                var now = DateTime.Now;
-
-                var rateWindow = new TokenWindow
-                {
-                    Title = WindowTitle.TpmRate,
-                    UsedPercentage = usedPct,
-                    StartTime = now,
-                    EndTime = now.Add(duration),
-                    UsedAmount = used,
-                    TotalLimit = limitTokens,
-                    Unit = "tokens",
-                    IsIdle = used == 0.0
-                };
-
                 if (primaryWindow == null)
                     primaryWindow = rateWindow;
                 else if (secondaryWindow == null)
@@ -248,9 +185,7 @@ namespace TokenBar.Services
             CustomProviderConfig config,
             CancellationToken ct)
         {
-            var modelsUrl = endpoint.EndsWith("/models", StringComparison.OrdinalIgnoreCase)
-                ? endpoint
-                : $"{endpoint}/models";
+            var modelsUrl = ProviderShared.ModelsUrl(endpoint);
 
             using var request = new HttpRequestMessage(HttpMethod.Get, modelsUrl);
             request.Headers.Add("x-api-key", apiKey);
@@ -260,82 +195,13 @@ namespace TokenBar.Services
             using var resp = await Http.Shared.SendAsync(request, ct);
             var body = await resp.Content.ReadAsStringAsync(ct);
 
-            if (resp.StatusCode == System.Net.HttpStatusCode.Unauthorized)
-            {
-                throw new Exception(LocalizationManager.Instance.IsChinese ? $"{config.Name} Anthropic API Key 无效或未授权 (HTTP 401)" : $"{config.Name} Anthropic API Key invalid or unauthorized (HTTP 401)");
-            }
+            ProviderHttpErrors.ThrowForStatus(resp, body, ProviderHttpErrorOptions.CustomAnthropic(config.Name));
 
-            if ((int)resp.StatusCode == 429)
-            {
-                throw new Exception(LocalizationManager.Instance.IsChinese ? "Anthropic 接口请求已触发速率限制 (HTTP 429)" : "Anthropic rate limit exceeded (HTTP 429)");
-            }
+            TokenWindow? primaryWindow = resp.BuildRateLimitWindow(
+                RateLimitHeaderSet.Anthropic("tokens"), WindowTitle.TokenRate, "tokens");
 
-            if (!resp.IsSuccessStatusCode)
-            {
-                var snippet = body.Length > 100 ? body.Substring(0, 100) : body;
-                throw new Exception(LocalizationManager.Instance.IsChinese ? $"Anthropic 兼容端点响应异常 ({(int)resp.StatusCode}): {snippet}" : $"Anthropic compatible endpoint error ({(int)resp.StatusCode}): {snippet}");
-            }
-
-            string? GetHeader(string name)
-            {
-                if (resp.Headers.TryGetValues(name, out var values))
-                    return values.FirstOrDefault();
-                if (resp.Content.Headers.TryGetValues(name, out var cv))
-                    return cv.FirstOrDefault();
-                return null;
-            }
-
-            var tokenLimitStr = GetHeader("anthropic-ratelimit-tokens-limit");
-            var tokenRemainingStr = GetHeader("anthropic-ratelimit-tokens-remaining");
-            var tokenResetStr = GetHeader("anthropic-ratelimit-tokens-reset");
-
-            var reqLimitStr = GetHeader("anthropic-ratelimit-requests-limit");
-            var reqRemainingStr = GetHeader("anthropic-ratelimit-requests-remaining");
-
-            TokenWindow? primaryWindow = null;
-            TokenWindow? secondaryWindow = null;
-
-            if (double.TryParse(tokenLimitStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var limit) &&
-                double.TryParse(tokenRemainingStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var remaining) &&
-                limit > 0)
-            {
-                var used = Math.Max(0.0, limit - remaining);
-                var usedPct = Math.Clamp((used / limit) * 100.0, 0.0, 100.0);
-                var duration = TimeSpan.FromSeconds(RateLimitReset.Parse(tokenResetStr) ?? 1);
-                var now = DateTime.Now;
-
-                primaryWindow = new TokenWindow
-                {
-                    Title = WindowTitle.TokenRate,
-                    UsedPercentage = usedPct,
-                    StartTime = now,
-                    EndTime = now.Add(duration),
-                    UsedAmount = used,
-                    TotalLimit = limit,
-                    Unit = "tokens",
-                    IsIdle = used == 0.0
-                };
-            }
-
-            if (double.TryParse(reqLimitStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var reqLimit) &&
-                double.TryParse(reqRemainingStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var reqRem) &&
-                reqLimit > 0)
-            {
-                var used = Math.Max(0.0, reqLimit - reqRem);
-                var usedPct = Math.Clamp((used / reqLimit) * 100.0, 0.0, 100.0);
-
-                secondaryWindow = new TokenWindow
-                {
-                    Title = WindowTitle.RpmRate,
-                    UsedPercentage = usedPct,
-                    StartTime = DateTime.Now,
-                    EndTime = DateTime.Now.AddMinutes(1),
-                    UsedAmount = used,
-                    TotalLimit = reqLimit,
-                    Unit = "req",
-                    IsIdle = used == 0.0
-                };
-            }
+            TokenWindow? secondaryWindow = resp.BuildRateLimitWindow(
+                RateLimitHeaderSet.AnthropicFixedWindow("requests"), WindowTitle.RpmRate, "req");
 
             int modelCount = 0;
             try
@@ -363,36 +229,15 @@ namespace TokenBar.Services
             return (primaryWindow, secondaryWindow, account);
         }
 
-        /// <summary>查询 Moonshot 账户余额（人民币），失败返回 null。</summary>
-        private async Task<decimal?> FetchMoonshotBalanceAsync(string apiKey, CancellationToken ct)
-        {
-            try
-            {
-                using var req = new HttpRequestMessage(HttpMethod.Get, "https://api.moonshot.cn/v1/users/me/balance");
-                req.Headers.Add("Authorization", $"Bearer {apiKey}");
-
-                using var resp = await Http.Shared.SendAsync(req, ct);
-                if (!resp.IsSuccessStatusCode) return null;
-
-                var body = await resp.Content.ReadAsStringAsync(ct);
-                using var doc = JsonDocument.Parse(body);
-                if (doc.RootElement.TryGetProperty("data", out var dataObj) &&
-                    dataObj.TryGetProperty("available_balance", out var av))
-                {
-                    if (av.ValueKind == JsonValueKind.Number)
-                        return (decimal)av.GetDouble();
-                    if (av.ValueKind == JsonValueKind.String &&
-                        decimal.TryParse(av.GetString(), NumberStyles.Any, CultureInfo.InvariantCulture, out var parsed))
-                        return parsed;
-                }
-            }
-            catch (OperationCanceledException) { throw; }
-            catch (Exception ex)
-            {
-                Log.Warn("provider", $"custom 余额/套餐查询失败: {ex.Message}");
-            }
-            return null;
-        }
+        /// <summary>查询 Moonshot 账户余额（人民币），失败返回 null。实现收敛到 ProviderShared，
+        /// 保留 Custom 侧差异：固定官方 endpoint、不回退 cash_balance、日志前缀 "custom"。</summary>
+        private Task<decimal?> FetchMoonshotBalanceAsync(string apiKey, CancellationToken ct) =>
+            ProviderShared.FetchMoonshotBalanceAsync(
+                apiKey,
+                "https://api.moonshot.cn/v1/users/me/balance",
+                allowCashBalanceFallback: false,
+                logFailurePrefix: "custom 余额/套餐查询失败",
+                ct);
 
         /// <summary>查询小米 MiMo 按量余额（仅接受控制台 Cookie），失败返回 null。</summary>
         private async Task<(decimal Amount, string Currency)?> FetchMiMoBalanceAsync(string cookie, CancellationToken ct)

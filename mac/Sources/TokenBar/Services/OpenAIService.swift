@@ -5,6 +5,17 @@ public final class OpenAIService: @unchecked Sendable {
 
     public init() {}
 
+    /// 401/429/非2xx 文案（唯一 429 解析 JSON detail 且 snippet 截 120 的简单厂商）
+    static let errorMessages = ProviderErrorMessages(
+        unauthorized: (zh: "OpenAI API Key 无效或已过期 (HTTP 401)", en: "OpenAI API Key is invalid or expired (HTTP 401)"),
+        rateLimited: (zh: "请求过于频繁或额度已耗尽 (HTTP 429)", en: "Rate limit reached or quota exhausted (HTTP 429)"),
+        rateLimitUsesJSONDetail: true,
+        snippetLength: 120,
+        failure: { code, snippet, isZh in
+            isZh ? "OpenAI 接口请求失败 (\(code)): \(snippet)" : "OpenAI request failed (\(code)): \(snippet)"
+        }
+    )
+
     /// Fetches OpenAI quota and rate limits
     public func fetchQuota(
         apiKey: String,
@@ -21,20 +32,8 @@ public final class OpenAIService: @unchecked Sendable {
             )
         }
 
-        var baseEndpoint = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
-        if baseEndpoint.isEmpty {
-            baseEndpoint = "https://api.openai.com/v1"
-        }
-        while baseEndpoint.hasSuffix("/") {
-            baseEndpoint.removeLast()
-        }
-
-        let targetURLString: String
-        if baseEndpoint.hasSuffix("/models") {
-            targetURLString = baseEndpoint
-        } else {
-            targetURLString = "\(baseEndpoint)/models"
-        }
+        let baseEndpoint = normalizeEndpoint(endpoint, fallback: "https://api.openai.com/v1")
+        let targetURLString = modelsURLString(base: baseEndpoint)
 
         guard let url = URL(string: targetURLString) else {
             throw URLError(.badURL)
@@ -55,104 +54,29 @@ public final class OpenAIService: @unchecked Sendable {
         }
 
         let isZh = LocalizationManager.shared.effectiveLanguage == "zh"
-        if httpResp.statusCode == 401 {
-            throw NSError(
-                domain: "OpenAIService",
-                code: 401,
-                userInfo: [NSLocalizedDescriptionKey: isZh ? "OpenAI API Key 无效或已过期 (HTTP 401)" : "OpenAI API Key is invalid or expired (HTTP 401)"]
-            )
-        }
+        try throwForStatus(httpResp, data: data, domain: "OpenAIService", messages: Self.errorMessages)
 
-        if httpResp.statusCode == 429 {
-            var msg = isZh ? "请求过于频繁或额度已耗尽 (HTTP 429)" : "Rate limit reached or quota exhausted (HTTP 429)"
-            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let err = json["error"] as? [String: Any],
-               let errDetail = err["message"] as? String {
-                msg = errDetail
-            }
-            throw NSError(domain: "OpenAIService", code: 429, userInfo: [NSLocalizedDescriptionKey: msg])
-        }
-
-        guard httpResp.statusCode >= 200 && httpResp.statusCode < 300 else {
-            let errorMsg = String(data: data, encoding: .utf8) ?? "HTTP \(httpResp.statusCode)"
-            throw NSError(
-                domain: "OpenAIService",
-                code: httpResp.statusCode,
-                userInfo: [NSLocalizedDescriptionKey: isZh ? "OpenAI 接口请求失败 (\(httpResp.statusCode)): \(errorMsg.prefix(120))" : "OpenAI request failed (\(httpResp.statusCode)): \(errorMsg.prefix(120))"]
-            )
-        }
-
-        // Parse rate limits from headers
-        let allHeaders = httpResp.allHeaderFields
-
-        func getHeader(_ name: String) -> String? {
-            let lowerTarget = name.lowercased()
-            for (k, v) in allHeaders {
-                if let keyStr = k as? String, keyStr.lowercased() == lowerTarget {
-                    return String(describing: v)
-                }
-            }
-            return nil
-        }
-
-        let limitTokensStr = getHeader("x-ratelimit-limit-tokens")
-        let remainingTokensStr = getHeader("x-ratelimit-remaining-tokens")
-        let resetTokensStr = getHeader("x-ratelimit-reset-tokens")
-
-        let limitReqStr = getHeader("x-ratelimit-limit-requests")
-        let remainingReqStr = getHeader("x-ratelimit-remaining-requests")
-        let resetReqStr = getHeader("x-ratelimit-reset-requests")
-
-        let orgHeader = getHeader("openai-organization")
-
-        var primaryWindow: TokenWindow? = nil
-        var secondaryWindow: TokenWindow? = nil
+        let orgHeader = httpResp.value(forHTTPHeaderField: "openai-organization")
 
         // 1. Tokens Rate Limit Window (TPM)
-        if let limitTokens = Double(limitTokensStr ?? ""),
-           let remainingTokens = Double(remainingTokensStr ?? ""),
-           limitTokens > 0 {
-            let used = max(0.0, limitTokens - remainingTokens)
-            let usedPct = min(max((used / limitTokens) * 100.0, 0.0), 100.0)
-
-            let duration = parseDurationString(resetTokensStr ?? "1s")
-            let now = Date()
-            let resetDate = now.addingTimeInterval(duration)
-
-            primaryWindow = TokenWindow(
-                title: .tpmRemaining,
-                usedPercentage: usedPct,
-                startTime: now,
-                endTime: resetDate,
-                usedAmount: used,
-                totalLimit: limitTokens,
-                unit: "tokens",
-                isIdle: used == 0.0
-            )
-        }
+        let primaryWindow = RateLimitWindowBuilder.build(
+            response: httpResp,
+            limitHeader: "x-ratelimit-limit-tokens",
+            remainingHeader: "x-ratelimit-remaining-tokens",
+            reset: .header("x-ratelimit-reset-tokens", fallback: "1s"),
+            title: .tpmRemaining,
+            unit: "tokens"
+        )
 
         // 2. Requests Rate Limit Window (RPM)
-        if let limitReq = Double(limitReqStr ?? ""),
-           let remainingReq = Double(remainingReqStr ?? ""),
-           limitReq > 0 {
-            let used = max(0.0, limitReq - remainingReq)
-            let usedPct = min(max((used / limitReq) * 100.0, 0.0), 100.0)
-
-            let duration = parseDurationString(resetReqStr ?? "1s")
-            let now = Date()
-            let resetDate = now.addingTimeInterval(duration)
-
-            secondaryWindow = TokenWindow(
-                title: .rpmRequest,
-                usedPercentage: usedPct,
-                startTime: now,
-                endTime: resetDate,
-                usedAmount: used,
-                totalLimit: limitReq,
-                unit: "req",
-                isIdle: used == 0.0
-            )
-        }
+        let secondaryWindow = RateLimitWindowBuilder.build(
+            response: httpResp,
+            limitHeader: "x-ratelimit-limit-requests",
+            remainingHeader: "x-ratelimit-remaining-requests",
+            reset: .header("x-ratelimit-reset-requests", fallback: "1s"),
+            title: .rpmRequest,
+            unit: "req"
+        )
 
         // If no rate limit headers are exposed by the gateway, show connected status
         var modelCount = 0
@@ -161,8 +85,9 @@ public final class OpenAIService: @unchecked Sendable {
             modelCount = dataArr.count
         }
 
-        if primaryWindow == nil {
-            primaryWindow = TokenWindow.status(title: .connected())
+        var resolvedPrimary = primaryWindow
+        if resolvedPrimary == nil {
+            resolvedPrimary = TokenWindow.status(title: .connected())
         }
 
         var accountInfo = orgHeader ?? organizationId
@@ -170,12 +95,11 @@ public final class OpenAIService: @unchecked Sendable {
             accountInfo = modelCount > 0 ? (isZh ? "OpenAI (可用模型: \(modelCount)个)" : "OpenAI (\(modelCount) models available)") : "OpenAI API"
         }
 
-        return (primaryWindow, secondaryWindow, accountInfo)
+        return (resolvedPrimary, secondaryWindow, accountInfo)
     }
 
-    /// 兼容旧调用：委托给 `RateLimitReset.parse`，无法解析时按 1 秒兜底，
-    /// 最小 0.1 秒（毫秒级重置对倒计时没有意义，沿用旧下限）。
+    /// 兼容旧调用：委托给 `RateLimitReset.parseOrDefault`（无法解析按 1 秒兜底，最小 0.1 秒）。
     public func parseDurationString(_ str: String) -> TimeInterval {
-        max(0.1, RateLimitReset.parse(str) ?? 1.0)
+        RateLimitReset.parseOrDefault(str)
     }
 }
