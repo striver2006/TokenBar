@@ -40,23 +40,15 @@ namespace TokenBar.Services
         public AppSettings Settings { get; private set; } = new();
         public Dictionary<ProviderType, ProviderQuota> Quotas { get; } = new();
         public ConcurrentDictionary<Guid, CustomProviderQuota> CustomQuotas { get; } = new();
-        public bool IsRefreshing => Volatile.Read(ref _refreshing) == 1;
+        public bool IsRefreshing => _gate.IsBusy;
         public DateTime? LastRefreshDate { get; private set; }
 
-        // 0 = 空闲，1 = 刷新中。定时器回调在线程池线程、手动刷新在 UI 线程，
-        // 无锁的 check-then-set 会让两者同时通过检查并发跑两轮全量刷新。
-        private int _refreshing;
+        // 全量刷新互斥闸门 + 轮次代数（CAS 抢占、卡死接管、generation 防脏写）。
+        // 机制细节与单测见 RefreshGate。
+        private readonly RefreshGate _gate = new();
 
-        // 本轮开始时刻（UTC ticks，0 表示空闲）。闸门卡死时用它判断是否该强制抢占。
-        private long _refreshStartedAtTicks;
-        // 轮次代数：被抢占的旧轮次结束时不能把新轮次的闸门误清掉。
-        private long _refreshGeneration;
         // 上一次定时器触发的时刻，用于在日志里暴露真实间隔
         private DateTime? _lastTimerFire;
-
-        // 闸门抢占阈值。有了单厂商超时隔离后一轮最多约 35s 返回，
-        // 90s 纯粹是兜底：防住子进程这类不响应取消的路径。
-        private static readonly TimeSpan GateStaleThreshold = TimeSpan.FromSeconds(90);
 
         /// <summary>最近一次"发起过刷新"的时刻，无论成败都推进。</summary>
         public DateTime? LastAttemptDate { get; private set; }
@@ -563,29 +555,19 @@ namespace TokenBar.Services
         public async Task RefreshAllAsync(RefreshTrigger trigger = RefreshTrigger.Manual)
         {
             // 原子地抢占闸门，避免定时器（线程池）与手动刷新（UI 线程）同时进入
-            if (Interlocked.CompareExchange(ref _refreshing, 1, 0) != 0)
+            var (acquire, myGeneration, heldFor) = _gate.TryBegin();
+            if (acquire == GateAcquireResult.Skipped)
             {
-                var startedTicks = Volatile.Read(ref _refreshStartedAtTicks);
-                var elapsed = startedTicks == 0
-                    ? TimeSpan.Zero
-                    : TimeSpan.FromTicks(DateTime.UtcNow.Ticks - startedTicks);
-
-                if (startedTicks != 0 && elapsed > GateStaleThreshold)
-                {
-                    // 上一轮卡死了。以前这里只是 return，于是每一次 tick 和每一次手动刷新
-                    // 都被静默丢弃，界面上完全没有痕迹 —— 这正是"定时刷新彻底停摆"的成因。
-                    // 闸门已经是 1，无需再 CAS，直接接管这一轮。
-                    Log.Error("refresh", $"闸门被卡住 {elapsed.TotalSeconds:F1}s，强制抢占；trigger={trigger}");
-                }
-                else
-                {
-                    Log.Debug("refresh", $"跳过本次刷新：上一轮进行中 {elapsed.TotalSeconds:F1}s；trigger={trigger}");
-                    return;
-                }
+                Log.Debug("refresh", $"跳过本次刷新：上一轮进行中 {heldFor.TotalSeconds:F1}s；trigger={trigger}");
+                return;
+            }
+            if (acquire == GateAcquireResult.TookOverStale)
+            {
+                // 上一轮卡死了。以前这里只是 return，于是每一次 tick 和每一次手动刷新
+                // 都被静默丢弃，界面上完全没有痕迹 —— 这正是"定时刷新彻底停摆"的成因。
+                Log.Error("refresh", $"闸门被卡住 {heldFor.TotalSeconds:F1}s，强制抢占；trigger={trigger}");
             }
 
-            Volatile.Write(ref _refreshStartedAtTicks, DateTime.UtcNow.Ticks);
-            var myGeneration = Interlocked.Increment(ref _refreshGeneration);
             LastAttemptDate = DateTime.Now;
             var roundStart = System.Diagnostics.Stopwatch.StartNew();
             NotifyQuotasUpdated();
@@ -652,11 +634,7 @@ namespace TokenBar.Services
             {
                 // 只有仍然是"当前那一轮"才收闸门；被抢占的旧轮次结束时什么都不做，
                 // 否则会把接替它的新轮次的闸门提前打开。
-                if (Volatile.Read(ref _refreshGeneration) == myGeneration)
-                {
-                    Volatile.Write(ref _refreshStartedAtTicks, 0);
-                    Volatile.Write(ref _refreshing, 0);
-                }
+                _gate.End(myGeneration);
                 NotifyQuotasUpdated();
             }
         }
@@ -684,49 +662,30 @@ namespace TokenBar.Services
         {
             var sw = System.Diagnostics.Stopwatch.StartNew();
             var budget = BudgetFor(name);
-            using var cts = new CancellationTokenSource(budget);
+            var result = await ProviderBudgetRunner.RunAsync(body, budget, TimeSpan.FromSeconds(5));
 
-            Task work;
-            try
+            switch (result.Outcome)
             {
-                work = body(cts.Token);
-            }
-            catch (Exception ex)
-            {
-                // body 同步抛出（参数校验之类），不该让整轮挂掉
-                Log.Error("provider", $"provider={name} 启动失败: {ex.Message}");
-                return;
-            }
-
-            // 兜底等待：ct 取消后各服务应很快抛 OperationCanceledException 返回；
-            // 子进程等不响应取消的路径再多给 5 秒，之后放弃等待（进程已由服务自行 Kill）。
-            using var graceCts = new CancellationTokenSource();
-            var grace = Task.Delay(budget + TimeSpan.FromSeconds(5), graceCts.Token);
-            var winner = await Task.WhenAny(work, grace).ConfigureAwait(false);
-
-            if (winner == work)
-            {
-                graceCts.Cancel();   // 回收 Task.Delay 的定时器，避免堆积
-                try
-                {
-                    await work.ConfigureAwait(false);
+                case ProviderRunOutcome.Completed:
                     Log.Info("provider", $"provider={name} done in {sw.ElapsedMilliseconds}ms");
-                }
-                catch (OperationCanceledException)
-                {
+                    break;
+                case ProviderRunOutcome.StartFailed:
+                    // body 同步抛出（参数校验之类），不该让整轮挂掉
+                    Log.Error("provider", $"provider={name} 启动失败: {result.Error?.Message}");
+                    break;
+                case ProviderRunOutcome.TimedOut:
                     Log.Error("provider", $"provider={name} TIMEOUT after {sw.ElapsedMilliseconds}ms（已取消）");
                     FinishTimedOutProvider(key, customId);
-                }
-                catch (Exception ex)
-                {
-                    Log.Error("provider", $"provider={name} failed: {ex.Message}");
-                }
-                return;
+                    break;
+                case ProviderRunOutcome.Faulted:
+                    Log.Error("provider", $"provider={name} failed: {result.Error?.Message}");
+                    break;
+                case ProviderRunOutcome.Abandoned:
+                    Log.Error("provider", $"provider={name} TIMEOUT after {sw.ElapsedMilliseconds}ms，取消后仍未返回，已放弃本轮");
+                    // 被放弃的厂商，其 IsLoading 会停在 true（卡片一直转圈），这里补一次收尾。
+                    FinishTimedOutProvider(key, customId);
+                    break;
             }
-
-            Log.Error("provider", $"provider={name} TIMEOUT after {sw.ElapsedMilliseconds}ms，取消后仍未返回，已放弃本轮");
-            // 被放弃的厂商，其 IsLoading 会停在 true（卡片一直转圈），这里补一次收尾。
-            FinishTimedOutProvider(key, customId);
         }
 
         /// <summary>
@@ -735,8 +694,7 @@ namespace TokenBar.Services
         /// </summary>
         private bool IsStaleGeneration(long? generation, string name)
         {
-            if (!generation.HasValue) return false;
-            if (Volatile.Read(ref _refreshGeneration) == generation.Value) return false;
+            if (!_gate.IsStaleGeneration(generation)) return false;
             Log.Notice("provider", $"provider={name} 结果来自已被抢占的旧轮次，丢弃");
             return true;
         }
