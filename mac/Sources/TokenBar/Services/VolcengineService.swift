@@ -81,7 +81,7 @@ public final class VolcengineService: @unchecked Sendable {
             let now = Date()
 
             primaryWindow = TokenWindow(
-                title: "TPM 速率配额",
+                title: .tpmRate,
                 usedPercentage: usedPct,
                 startTime: now,
                 endTime: now.addingTimeInterval(duration),
@@ -99,7 +99,7 @@ public final class VolcengineService: @unchecked Sendable {
         }
 
         if primaryWindow == nil {
-            primaryWindow = TokenWindow.status(title: "接入点连接正常")
+            primaryWindow = TokenWindow.status(title: .connected(subject: "接入点"))
         }
 
         let keySuffix = cleanKey.count > 6 ? String(cleanKey.suffix(4)) : cleanKey

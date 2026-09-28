@@ -140,7 +140,7 @@ namespace TokenBar.Services
             {
                 balanceWindow = new TokenWindow
                 {
-                    Title = "账户可用余额",
+                    Title = WindowTitle.AccountAvailableBalance,
                     Kind = TokenWindowKind.Balance,
                     BalanceAmount = accountBalance.Value,
                     Currency = "USD",
@@ -155,7 +155,7 @@ namespace TokenBar.Services
                 // 无权限查账户余额，但 Key 有上限：以 Key 剩余额度充当余额展示
                 balanceWindow = new TokenWindow
                 {
-                    Title = "Key 可用额度",
+                    Title = WindowTitle.KeyQuota,
                     Kind = TokenWindowKind.Balance,
                     BalanceAmount = Math.Max(0, keyRemaining ?? (keyLimit.Value - (keyUsage ?? 0))),
                     Currency = "USD",
@@ -168,7 +168,7 @@ namespace TokenBar.Services
 
             if (balanceWindow == null)
             {
-                balanceWindow = TokenWindow.Status("OpenRouter 连接正常");
+                balanceWindow = TokenWindow.Status(WindowTitle.ConnectedFor("OpenRouter"));
             }
 
             // 4. 卡片头部账号信息

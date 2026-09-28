@@ -99,7 +99,7 @@ namespace TokenBar.Services
             {
                 secondaryWindow = new TokenWindow
                 {
-                    Title = "账户可用余额",
+                    Title = WindowTitle.AccountAvailableBalance,
                     Kind = TokenWindowKind.Balance,
                     BalanceAmount = balance.Value,
                     Currency = "CNY",
@@ -121,7 +121,7 @@ namespace TokenBar.Services
 
                 primaryWindow = new TokenWindow
                 {
-                    Title = "TPM 速率配额",
+                    Title = WindowTitle.TpmRate,
                     UsedPercentage = usedPct,
                     StartTime = now,
                     EndTime = now.Add(duration),
@@ -134,7 +134,7 @@ namespace TokenBar.Services
 
             if (primaryWindow == null && secondaryWindow == null)
             {
-                primaryWindow = TokenWindow.Status("KIMI 连接正常");
+                primaryWindow = TokenWindow.Status(WindowTitle.ConnectedFor("KIMI"));
             }
 
             var keySuffix = cleanKey.Length > 6 ? cleanKey[^4..] : cleanKey;
@@ -280,7 +280,7 @@ namespace TokenBar.Services
             // HTTP 200 但两种形状都没解析到任何窗口 → 回退状态窗
             if (fiveHour == null && longWindow == null)
             {
-                fiveHour = TokenWindow.Status("KIMI 连接正常");
+                fiveHour = TokenWindow.Status(WindowTitle.ConnectedFor("KIMI"));
             }
 
             return (fiveHour, longWindow, ResolveMeAccount(meBody, cleanKey, isZh));
@@ -458,7 +458,7 @@ namespace TokenBar.Services
                 var now = DateTime.Now;
                 return new TokenWindow
                 {
-                    Title = "5小时额度",
+                    Title = WindowTitle.FiveHour,
                     UsedPercentage = Math.Clamp(used.Value / limit.Value * 100.0, 0.0, 100.0),
                     StartTime = now,
                     EndTime = resetAt ?? now.AddHours(5),
@@ -486,7 +486,7 @@ namespace TokenBar.Services
                 entry = b;
 
             return entry.HasValue
-                ? BuildRatioWindow("5小时额度", entry.Value, TimeSpan.FromHours(5))
+                ? BuildRatioWindow(WindowTitle.FiveHour, entry.Value, TimeSpan.FromHours(5))
                 : null;
         }
 
@@ -498,7 +498,7 @@ namespace TokenBar.Services
                 return null;
 
             return usages.Value.TryGetProperty("limit_month_total", out var entry) && entry.ValueKind == JsonValueKind.Object
-                ? BuildRatioWindow("月度额度", entry, TimeSpan.FromDays(30))
+                ? BuildRatioWindow(WindowTitle.Monthly, entry, TimeSpan.FromDays(30))
                 : null;
         }
 
@@ -518,7 +518,7 @@ namespace TokenBar.Services
             var now = DateTime.Now;
             return new TokenWindow
             {
-                Title = resetAt.HasValue && (resetAt.Value - now).TotalDays >= 20 ? "月度额度" : "每周额度",
+                Title = resetAt.HasValue && (resetAt.Value - now).TotalDays >= 20 ? WindowTitle.Monthly : WindowTitle.Weekly,
                 UsedPercentage = usedPct,
                 StartTime = now,
                 EndTime = resetAt ?? now.AddDays(7),
@@ -543,12 +543,12 @@ namespace TokenBar.Services
                 entry = b;
 
             return entry.HasValue
-                ? BuildRatioWindow("每周额度", entry.Value, TimeSpan.FromDays(7))
+                ? BuildRatioWindow(WindowTitle.Weekly, entry.Value, TimeSpan.FromDays(7))
                 : null;
         }
 
         /// <summary>used_ratio / usedRatio（0..1 比例，兼容字符串数字）×100 构造比例窗口；reset_time / resetAt 取重置时间。</summary>
-        private static TokenWindow? BuildRatioWindow(string title, JsonElement entry, TimeSpan fallbackDuration)
+        private static TokenWindow? BuildRatioWindow(WindowTitle title, JsonElement entry, TimeSpan fallbackDuration)
         {
             var ratio = ReadDouble(entry, "used_ratio") ?? ReadDouble(entry, "usedRatio");
             if (ratio == null)

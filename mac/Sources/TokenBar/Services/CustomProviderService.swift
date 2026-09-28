@@ -51,7 +51,7 @@ public final class CustomProviderService: @unchecked Sendable {
         let isZh = LocalizationManager.shared.effectiveLanguage == "zh"
         let balanceThreshold = config.balanceAlertThreshold ?? 10
 
-        func useBalance(title: String, amount: Double, currency: String, formatted: String) {
+        func useBalance(title: WindowTitle, amount: Double, currency: String, formatted: String) {
             balanceAccountInfo = isZh ? "余额: \(formatted)" : "Balance: \(formatted)"
             balanceWindow = TokenWindow.balance(
                 title: title,
@@ -65,7 +65,7 @@ public final class CustomProviderService: @unchecked Sendable {
         if endpoint.contains("deepseek.com") {
             if let balance = await fetchDeepSeekBalance(apiKey: apiKey) {
                 useBalance(
-                    title: "账户余额",
+                    title: .accountBalance,
                     amount: balance.amount,
                     currency: balance.currency,
                     formatted: String(format: "%@%.2f", balance.currency == "USD" ? "$" : "¥", balance.amount)
@@ -73,11 +73,11 @@ public final class CustomProviderService: @unchecked Sendable {
             }
         } else if endpoint.contains("moonshot.cn") {
             if let balance = await fetchMoonshotBalance(apiKey: apiKey) {
-                useBalance(title: "账户余额", amount: balance, currency: "CNY", formatted: String(format: "¥%.2f", balance))
+                useBalance(title: .accountBalance, amount: balance, currency: "CNY", formatted: String(format: "¥%.2f", balance))
             }
         } else if endpoint.contains("siliconflow.cn") {
             if let balance = await fetchSiliconFlowBalance(apiKey: apiKey) {
-                useBalance(title: "账户余额", amount: balance, currency: "CNY", formatted: String(format: "¥%.2f", balance))
+                useBalance(title: .accountBalance, amount: balance, currency: "CNY", formatted: String(format: "¥%.2f", balance))
             }
         } else if endpoint.contains("xiaomimimo.com") {
             // 小米 MiMo：按量余额与 Token Plan 套餐用量都只接受控制台 Cookie；
@@ -91,7 +91,7 @@ public final class CustomProviderService: @unchecked Sendable {
 
                 if let plan = await planTask {
                     planWindow = TokenWindow(
-                        title: "Token Plan 额度",
+                        title: .tokenPlan,
                         usedPercentage: plan.usedPercent,
                         startTime: Date(),
                         endTime: Date().addingTimeInterval(30 * 86400),
@@ -107,7 +107,7 @@ public final class CustomProviderService: @unchecked Sendable {
 
                 if let balance = await balanceTask {
                     useBalance(
-                        title: "账户余额",
+                        title: .accountBalance,
                         amount: balance.amount,
                         currency: balance.currency,
                         formatted: String(format: "%@%.2f", balance.currency == "USD" ? "$" : "¥", balance.amount)
@@ -189,7 +189,7 @@ public final class CustomProviderService: @unchecked Sendable {
             let now = Date()
 
             let rateWindow = TokenWindow(
-                title: "TPM 速率配额",
+                title: .tpmRate,
                 usedPercentage: usedPct,
                 startTime: now,
                 endTime: now.addingTimeInterval(duration),
@@ -213,7 +213,7 @@ public final class CustomProviderService: @unchecked Sendable {
         }
 
         if primaryWindow == nil {
-            primaryWindow = TokenWindow.status(title: "接口连接正常")
+            primaryWindow = TokenWindow.status(title: .connected(subject: "接口"))
         }
 
         let combinedInfo: String?
@@ -307,7 +307,7 @@ public final class CustomProviderService: @unchecked Sendable {
             let now = Date()
 
             primaryWindow = TokenWindow(
-                title: "Token 速率配额",
+                title: .tokenRate,
                 usedPercentage: usedPct,
                 startTime: now,
                 endTime: now.addingTimeInterval(duration),
@@ -325,7 +325,7 @@ public final class CustomProviderService: @unchecked Sendable {
             let usedPct = min(max((used / reqLimit) * 100.0, 0.0), 100.0)
 
             secondaryWindow = TokenWindow(
-                title: "RPM 速率配额",
+                title: .rpmRate,
                 usedPercentage: usedPct,
                 startTime: Date(),
                 endTime: Date().addingTimeInterval(60),
@@ -343,7 +343,7 @@ public final class CustomProviderService: @unchecked Sendable {
         }
 
         if primaryWindow == nil {
-            primaryWindow = TokenWindow.status(title: "Anthropic 协议连接正常")
+            primaryWindow = TokenWindow.status(title: .connected(subject: "Anthropic 协议"))
         }
 
         let account = modelCount > 0 ? (isZh ? "已接入 (模型数: \(modelCount))" : "Connected (\(modelCount) models)") : (isZh ? "Anthropic 兼容协议" : "Anthropic Compatible Protocol")

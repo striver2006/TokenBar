@@ -159,7 +159,7 @@ namespace TokenBar.Services
 
                 fiveHourWindow = new TokenWindow
                 {
-                    Title = "TPM 速率配额",
+                    Title = WindowTitle.TpmRate,
                     UsedPercentage = usedPct,
                     StartTime = now,
                     EndTime = resetAt,
@@ -173,7 +173,7 @@ namespace TokenBar.Services
             if (fiveHourWindow == null && weeklyWindow == null)
             {
                 // 鉴权通过但没有任何额度数据：给一个状态型窗口，卡片只显示绿色状态点
-                fiveHourWindow = TokenWindow.Status("API 连接正常");
+                fiveHourWindow = TokenWindow.Status(WindowTitle.Connected);
             }
 
             return (fiveHourWindow, weeklyWindow, account);
@@ -281,7 +281,7 @@ namespace TokenBar.Services
                         var end = resetDate ?? DateTime.Now.AddHours(5);
                         fiveHourWindow = new TokenWindow
                         {
-                            Title = "5小时额度",
+                            Title = WindowTitle.FiveHour,
                             UsedPercentage = pct,
                             StartTime = end.AddHours(-5),
                             EndTime = end,
@@ -296,7 +296,7 @@ namespace TokenBar.Services
                         var end = resetDate ?? DateTime.Now.AddDays(7);
                         weeklyWindow = new TokenWindow
                         {
-                            Title = "每周额度",
+                            Title = WindowTitle.Weekly,
                             UsedPercentage = pct,
                             StartTime = end.AddDays(-7),
                             EndTime = end,

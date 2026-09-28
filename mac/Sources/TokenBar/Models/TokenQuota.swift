@@ -81,9 +81,159 @@ public enum TokenWindowKind: String, Codable {
     case status
 }
 
+/// 窗口标题的语义枚举：标题不再以中文串形态在代码里漂流，
+/// 翻译（localized）与角标（badgePeriod）都从这里穷尽 switch 派生。
+/// 新服务接入时必须选定一个 case（真正动态的标题走 .custom），
+/// 编译器保证漏登记的 case 无法通过 localized 的穷尽检查——消灭静默漏译。
+public enum WindowTitle: Equatable, Codable {
+    case fiveHour                // 5小时额度
+    case fiveHourCompute         // 5小时算力额度
+    case weekly                  // 每周额度
+    case monthly                 // 月度额度（历史文案「每月额度」也归并到这里）
+    case sevenDays               // 7天周期额度
+    case tpmRate                 // TPM 速率配额
+    case tpmRemaining            // TPM 速率剩余
+    case rpmRate                 // RPM 速率配额
+    case rpmRequest              // RPM 请求速率
+    case tokenRate               // Token 速率配额
+    case accountBalance          // 账户余额
+    case accountAvailableBalance // 账户可用余额
+    case keyQuota                // Key 可用额度
+    case tokenPlan               // Token Plan 额度
+    case aiStudioQuota           // AI Studio 配额
+    case connected(subject: String? = nil)  // 「XX 连接正常」类状态窗；subject 为品牌/通道名，nil 显示「API 连接正常」
+    case availableModels(count: Int)  // 可用模型 (N个)
+    case custom(String)          // 真正的动态标题（如 Claude 按模型的周额度用模型名），原样显示
+
+    /// 规范中文标题（中文界面的展示文案，也是历史字符串标题的对照基准）
+    public var zhTitle: String {
+        switch self {
+        case .fiveHour: return "5小时额度"
+        case .fiveHourCompute: return "5小时算力额度"
+        case .weekly: return "每周额度"
+        case .monthly: return "月度额度"
+        case .sevenDays: return "7天周期额度"
+        case .tpmRate: return "TPM 速率配额"
+        case .tpmRemaining: return "TPM 速率剩余"
+        case .rpmRate: return "RPM 速率配额"
+        case .rpmRequest: return "RPM 请求速率"
+        case .tokenRate: return "Token 速率配额"
+        case .accountBalance: return "账户余额"
+        case .accountAvailableBalance: return "账户可用余额"
+        case .keyQuota: return "Key 可用额度"
+        case .tokenPlan: return "Token Plan 额度"
+        case .aiStudioQuota: return "AI Studio 配额"
+        case .connected(let subject):
+            guard let subject, !subject.isEmpty else { return "API 连接正常" }
+            // ASCII 开头的主体（KIMI/OpenRouter/Anthropic API 等）用空格分隔，
+            // 中文主体（接入点/接口）直接连排——与迁移前各服务的原文逐字一致
+            let separator = subject.first?.isASCII == true ? " " : ""
+            return "\(subject)\(separator)连接正常"
+        case .availableModels(let count): return "可用模型 (\(count)个)"
+        case .custom(let text): return text
+        }
+    }
+
+    /// 当前语言的展示标题：中文返回 zhTitle，英文穷尽映射到 I18nKey。
+    public var localized: String {
+        let isZh = LocalizationManager.shared.effectiveLanguage == "zh"
+        if isZh { return zhTitle }
+        switch self {
+        case .fiveHour: return I18n(.fiveHourQuotaTitle)
+        case .fiveHourCompute: return I18n(.fiveHourComputeQuotaTitle)
+        case .weekly: return I18n(.weeklyQuotaTitle)
+        case .monthly: return I18n(.monthlyQuotaTitle)
+        case .sevenDays: return I18n(.sevenDaysQuotaTitle)
+        case .tpmRate, .tpmRemaining: return I18n(.tpmRateLimitTitle)
+        case .rpmRate, .rpmRequest: return I18n(.rpmRateLimitTitle)
+        case .tokenRate: return I18n(.tokenRateLimitTitle)
+        case .accountBalance, .accountAvailableBalance: return I18n(.accountBalanceTitle)
+        case .keyQuota: return I18n(.keyQuotaTitle)
+        case .tokenPlan: return I18n(.tokenPlanQuotaTitle)
+        case .aiStudioQuota: return I18n(.aiStudioQuotaTitle)
+        case .connected: return I18n(.apiConnectedTitle)
+        case .availableModels(let count): return "Available Models (\(count))"
+        case .custom(let text): return text
+        }
+    }
+
+    /// 角标周期语义。与旧版 contains("5小时")/contains("月")/contains("7天")/contains("周")
+    /// 对全部登记标题的推断结果一一对应；速率/余额/状态/模型数窗口本来推断不出（走 fallback），
+    /// 动态标题（.custom，如模型名）同样返回 nil 交给调用方的槽位默认角标。
+    public enum BadgePeriod {
+        case fiveHour
+        case weekly
+        case monthly
+    }
+
+    public var badgePeriod: BadgePeriod? {
+        switch self {
+        case .fiveHour, .fiveHourCompute: return .fiveHour
+        case .monthly: return .monthly
+        case .weekly, .sevenDays: return .weekly
+        case .tpmRate, .tpmRemaining, .rpmRate, .rpmRequest, .tokenRate,
+             .accountBalance, .accountAvailableBalance, .keyQuota, .tokenPlan,
+             .aiStudioQuota, .connected, .availableModels, .custom:
+            return nil
+        }
+    }
+
+    /// 自定义厂商卡片的次槽位角标用：是否 TPM 类速率窗口
+    /// （取代旧的 `title.uppercased().contains("TPM")` 字符串嗅探）。
+    public var isTpmKind: Bool {
+        switch self {
+        case .tpmRate, .tpmRemaining: return true
+        case .fiveHour, .fiveHourCompute, .weekly, .monthly, .sevenDays,
+             .rpmRate, .rpmRequest, .tokenRate,
+             .accountBalance, .accountAvailableBalance, .keyQuota, .tokenPlan,
+             .aiStudioQuota, .connected, .availableModels, .custom:
+            return false
+        }
+    }
+
+    /// 历史字符串标题 → 语义枚举（仅用于解码旧格式 JSON 的兼容层；
+    /// TokenWindow 并不持久化到磁盘，这层映射是防御性的）。
+    /// 未登记的字符串按 .custom 原样保留，与旧 localizedTitle 的 default 分支行为一致。
+    public init(legacyTitle: String) {
+        switch legacyTitle {
+        case "5小时额度": self = .fiveHour
+        case "5小时算力额度": self = .fiveHourCompute
+        case "每周额度": self = .weekly
+        case "每月额度", "月度额度": self = .monthly
+        case "7天额度", "7天周期额度": self = .sevenDays
+        case "TPM 速率配额": self = .tpmRate
+        case "TPM 速率剩余": self = .tpmRemaining
+        case "RPM 速率配额": self = .rpmRate
+        case "RPM 请求速率": self = .rpmRequest
+        case "Token 速率配额": self = .tokenRate
+        case "账户余额": self = .accountBalance
+        case "账户可用余额": self = .accountAvailableBalance
+        case "Key 额度", "Key 可用额度": self = .keyQuota
+        case "Token Plan 额度": self = .tokenPlan
+        case "AI Studio 配额": self = .aiStudioQuota
+        case "API 连接正常", "API 连接状态": self = .connected()
+        case "接口连接正常": self = .connected(subject: "接口")
+        case "接入点连接正常": self = .connected(subject: "接入点")
+        case "Anthropic 协议连接正常": self = .connected(subject: "Anthropic 协议")
+        case "Anthropic API 连接正常": self = .connected(subject: "Anthropic API")
+        case "DeepSeek 连接正常": self = .connected(subject: "DeepSeek")
+        case "KIMI 连接正常": self = .connected(subject: "KIMI")
+        case "OpenRouter 连接正常": self = .connected(subject: "OpenRouter")
+        default:
+            if legacyTitle.hasPrefix("可用模型 ("),
+               let count = Int(legacyTitle.filter { $0.isNumber }) {
+                self = .availableModels(count: count)
+            } else {
+                self = .custom(legacyTitle)
+            }
+        }
+    }
+}
+
 public struct TokenWindow: Identifiable, Codable {
     public var id = UUID()
-    public var title: String
+    /// 标题的语义来源；展示一律经 `title` / `localizedTitle` 派生
+    public var titleKind: WindowTitle
     public var usedPercentage: Double
     public var startTime: Date
     public var endTime: Date
@@ -102,8 +252,22 @@ public struct TokenWindow: Identifiable, Codable {
     public var lastDelta: Double?
     public var forecastDays: Double?
 
+    /// 兼容层：旧格式 JSON 用中文字符串 `title` 存标题；新格式用 `titleKind`。
+    /// TokenWindow 只存在于内存态（落盘的只有 AppSettings 与余额历史点），
+    /// 这里保留对旧字符串键的解码能力仅为防御（历史版本曾持久化过窗口）。
+    enum CodingKeys: String, CodingKey {
+        case id, titleKind, usedPercentage, startTime, endTime
+        case usedAmount, totalLimit, unit, isIdle
+        case kind, balanceAmount, currency, warningThreshold, criticalThreshold
+        case lastDelta, forecastDays
+    }
+
+    private enum LegacyCodingKeys: String, CodingKey {
+        case title
+    }
+
     public init(
-        title: String,
+        title: WindowTitle,
         usedPercentage: Double,
         startTime: Date,
         endTime: Date,
@@ -112,7 +276,7 @@ public struct TokenWindow: Identifiable, Codable {
         unit: String = "%",
         isIdle: Bool = false
     ) {
-        self.title = title
+        self.titleKind = title
         self.usedPercentage = min(max(usedPercentage, 0.0), 100.0)
         self.startTime = startTime
         self.endTime = endTime
@@ -122,9 +286,37 @@ public struct TokenWindow: Identifiable, Codable {
         self.isIdle = isIdle
     }
 
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        if let kind = try c.decodeIfPresent(WindowTitle.self, forKey: .titleKind) {
+            titleKind = kind
+        } else {
+            let legacy = try decoder.container(keyedBy: LegacyCodingKeys.self)
+            titleKind = WindowTitle(legacyTitle: try legacy.decodeIfPresent(String.self, forKey: .title) ?? "")
+        }
+        usedPercentage = try c.decode(Double.self, forKey: .usedPercentage)
+        startTime = try c.decode(Date.self, forKey: .startTime)
+        endTime = try c.decode(Date.self, forKey: .endTime)
+        usedAmount = try c.decodeIfPresent(Double.self, forKey: .usedAmount)
+        totalLimit = try c.decodeIfPresent(Double.self, forKey: .totalLimit)
+        unit = try c.decodeIfPresent(String.self, forKey: .unit) ?? "%"
+        isIdle = try c.decodeIfPresent(Bool.self, forKey: .isIdle) ?? false
+        kind = try c.decodeIfPresent(TokenWindowKind.self, forKey: .kind)
+        balanceAmount = try c.decodeIfPresent(Double.self, forKey: .balanceAmount)
+        currency = try c.decodeIfPresent(String.self, forKey: .currency)
+        warningThreshold = try c.decodeIfPresent(Double.self, forKey: .warningThreshold)
+        criticalThreshold = try c.decodeIfPresent(Double.self, forKey: .criticalThreshold)
+        lastDelta = try c.decodeIfPresent(Double.self, forKey: .lastDelta)
+        forecastDays = try c.decodeIfPresent(Double.self, forKey: .forecastDays)
+    }
+
+    /// 中文标题（保持既有字符串读取方兼容）；本地化展示请用 `localizedTitle`
+    public var title: String { titleKind.zhTitle }
+
     /// 便捷构造余额窗口
     public static func balance(
-        title: String,
+        title: WindowTitle,
         amount: Double,
         currency: String,
         warningThreshold: Double?,
@@ -140,7 +332,7 @@ public struct TokenWindow: Identifiable, Codable {
     }
 
     /// 便捷构造状态型窗口：只表达「接口连通」，没有任何额度数字
-    public static func status(title: String) -> TokenWindow {
+    public static func status(title: WindowTitle) -> TokenWindow {
         var w = TokenWindow(title: title, usedPercentage: 0.0, startTime: Date(), endTime: Date().addingTimeInterval(86400), isIdle: true)
         w.kind = .status
         return w
@@ -165,42 +357,17 @@ public struct TokenWindow: Identifiable, Codable {
         return max(0.0, 100.0 - usedPercentage)
     }
 
-    public var localizedTitle: String {
-        let isZh = LocalizationManager.shared.effectiveLanguage == "zh"
-        if isZh { return title }
-
-        if title.hasPrefix("可用模型 (") {
-            let count = title.replacingOccurrences(of: "可用模型 (", with: "").replacingOccurrences(of: "个)", with: "").replacingOccurrences(of: ")", with: "").trimmingCharacters(in: .whitespaces)
-            return "Available Models (\(count))"
-        }
-
-        switch title {
-        case "5小时额度": return I18n(.fiveHourQuotaTitle)
-        case "每月额度", "月度额度": return I18n(.monthlyQuotaTitle)
-        case "每周额度": return I18n(.weeklyQuotaTitle)
-        case "7天额度", "7天周期额度": return I18n(.sevenDaysQuotaTitle)
-        case "账户可用余额", "账户余额": return I18n(.accountBalanceTitle)
-        case "Key 额度", "Key 可用额度": return I18n(.keyQuotaTitle)
-        case "Token Plan 额度": return I18n(.tokenPlanQuotaTitle)
-        case "RPM 速率配额", "RPM 请求速率": return I18n(.rpmRateLimitTitle)
-        case "TPM 速率配额", "TPM 速率剩余": return I18n(.tpmRateLimitTitle)
-        case "Token 速率配额": return I18n(.tokenRateLimitTitle)
-        case "5小时算力额度": return I18n(.fiveHourComputeQuotaTitle)
-        case "API 连接正常", "接口连接正常", "Anthropic 协议连接正常", "Anthropic API 连接正常", "DeepSeek 连接正常", "KIMI 连接正常", "OpenRouter 连接正常", "接入点连接正常", "API 连接状态":
-            return I18n(.apiConnectedTitle)
-        case "AI Studio 配额":
-            return "AI Studio Quota"
-        default: return title
-        }
-    }
+    public var localizedTitle: String { titleKind.localized }
 
     /// 卡片角标按窗口标题的周期语义推断：月度额度显示「每月」而不是槽位默认的「每周」；
     /// 推断不出（如按模型圈定的周额度标题是模型名）时回退调用方按槽位给的默认角标。
     public func badgeLabel(fallback: String) -> String {
-        if title.contains("5小时") { return I18n(.fiveHourWindow) }
-        if title.contains("月") { return I18n(.monthlyWindow) }
-        if title.contains("7天") || title.contains("周") { return I18n(.weeklyWindow) }
-        return fallback
+        switch titleKind.badgePeriod {
+        case .fiveHour: return I18n(.fiveHourWindow)
+        case .monthly: return I18n(.monthlyWindow)
+        case .weekly: return I18n(.weeklyWindow)
+        case nil: return fallback
+        }
     }
 
     public var isExpired: Bool {

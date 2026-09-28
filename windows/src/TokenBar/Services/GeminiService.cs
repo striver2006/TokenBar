@@ -406,7 +406,7 @@ namespace TokenBar.Services
                 var nowTime = DateTime.Now;
                 rpmWindow = new TokenWindow
                 {
-                    Title = "RPM 速率配额",
+                    Title = WindowTitle.RpmRate,
                     UsedPercentage = usedPct,
                     StartTime = nowTime,
                     EndTime = nowTime.AddMinutes(1),
@@ -420,8 +420,8 @@ namespace TokenBar.Services
             // AI Studio 的 API Key 没有任何可查询的周期额度：
             // 没有速率头时只显示「API 连接正常」状态窗口；第二行用「可用模型 (N)」状态窗口，
             // 不再用「当前小时/5」拼出假的 5 小时起止，也不再编造 usedPercentage=0 的每周额度。
-            var fiveHour = rpmWindow ?? TokenWindow.Status("API 连接正常");
-            TokenWindow? weekly = modelCount > 0 ? TokenWindow.Status($"可用模型 ({modelCount}个)") : null;
+            var fiveHour = rpmWindow ?? TokenWindow.Status(WindowTitle.Connected);
+            TokenWindow? weekly = modelCount > 0 ? TokenWindow.Status(WindowTitle.AvailableModels(modelCount)) : null;
 
             string maskedKey = trimmedKey.Length > 8
                 ? $"{trimmedKey[..6]}...{trimmedKey[^4..]}"
@@ -777,7 +777,7 @@ namespace TokenBar.Services
             var usedPct = Math.Clamp((1.0 - remainingFraction.Value) * 100.0, 0.0, 100.0);
             return new TokenWindow
             {
-                Title = isWeekly ? "每周额度" : "5小时额度",
+                Title = isWeekly ? WindowTitle.Weekly : WindowTitle.FiveHour,
                 UsedPercentage = usedPct,
                 StartTime = start,
                 EndTime = end,
@@ -829,7 +829,7 @@ namespace TokenBar.Services
 
             var window = new TokenWindow
             {
-                Title = "5小时额度",
+                Title = WindowTitle.FiveHour,
                 UsedPercentage = Math.Clamp((1.0 - minRemaining.Value) * 100.0, 0.0, 100.0),
                 StartTime = end.Subtract(span),
                 EndTime = end,

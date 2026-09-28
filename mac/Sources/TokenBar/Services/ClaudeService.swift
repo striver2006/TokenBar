@@ -68,7 +68,7 @@ public final class ClaudeService: @unchecked Sendable {
             let now = Date()
             let resetsAt = (limit["resets_at"] as? String).flatMap { parseDate($0) } ?? now.addingTimeInterval(7 * 86400)
             return TokenWindow(
-                title: displayName,
+                title: .custom(displayName),
                 usedPercentage: pct,
                 startTime: resetsAt.addingTimeInterval(-7 * 86400),
                 endTime: resetsAt,
@@ -91,7 +91,7 @@ public final class ClaudeService: @unchecked Sendable {
                 // If account is logged in but no cached utilization yet, create clean initial 5h window
                 let now = Date()
                 let fiveHour = TokenWindow(
-                    title: "5小时额度",
+                    title: .fiveHour,
                     usedPercentage: 0.0,
                     startTime: now,
                     endTime: now.addingTimeInterval(5 * 3600),
@@ -114,7 +114,7 @@ public final class ClaudeService: @unchecked Sendable {
                     if resetsAt > Date() {
                         let startTime = resetsAt.addingTimeInterval(-5 * 3600)
                         fiveHourWindow = TokenWindow(
-                            title: "5小时额度",
+                            title: .fiveHour,
                             usedPercentage: util,
                             startTime: startTime,
                             endTime: resetsAt,
@@ -125,7 +125,7 @@ public final class ClaudeService: @unchecked Sendable {
                         // Previous 5h window has passed reset time -> resets to 0% used (100% remaining)
                         let now = Date()
                         fiveHourWindow = TokenWindow(
-                            title: "5小时额度",
+                            title: .fiveHour,
                             usedPercentage: 0.0,
                             startTime: now,
                             endTime: now.addingTimeInterval(5 * 3600),
@@ -137,7 +137,7 @@ public final class ClaudeService: @unchecked Sendable {
                     // resets_at is null: session is currently idle/reset, 100% quota available!
                     let now = Date()
                     fiveHourWindow = TokenWindow(
-                        title: "5小时额度",
+                        title: .fiveHour,
                         usedPercentage: util,
                         startTime: now,
                         endTime: now.addingTimeInterval(5 * 3600),
@@ -154,7 +154,7 @@ public final class ClaudeService: @unchecked Sendable {
                 let pct = (session["percent"] as? NSNumber)?.doubleValue ?? 0.0
                 let now = Date()
                 fiveHourWindow = TokenWindow(
-                    title: "5小时额度",
+                    title: .fiveHour,
                     usedPercentage: pct,
                     startTime: now,
                     endTime: now.addingTimeInterval(5 * 3600),
@@ -167,7 +167,7 @@ public final class ClaudeService: @unchecked Sendable {
             if fiveHourWindow == nil {
                 let now = Date()
                 fiveHourWindow = TokenWindow(
-                    title: "5小时额度",
+                    title: .fiveHour,
                     usedPercentage: 0.0,
                     startTime: now,
                     endTime: now.addingTimeInterval(5 * 3600),
@@ -183,7 +183,7 @@ public final class ClaudeService: @unchecked Sendable {
                 if let str = resetsAtStr, let resetsAt = parseDate(str) {
                     let startTime = resetsAt.addingTimeInterval(-7 * 86400)
                     weeklyWindow = TokenWindow(
-                        title: "每周额度",
+                        title: .weekly,
                         usedPercentage: util,
                         startTime: startTime,
                         endTime: resetsAt,
@@ -202,7 +202,7 @@ public final class ClaudeService: @unchecked Sendable {
                 let resetsAt = resetsAtStr != nil ? (parseDate(resetsAtStr!) ?? now.addingTimeInterval(7 * 86400)) : now.addingTimeInterval(7 * 86400)
                 let startTime = resetsAt.addingTimeInterval(-7 * 86400)
                 weeklyWindow = TokenWindow(
-                    title: "每周额度",
+                    title: .weekly,
                     usedPercentage: pct,
                     startTime: startTime,
                     endTime: resetsAt,
@@ -261,7 +261,7 @@ public final class ClaudeService: @unchecked Sendable {
                 if resetsAt > Date() {
                     let startTime = resetsAt.addingTimeInterval(-5 * 3600)
                     fiveHourWindow = TokenWindow(
-                        title: "5小时额度",
+                        title: .fiveHour,
                         usedPercentage: util,
                         startTime: startTime,
                         endTime: resetsAt,
@@ -271,7 +271,7 @@ public final class ClaudeService: @unchecked Sendable {
                 } else {
                     let now = Date()
                     fiveHourWindow = TokenWindow(
-                        title: "5小时额度",
+                        title: .fiveHour,
                         usedPercentage: 0.0,
                         startTime: now,
                         endTime: now.addingTimeInterval(5 * 3600),
@@ -282,7 +282,7 @@ public final class ClaudeService: @unchecked Sendable {
             } else {
                 let now = Date()
                 fiveHourWindow = TokenWindow(
-                    title: "5小时额度",
+                    title: .fiveHour,
                     usedPercentage: util,
                     startTime: now,
                     endTime: now.addingTimeInterval(5 * 3600),
@@ -295,7 +295,7 @@ public final class ClaudeService: @unchecked Sendable {
         if fiveHourWindow == nil {
             let now = Date()
             fiveHourWindow = TokenWindow(
-                title: "5小时额度",
+                title: .fiveHour,
                 usedPercentage: 0.0,
                 startTime: now,
                 endTime: now.addingTimeInterval(5 * 3600),
@@ -311,7 +311,7 @@ public final class ClaudeService: @unchecked Sendable {
             if let str = resetsAtStr, let resetsAt = parseDate(str) {
                 let startTime = resetsAt.addingTimeInterval(-7 * 86400)
                 weeklyWindow = TokenWindow(
-                    title: "每周额度",
+                    title: .weekly,
                     usedPercentage: util,
                     startTime: startTime,
                     endTime: resetsAt,
@@ -406,7 +406,7 @@ public final class ClaudeService: @unchecked Sendable {
             let now = Date()
 
             primaryWindow = TokenWindow(
-                title: "TPM 速率配额",
+                title: .tpmRate,
                 usedPercentage: usedPct,
                 startTime: now,
                 endTime: now.addingTimeInterval(duration),
@@ -425,7 +425,7 @@ public final class ClaudeService: @unchecked Sendable {
             let now = Date()
 
             secondaryWindow = TokenWindow(
-                title: "RPM 速率配额",
+                title: .rpmRate,
                 usedPercentage: usedPct,
                 startTime: now,
                 endTime: now.addingTimeInterval(60),
@@ -437,7 +437,7 @@ public final class ClaudeService: @unchecked Sendable {
         }
 
         if primaryWindow == nil && secondaryWindow == nil {
-            primaryWindow = TokenWindow.status(title: "Anthropic API 连接正常")
+            primaryWindow = TokenWindow.status(title: .connected(subject: "Anthropic API"))
         }
 
         let keySuffix = cleanKey.count > 6 ? String(cleanKey.suffix(4)) : cleanKey

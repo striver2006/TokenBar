@@ -1,4 +1,5 @@
 using System;
+using TokenBar.Models;
 using TokenBar.Services;
 using Xunit;
 
@@ -67,7 +68,7 @@ namespace TokenBar.Tests
                  "httpStatusCode":"200","successResponse":true}
                 """);
             Assert.NotNull(r.LongWindow);
-            Assert.Equal("月度额度", r.LongWindow!.Title);
+            Assert.Equal(WindowTitleKind.Monthly, r.LongWindow!.Title.Kind);
             Assert.Equal(5.6, r.LongWindow.UsedPercentage, 3);
             Assert.Equal(1791129600000, new DateTimeOffset(r.LongWindow.EndTime).ToUnixTimeMilliseconds());
             // 订阅月窗口按 30 天派生起点
@@ -85,7 +86,7 @@ namespace TokenBar.Tests
                  "per1WeekPercentage":0.9,"per1WeekResetTime":1789122720000}
                 """);
             Assert.NotNull(r.LongWindow);
-            Assert.Equal("月度额度", r.LongWindow!.Title);
+            Assert.Equal(WindowTitleKind.Monthly, r.LongWindow!.Title.Kind);
             Assert.Equal(40.0, r.LongWindow.UsedPercentage, 3);
         }
 
@@ -97,7 +98,7 @@ namespace TokenBar.Tests
             var farReset = DateTimeOffset.Now.AddDays(20).ToUnixTimeMilliseconds();
             var r = Parse($"{{\"per1WeekPercentage\":0.3,\"per1WeekResetTime\":{farReset}}}");
             Assert.NotNull(r.LongWindow);
-            Assert.Equal("月度额度", r.LongWindow!.Title);
+            Assert.Equal(WindowTitleKind.Monthly, r.LongWindow!.Title.Kind);
             Assert.Equal(30.0, r.LongWindow.UsedPercentage, 3);
             Assert.Equal(TimeSpan.FromDays(30), r.LongWindow.EndTime - r.LongWindow.StartTime);
         }

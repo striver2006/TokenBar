@@ -29,7 +29,7 @@ namespace TokenBar.Tests
                 """);
 
             Assert.NotNull(fiveHour);
-            Assert.Equal("5小时额度", fiveHour!.Title);
+            Assert.Equal(WindowTitleKind.FiveHour, fiveHour!.Title.Kind);
             Assert.Equal(21.0, fiveHour.UsedPercentage, 3);
             Assert.Equal(21.0, fiveHour.UsedAmount!.Value, 3);
             Assert.Equal(100.0, fiveHour.TotalLimit!.Value, 3);
@@ -40,7 +40,7 @@ namespace TokenBar.Tests
                 new DateTimeOffset(fiveHour.EndTime).ToUnixTimeSeconds());
 
             Assert.NotNull(longWindow);
-            Assert.Equal("月度额度", longWindow!.Title);
+            Assert.Equal(WindowTitleKind.Monthly, longWindow!.Title.Kind);
             Assert.Equal(2.28, longWindow.UsedPercentage, 2);
             Assert.Equal(DateTimeOffset.Parse("2026-10-26T06:52:30Z").ToUnixTimeSeconds(),
                 new DateTimeOffset(longWindow.EndTime).ToUnixTimeSeconds());
@@ -65,7 +65,7 @@ namespace TokenBar.Tests
 
             Assert.NotNull(longWindow);
             // resetTime 距现在不足 20 天（fixture 已过期）→ 「每周额度」
-            Assert.Equal("每周额度", longWindow!.Title);
+            Assert.Equal(WindowTitleKind.Weekly, longWindow!.Title.Kind);
             Assert.Equal(214.0 / 2048.0 * 100.0, longWindow.UsedPercentage, 3);
             Assert.Equal(214.0, longWindow.UsedAmount!.Value, 3);
             Assert.Equal(2048.0, longWindow.TotalLimit!.Value, 3);
@@ -83,7 +83,7 @@ namespace TokenBar.Tests
             var (_, longWindow) = Parse(json);
 
             Assert.NotNull(longWindow);
-            Assert.Equal("月度额度", longWindow!.Title);
+            Assert.Equal(WindowTitleKind.Monthly, longWindow!.Title.Kind);
             Assert.Equal(10.0, longWindow.UsedPercentage, 3);
         }
 
@@ -104,7 +104,7 @@ namespace TokenBar.Tests
                 new DateTimeOffset(fiveHour.EndTime).ToUnixTimeSeconds());
 
             Assert.NotNull(longWindow);
-            Assert.Equal("每周额度", longWindow!.Title);
+            Assert.Equal(WindowTitleKind.Weekly, longWindow!.Title.Kind);
             Assert.Equal(0.0, longWindow.UsedPercentage, 3);
             Assert.True(longWindow.IsIdle);
             Assert.Equal(DateTimeOffset.Parse("2026-09-23T23:07:12Z").ToUnixTimeSeconds(),
@@ -189,13 +189,17 @@ namespace TokenBar.Tests
             // 卡片角标按窗口标题的周期语义推断：月度额度显示「每月」而非槽位默认的「每周」；
             // 与 LocalizationManager 对比断言，避免依赖测试机的系统语言
             var i18n = LocalizationManager.Instance;
-            Assert.Equal(i18n.MonthlyWindow, new TokenWindow { Title = "月度额度" }.BadgeLabel("FALLBACK"));
-            Assert.Equal(i18n.MonthlyWindow, new TokenWindow { Title = "每月额度" }.BadgeLabel("FALLBACK"));
-            Assert.Equal(i18n.WeeklyWindow, new TokenWindow { Title = "每周额度" }.BadgeLabel("FALLBACK"));
-            Assert.Equal(i18n.WeeklyWindow, new TokenWindow { Title = "7天额度" }.BadgeLabel("FALLBACK"));
-            Assert.Equal(i18n.FiveHourWindow, new TokenWindow { Title = "5小时额度" }.BadgeLabel("FALLBACK"));
-            // 推断不出（如按模型圈定的周额度，标题是模型名）→ 回退槽位默认角标
-            Assert.Equal("FALLBACK", new TokenWindow { Title = "Opus 4.5" }.BadgeLabel("FALLBACK"));
+            Assert.Equal(i18n.MonthlyWindow, new TokenWindow { Title = WindowTitle.Monthly }.BadgeLabel("FALLBACK"));
+            Assert.Equal(i18n.WeeklyWindow, new TokenWindow { Title = WindowTitle.Weekly }.BadgeLabel("FALLBACK"));
+            Assert.Equal(i18n.WeeklyWindow, new TokenWindow { Title = WindowTitle.SevenDays }.BadgeLabel("FALLBACK"));
+            Assert.Equal(i18n.FiveHourWindow, new TokenWindow { Title = WindowTitle.FiveHour }.BadgeLabel("FALLBACK"));
+            Assert.Equal(i18n.FiveHourWindow, new TokenWindow { Title = WindowTitle.FiveHourCompute }.BadgeLabel("FALLBACK"));
+            // 无周期语义的标题（按模型圈定的周额度窗口标题是模型名 / 速率 / 余额 / 状态窗）→ 回退槽位默认角标
+            Assert.Equal("FALLBACK", new TokenWindow { Title = WindowTitle.Custom("Opus 4.5") }.BadgeLabel("FALLBACK"));
+            Assert.Equal("FALLBACK", new TokenWindow { Title = WindowTitle.TpmRate }.BadgeLabel("FALLBACK"));
+            Assert.Equal("FALLBACK", new TokenWindow { Title = WindowTitle.AccountBalance }.BadgeLabel("FALLBACK"));
+            Assert.Equal("FALLBACK", new TokenWindow { Title = WindowTitle.Connected }.BadgeLabel("FALLBACK"));
+            Assert.Equal("FALLBACK", new TokenWindow { Title = WindowTitle.AvailableModels(3) }.BadgeLabel("FALLBACK"));
         }
     }
 }

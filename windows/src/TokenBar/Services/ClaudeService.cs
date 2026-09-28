@@ -53,7 +53,7 @@ namespace TokenBar.Services
                     var now = DateTime.Now;
                     var initialFiveHour = new TokenWindow
                     {
-                        Title = "5小时额度",
+                        Title = WindowTitle.FiveHour,
                         UsedPercentage = 0.0,
                         StartTime = now,
                         EndTime = now.AddHours(5),
@@ -88,7 +88,7 @@ namespace TokenBar.Services
                         {
                             fiveHourWindow = new TokenWindow
                             {
-                                Title = "5小时额度",
+                                Title = WindowTitle.FiveHour,
                                 UsedPercentage = util,
                                 StartTime = resetsAt.AddHours(-5),
                                 EndTime = resetsAt,
@@ -101,7 +101,7 @@ namespace TokenBar.Services
                             var now = DateTime.Now;
                             fiveHourWindow = new TokenWindow
                             {
-                                Title = "5小时额度",
+                                Title = WindowTitle.FiveHour,
                                 UsedPercentage = 0.0,
                                 StartTime = now,
                                 EndTime = now.AddHours(5),
@@ -115,7 +115,7 @@ namespace TokenBar.Services
                         var now = DateTime.Now;
                         fiveHourWindow = new TokenWindow
                         {
-                            Title = "5小时额度",
+                            Title = WindowTitle.FiveHour,
                             UsedPercentage = util,
                             StartTime = now,
                             EndTime = now.AddHours(5),
@@ -139,7 +139,7 @@ namespace TokenBar.Services
                             var now = DateTime.Now;
                             fiveHourWindow = new TokenWindow
                             {
-                                Title = "5小时额度",
+                                Title = WindowTitle.FiveHour,
                                 UsedPercentage = pct,
                                 StartTime = now,
                                 EndTime = now.AddHours(5),
@@ -156,7 +156,7 @@ namespace TokenBar.Services
                     var now = DateTime.Now;
                     fiveHourWindow = new TokenWindow
                     {
-                        Title = "5小时额度",
+                        Title = WindowTitle.FiveHour,
                         UsedPercentage = 0.0,
                         StartTime = now,
                         EndTime = now.AddHours(5),
@@ -185,7 +185,7 @@ namespace TokenBar.Services
                     {
                         weeklyWindow = new TokenWindow
                         {
-                            Title = "每周额度",
+                            Title = WindowTitle.Weekly,
                             UsedPercentage = util,
                             StartTime = resetsAt.AddDays(-7),
                             EndTime = resetsAt,
@@ -215,7 +215,7 @@ namespace TokenBar.Services
 
                             weeklyWindow = new TokenWindow
                             {
-                                Title = "每周额度",
+                                Title = WindowTitle.Weekly,
                                 UsedPercentage = pct,
                                 StartTime = resetsAt.AddDays(-7),
                                 EndTime = resetsAt,
@@ -299,7 +299,7 @@ namespace TokenBar.Services
 
                 return new TokenWindow
                 {
-                    Title = displayName,
+                    Title = WindowTitle.Custom(displayName),
                     UsedPercentage = pct,
                     StartTime = resetsAt.AddDays(-7),
                     EndTime = resetsAt,
@@ -345,7 +345,7 @@ namespace TokenBar.Services
                     {
                         fiveHourWindow = new TokenWindow
                         {
-                            Title = "5小时额度",
+                            Title = WindowTitle.FiveHour,
                             UsedPercentage = util,
                             StartTime = resetsAt.AddHours(-5),
                             EndTime = resetsAt,
@@ -358,7 +358,7 @@ namespace TokenBar.Services
                         var now = DateTime.Now;
                         fiveHourWindow = new TokenWindow
                         {
-                            Title = "5小时额度",
+                            Title = WindowTitle.FiveHour,
                             UsedPercentage = 0.0,
                             StartTime = now,
                             EndTime = now.AddHours(5),
@@ -372,7 +372,7 @@ namespace TokenBar.Services
                     var now = DateTime.Now;
                     fiveHourWindow = new TokenWindow
                     {
-                        Title = "5小时额度",
+                        Title = WindowTitle.FiveHour,
                         UsedPercentage = util,
                         StartTime = now,
                         EndTime = now.AddHours(5),
@@ -387,7 +387,7 @@ namespace TokenBar.Services
                 var now = DateTime.Now;
                 fiveHourWindow = new TokenWindow
                 {
-                    Title = "5小时额度",
+                    Title = WindowTitle.FiveHour,
                     UsedPercentage = 0.0,
                     StartTime = now,
                     EndTime = now.AddHours(5),
@@ -405,7 +405,7 @@ namespace TokenBar.Services
                 {
                     weeklyWindow = new TokenWindow
                     {
-                        Title = "每周额度",
+                        Title = WindowTitle.Weekly,
                         UsedPercentage = util,
                         StartTime = resetsAt.AddDays(-7),
                         EndTime = resetsAt,
@@ -494,7 +494,7 @@ namespace TokenBar.Services
 
                 primaryWindow = new TokenWindow
                 {
-                    Title = "TPM 速率配额",
+                    Title = WindowTitle.TpmRate,
                     UsedPercentage = usedPct,
                     StartTime = now,
                     EndTime = now.AddMinutes(1),
@@ -515,7 +515,7 @@ namespace TokenBar.Services
 
                 secondaryWindow = new TokenWindow
                 {
-                    Title = "RPM 速率配额",
+                    Title = WindowTitle.RpmRate,
                     UsedPercentage = usedPct,
                     StartTime = now,
                     EndTime = now.AddMinutes(1),
@@ -528,7 +528,7 @@ namespace TokenBar.Services
 
             if (primaryWindow == null && secondaryWindow == null)
             {
-                primaryWindow = TokenWindow.Status("Anthropic API 连接正常");
+                primaryWindow = TokenWindow.Status(WindowTitle.ConnectedFor("Anthropic API"));
             }
 
             var keySuffix = cleanKey.Length > 6 ? cleanKey[^4..] : cleanKey;

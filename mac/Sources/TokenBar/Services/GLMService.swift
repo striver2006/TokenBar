@@ -125,7 +125,7 @@ public final class GLMService {
                     if type.contains("TOKEN") || type.contains("5H") || type.contains("SESSION") || (fiveHourWindow == nil && !type.contains("WEEK")) {
                         let startTime = resetDate.addingTimeInterval(-5 * 3600)
                         fiveHourWindow = TokenWindow(
-                            title: "5小时额度",
+                            title: .fiveHour,
                             usedPercentage: pct,
                             startTime: startTime,
                             endTime: resetDate,
@@ -136,7 +136,7 @@ public final class GLMService {
                     } else if type.contains("WEEK") || (weeklyWindow == nil && fiveHourWindow != nil) {
                         let startTime = resetDate.addingTimeInterval(-7 * 86400)
                         weeklyWindow = TokenWindow(
-                            title: "每周额度",
+                            title: .weekly,
                             usedPercentage: pct,
                             startTime: startTime,
                             endTime: resetDate,
@@ -158,7 +158,7 @@ public final class GLMService {
                 let usedPct = max(0.0, min(100.0, (1.0 - (remaining / total)) * 100.0))
                 let fiveHourEnd = now.addingTimeInterval(rateLimitResetDurationSec ?? 5 * 3600)
                 fiveHourWindow = TokenWindow(
-                    title: "5小时额度",
+                    title: .fiveHour,
                     usedPercentage: usedPct,
                     startTime: fiveHourEnd.addingTimeInterval(-5 * 3600),
                     endTime: fiveHourEnd,
@@ -167,7 +167,7 @@ public final class GLMService {
                     unit: "Tokens"
                 )
             } else {
-                fiveHourWindow = TokenWindow.status(title: "API 连接正常")
+                fiveHourWindow = TokenWindow.status(title: .connected())
             }
         }
 

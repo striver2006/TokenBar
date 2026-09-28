@@ -132,7 +132,7 @@ namespace TokenBar.Services
 
                     primaryWindow = new TokenWindow
                     {
-                        Title = "TPM 速率剩余",
+                        Title = WindowTitle.TpmRemaining,
                         UsedPercentage = usedPct,
                         StartTime = now,
                         EndTime = resetDate,
@@ -156,7 +156,7 @@ namespace TokenBar.Services
 
                     secondaryWindow = new TokenWindow
                     {
-                        Title = "RPM 请求速率",
+                        Title = WindowTitle.RpmRequest,
                         UsedPercentage = usedPct,
                         StartTime = now,
                         EndTime = resetDate,
@@ -185,7 +185,7 @@ namespace TokenBar.Services
                 if (primaryWindow == null)
                 {
                     // 没有速率头：只表示连接正常，不编造任何百分比
-                    primaryWindow = TokenWindow.Status("API 连接状态");
+                    primaryWindow = TokenWindow.Status(WindowTitle.Connected);
                 }
 
                 var accountInfo = orgHeader ?? organizationId;

@@ -120,7 +120,7 @@ public final class OpenAIService: @unchecked Sendable {
             let resetDate = now.addingTimeInterval(duration)
 
             primaryWindow = TokenWindow(
-                title: "TPM 速率剩余",
+                title: .tpmRemaining,
                 usedPercentage: usedPct,
                 startTime: now,
                 endTime: resetDate,
@@ -143,7 +143,7 @@ public final class OpenAIService: @unchecked Sendable {
             let resetDate = now.addingTimeInterval(duration)
 
             secondaryWindow = TokenWindow(
-                title: "RPM 请求速率",
+                title: .rpmRequest,
                 usedPercentage: usedPct,
                 startTime: now,
                 endTime: resetDate,
@@ -162,7 +162,7 @@ public final class OpenAIService: @unchecked Sendable {
         }
 
         if primaryWindow == nil {
-            primaryWindow = TokenWindow.status(title: "API 连接状态")
+            primaryWindow = TokenWindow.status(title: .connected())
         }
 
         var accountInfo = orgHeader ?? organizationId

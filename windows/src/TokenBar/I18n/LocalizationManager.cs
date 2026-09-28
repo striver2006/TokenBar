@@ -68,6 +68,28 @@ namespace TokenBar.I18n
         public string FiveHourWindow => IsChinese ? "5小时" : "5-Hour";
         public string WeeklyWindow => IsChinese ? "每周" : "Weekly";
         public string MonthlyWindow => IsChinese ? "每月" : "Monthly";
+
+        // 额度窗口规范标题（WindowTitle）：zh 分支必须与 WindowTitle.ZhTitle 逐字一致
+        // （WindowTitleTests 在中文模式断言 Localized == ZhTitle），英文分支即翻译登记表 ——
+        // 新增 WindowTitleKind 时两边都要补，否则测试会失败，杜绝静默漏译。
+        public string WinTitleFiveHour => IsChinese ? "5小时额度" : "5-Hour Quota";
+        public string WinTitleFiveHourCompute => IsChinese ? "5小时算力额度" : "5-Hour Compute Quota";
+        public string WinTitleWeekly => IsChinese ? "每周额度" : "Weekly Quota";
+        public string WinTitleMonthly => IsChinese ? "月度额度" : "Monthly Quota";
+        public string WinTitleSevenDays => IsChinese ? "7天周期额度" : "7-Day Quota";
+        public string WinTitleTpmRate => IsChinese ? "TPM 速率配额" : "TPM Rate Limit";
+        public string WinTitleTpmRemaining => IsChinese ? "TPM 速率剩余" : "TPM Rate Limit";
+        public string WinTitleRpmRate => IsChinese ? "RPM 速率配额" : "RPM Rate Limit";
+        public string WinTitleRpmRequest => IsChinese ? "RPM 请求速率" : "RPM Rate Limit";
+        public string WinTitleTokenRate => IsChinese ? "Token 速率配额" : "Token Rate Limit";
+        public string WinTitleAccountBalance => IsChinese ? "账户余额" : "Account Balance";
+        public string WinTitleAccountAvailableBalance => IsChinese ? "账户可用余额" : "Account Balance";
+        public string WinTitleKeyQuota => IsChinese ? "Key 可用额度" : "Key Quota";
+        public string WinTitleTokenPlan => IsChinese ? "Token Plan 额度" : "Token Plan Quota";
+        public string WinTitleAiStudioQuota => IsChinese ? "AI Studio 配额" : "AI Studio Quota";
+        public string WinTitleConnected => IsChinese ? "API 连接正常" : "API Connected";
+        public string WinTitleConnectedSubject => IsChinese ? "{0} 连接正常" : "API Connected";
+        public string WinTitleAvailableModels => IsChinese ? "可用模型 ({0}个)" : "Available Models ({0})";
         public string Remaining => IsChinese ? "剩余" : "Left";
         public string UnusedFull => IsChinese ? "未消耗 / 100% 充足" : "Unused / 100% Available";
         public string ResetTimeReached => IsChinese ? "已到重置时间 / 刷新中" : "Reset time reached / Refreshing";

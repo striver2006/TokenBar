@@ -1362,7 +1362,7 @@ namespace TokenBar.Services
                         if (IsStaleGeneration(generation, "aliyun")) return;
                         quota.BalanceWindow = new TokenWindow
                         {
-                            Title = "账户余额",
+                            Title = WindowTitle.AccountBalance,
                             Kind = TokenWindowKind.Balance,
                             BalanceAmount = (decimal)balance.Amount,
                             Currency = balance.Currency,

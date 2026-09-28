@@ -299,6 +299,7 @@ public enum I18nKey: String {
     case tokenRateLimitTitle
     case fiveHourComputeQuotaTitle
     case apiConnectedTitle
+    case aiStudioQuotaTitle
 
     // Error Messages
     case errMissingAnthropicAuth
@@ -867,6 +868,8 @@ public final class LocalizationManager: ObservableObject {
             return isZh ? "5小时算力额度" : "5-Hour Compute Quota"
         case .apiConnectedTitle:
             return isZh ? "API 连接正常" : "API Connected"
+        case .aiStudioQuotaTitle:
+            return isZh ? "AI Studio 配额" : "AI Studio Quota"
         case .errMissingAnthropicAuth:
             return isZh ? "未配置 Anthropic API Key 或 Claude Code 网页/本地授权" : "Anthropic API Key or Claude Code authorization not configured"
         case .errMissingGLMKey:

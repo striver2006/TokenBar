@@ -53,7 +53,7 @@ namespace TokenBar.Services
             TokenWindow? planWindow = null;
             var balanceThreshold = config.BalanceAlertThreshold ?? 10;
 
-            void UseBalance(string title, decimal amount, string currency, string formatted)
+            void UseBalance(WindowTitle title, decimal amount, string currency, string formatted)
             {
                 balanceAccountInfo = LocalizationManager.Instance.IsChinese ? $"余额: {formatted}" : $"Balance: {formatted}";
                 balanceWindow = new TokenWindow
@@ -75,7 +75,7 @@ namespace TokenBar.Services
                 if (balance != null)
                 {
                     var symbol = balance.Value.Currency == "USD" ? "$" : "¥";
-                    UseBalance("账户余额", balance.Value.Amount, balance.Value.Currency, $"{symbol}{balance.Value.Amount:0.00}");
+                    UseBalance(WindowTitle.AccountBalance, balance.Value.Amount, balance.Value.Currency, $"{symbol}{balance.Value.Amount:0.00}");
                 }
             }
             else if (endpoint.Contains("moonshot.cn", StringComparison.OrdinalIgnoreCase))
@@ -83,7 +83,7 @@ namespace TokenBar.Services
                 var balance = await FetchMoonshotBalanceAsync(apiKey, ct);
                 if (balance != null)
                 {
-                    UseBalance("账户余额", balance.Value, "CNY", $"¥{balance.Value:0.00}");
+                    UseBalance(WindowTitle.AccountBalance, balance.Value, "CNY", $"¥{balance.Value:0.00}");
                 }
             }
             else if (endpoint.Contains("siliconflow.cn", StringComparison.OrdinalIgnoreCase))
@@ -91,7 +91,7 @@ namespace TokenBar.Services
                 var balance = await FetchSiliconFlowBalanceAsync(apiKey, ct);
                 if (balance != null)
                 {
-                    UseBalance("账户余额", balance.Value, "CNY", $"¥{balance.Value:0.00}");
+                    UseBalance(WindowTitle.AccountBalance, balance.Value, "CNY", $"¥{balance.Value:0.00}");
                 }
             }
             else if (endpoint.Contains("xiaomimimo.com", StringComparison.OrdinalIgnoreCase))
@@ -106,7 +106,7 @@ namespace TokenBar.Services
                     {
                         planWindow = new TokenWindow
                         {
-                            Title = "Token Plan 额度",
+                            Title = WindowTitle.TokenPlan,
                             UsedPercentage = plan.Value.UsedPercent,
                             StartTime = DateTime.Now,
                             EndTime = DateTime.Now.AddDays(30),
@@ -123,7 +123,7 @@ namespace TokenBar.Services
                     if (balance != null)
                     {
                         var symbol = balance.Value.Currency == "USD" ? "$" : "¥";
-                        UseBalance("账户余额", balance.Value.Amount, balance.Value.Currency, $"{symbol}{balance.Value.Amount:0.00}");
+                        UseBalance(WindowTitle.AccountBalance, balance.Value.Amount, balance.Value.Currency, $"{symbol}{balance.Value.Amount:0.00}");
                     }
                 }
             }
@@ -197,7 +197,7 @@ namespace TokenBar.Services
 
                 var rateWindow = new TokenWindow
                 {
-                    Title = "TPM 速率配额",
+                    Title = WindowTitle.TpmRate,
                     UsedPercentage = usedPct,
                     StartTime = now,
                     EndTime = now.Add(duration),
@@ -229,7 +229,7 @@ namespace TokenBar.Services
 
             if (primaryWindow == null)
             {
-                primaryWindow = TokenWindow.Status("接口连接正常");
+                primaryWindow = TokenWindow.Status(WindowTitle.ConnectedFor("接口"));
             }
 
             var isZhAcct = LocalizationManager.Instance.IsChinese;
@@ -306,7 +306,7 @@ namespace TokenBar.Services
 
                 primaryWindow = new TokenWindow
                 {
-                    Title = "Token 速率配额",
+                    Title = WindowTitle.TokenRate,
                     UsedPercentage = usedPct,
                     StartTime = now,
                     EndTime = now.Add(duration),
@@ -326,7 +326,7 @@ namespace TokenBar.Services
 
                 secondaryWindow = new TokenWindow
                 {
-                    Title = "RPM 速率配额",
+                    Title = WindowTitle.RpmRate,
                     UsedPercentage = usedPct,
                     StartTime = DateTime.Now,
                     EndTime = DateTime.Now.AddMinutes(1),
@@ -353,7 +353,7 @@ namespace TokenBar.Services
 
             if (primaryWindow == null)
             {
-                primaryWindow = TokenWindow.Status("Anthropic 协议连接正常");
+                primaryWindow = TokenWindow.Status(WindowTitle.ConnectedFor("Anthropic 协议"));
             }
 
             var isZhAcct = LocalizationManager.Instance.IsChinese;

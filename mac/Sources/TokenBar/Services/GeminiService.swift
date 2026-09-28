@@ -968,7 +968,7 @@ public actor GeminiService {
 
         let usedPct = min(max((1.0 - remainingFraction!) * 100.0, 0.0), 100.0)
         let window = TokenWindow(
-            title: isWeekly ? "每周额度" : "5小时额度",
+            title: isWeekly ? .weekly : .fiveHour,
             usedPercentage: usedPct,
             startTime: end.addingTimeInterval(-span),
             endTime: end,
@@ -1003,7 +1003,7 @@ public actor GeminiService {
         while end <= Date() { end = end.addingTimeInterval(span) }
 
         let window = TokenWindow(
-            title: "5小时额度",
+            title: .fiveHour,
             usedPercentage: min(max((1.0 - remaining) * 100.0, 0.0), 100.0),
             startTime: end.addingTimeInterval(-span),
             endTime: end,
@@ -1093,7 +1093,7 @@ public actor GeminiService {
             let usedPct = min(max((used / limitReqs) * 100.0, 0.0), 100.0)
             let now = Date()
             rpmWindow = TokenWindow(
-                title: "RPM 速率配额",
+                title: .rpmRate,
                 usedPercentage: usedPct,
                 startTime: now,
                 endTime: now.addingTimeInterval(60),
@@ -1106,8 +1106,8 @@ public actor GeminiService {
 
         // API Key 模式只能探测连通性与模型清单，拿不到真实的 5 小时 / 每周额度。
         // 以前用「当前小时 / 5」拼出 5 小时起止、再无条件给一条 0% 的每周窗口，都是没有数据来源的假数据。
-        let fiveHour = rpmWindow ?? TokenWindow.status(title: "API 连接正常")
-        let weekly = TokenWindow.status(title: modelCount > 0 ? "可用模型 (\(modelCount)个)" : "AI Studio 配额")
+        let fiveHour = rpmWindow ?? TokenWindow.status(title: .connected())
+        let weekly = TokenWindow.status(title: modelCount > 0 ? .availableModels(count: modelCount) : .aiStudioQuota)
 
         let maskedKey: String
         if trimmedKey.count > 8 {

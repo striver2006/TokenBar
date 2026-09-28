@@ -131,19 +131,19 @@ extension AliyunBailianService {
         // 2026-09 起 Token Plan 个人版改为订阅月限额（订阅日起 30 天），
         // 实测（2026-09-26）接口只返回 per1Month* 字段；per1Week/per5Hour 保留给未迁移账号。
         let monthly = makeWindow(
-            titleZh: "月度额度",
+            title: .monthly,
             percentage: doubleValue(payload["per1MonthPercentage"]),
             resetMilliseconds: doubleValue(payload["per1MonthResetTime"]),
             duration: 30 * 86400
         )
         let weekly = makeWindow(
-            titleZh: "7天周期额度",
+            title: .sevenDays,
             percentage: doubleValue(payload["per1WeekPercentage"]),
             resetMilliseconds: doubleValue(payload["per1WeekResetTime"]),
             duration: 7 * 86400
         )
         let fiveHour = makeWindow(
-            titleZh: "5小时额度",
+            title: .fiveHour,
             percentage: doubleValue(payload["per5HourPercentage"]),
             resetMilliseconds: doubleValue(payload["per5HourResetTime"]),
             duration: 5 * 3600
@@ -151,7 +151,7 @@ extension AliyunBailianService {
         let longWindow = monthly
             ?? (looksLikeMonthlyReset(doubleValue(payload["per1WeekResetTime"]))
                 ? makeWindow(
-                    titleZh: "月度额度",
+                    title: .monthly,
                     percentage: doubleValue(payload["per1WeekPercentage"]),
                     resetMilliseconds: doubleValue(payload["per1WeekResetTime"]),
                     duration: 30 * 86400
@@ -186,7 +186,7 @@ extension AliyunBailianService {
 
     /// 百分比是 0~1 的小数，重置时间是 epoch 毫秒。
     static func makeWindow(
-        titleZh: String,
+        title: WindowTitle,
         percentage: Double?,
         resetMilliseconds: Double?,
         duration: TimeInterval
@@ -197,7 +197,7 @@ extension AliyunBailianService {
             ?? Date().addingTimeInterval(duration)
 
         return TokenWindow(
-            title: titleZh,
+            title: title,
             usedPercentage: usedPct,
             startTime: resetDate.addingTimeInterval(-duration),
             endTime: resetDate,

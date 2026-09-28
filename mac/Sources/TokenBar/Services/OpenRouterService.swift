@@ -89,7 +89,7 @@ public final class OpenRouterService: @unchecked Sendable {
         var balanceWindow: TokenWindow? = nil
         if let balance = accountBalance {
             balanceWindow = TokenWindow.balance(
-                title: "账户可用余额",
+                title: .accountAvailableBalance,
                 amount: balance,
                 currency: "USD",
                 warningThreshold: balanceAlertThreshold,
@@ -99,7 +99,7 @@ public final class OpenRouterService: @unchecked Sendable {
             // 无权限查账户余额，但 Key 有上限：以 Key 剩余额度充当余额展示
             let remaining = max(0, keyRemaining ?? (limit - (keyUsage ?? 0)))
             balanceWindow = TokenWindow.balance(
-                title: "Key 可用额度",
+                title: .keyQuota,
                 amount: remaining,
                 currency: "USD",
                 warningThreshold: balanceAlertThreshold,
@@ -108,7 +108,7 @@ public final class OpenRouterService: @unchecked Sendable {
         }
 
         if balanceWindow == nil {
-            balanceWindow = TokenWindow.status(title: "OpenRouter 连接正常")
+            balanceWindow = TokenWindow.status(title: .connected(subject: "OpenRouter"))
         }
 
         // 4. 卡片头部账号信息

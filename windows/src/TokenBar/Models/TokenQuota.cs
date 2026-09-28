@@ -123,49 +123,16 @@ namespace TokenBar.Models
     public class TokenWindow
     {
         public Guid Id { get; set; } = Guid.NewGuid();
-        public string Title { get; set; } = string.Empty;
-        public string LocalizedTitle
-        {
-            get
-            {
-                var isZh = LocalizationManager.Instance.IsChinese;
-                if (isZh) return Title;
-
-                if (Title.StartsWith("可用模型 (", StringComparison.Ordinal))
-                {
-                    var count = Title.Replace("可用模型 (", "").Replace("个)", "").Replace(")", "").Trim();
-                    return $"Available Models ({count})";
-                }
-
-                return Title switch
-                {
-                    "5小时额度" => "5-Hour Quota",
-                    "每月额度" or "月度额度" => "Monthly Quota",
-                    "每周额度" => "Weekly Quota",
-                    "7天额度" or "7天周期额度" => "7-Day Quota",
-                    "账户可用余额" or "账户余额" => "Account Balance",
-                    "Key 额度" => "Key Quota",
-                    "Token Plan 额度" => "Token Plan Quota",
-                    "RPM 速率配额" or "RPM 请求速率" => "RPM Rate Limit",
-                    "TPM 速率配额" or "TPM 速率剩余" => "TPM Rate Limit",
-                    "Token 速率配额" => "Token Rate Limit",
-                    "5小时算力额度" => "5-Hour Compute Quota",
-                    "API 连接正常" or "接口连接正常" or "Anthropic 协议连接正常" or "Anthropic API 连接正常" or "DeepSeek 连接正常" or "KIMI 连接正常" or "OpenRouter 连接正常" or "接入点连接正常" or "API 连接状态" => "API Connected",
-                    "AI Studio 配额" => "AI Studio Quota",
-                    _ => Title
-                };
-            }
-        }
+        /// <summary>窗口标题的语义类型（不再是中文串当翻译 key），中文规范标题见 TitleZh。</summary>
+        public WindowTitle Title { get; set; } = WindowTitle.Custom(string.Empty);
+        /// <summary>规范中文标题，供日志 / 调试等非本地化场景使用。</summary>
+        public string TitleZh => Title.ZhTitle;
+        /// <summary>按当前界面语言显示的标题。</summary>
+        public string LocalizedTitle => Title.Localized;
 
         /// <summary>卡片角标按窗口标题的周期语义推断：月度额度显示「每月」而不是槽位默认的「每周」；
         /// 推断不出（如按模型圈定的周额度标题是模型名）时回退传入的槽位默认角标。</summary>
-        public string BadgeLabel(string fallback)
-        {
-            if (Title.Contains("5小时")) return LocalizationManager.Instance.FiveHourWindow;
-            if (Title.Contains("月")) return LocalizationManager.Instance.MonthlyWindow;
-            if (Title.Contains("7天") || Title.Contains("周")) return LocalizationManager.Instance.WeeklyWindow;
-            return fallback;
-        }
+        public string BadgeLabel(string fallback) => Title.BadgePeriod ?? fallback;
 
         public double UsedPercentage { get; set; }
         public DateTime StartTime { get; set; }
@@ -204,7 +171,7 @@ namespace TokenBar.Models
         public bool IsExpired => Kind != TokenWindowKind.Status && !IsIdle && DateTime.Now >= EndTime;
 
         /// <summary>构造一个状态型窗口（无真实额度，仅表示连接 / 可用性）。</summary>
-        public static TokenWindow Status(string title) => new TokenWindow
+        public static TokenWindow Status(WindowTitle title) => new TokenWindow
         {
             Title = title,
             Kind = TokenWindowKind.Status,
@@ -295,7 +262,7 @@ namespace TokenBar.Models
         public TokenWindow? FiveHourWindow { get; set; }
         public TokenWindow? WeeklyWindow { get; set; }
         // 第四槽位：按模型圈定的周额度（如 Anthropic 订阅的 Fable/Opus 专属周额度，
-        // 来自 ~/.claude.json limits[] 的 weekly_scoped 条目，Title 即模型显示名）。
+        // 来自 ~/.claude.json limits[] 的 weekly_scoped 条目，Title 为 WindowTitle.Custom(模型显示名)）。
         // 没有这类额度的厂商保持 null，卡片不会渲染这一行。与 mac 端 scopedWeeklyWindow 同名。
         public TokenWindow? ScopedWeeklyWindow { get; set; }
         // 第三个槽位：与时间窗口额度并存的货币余额（目前用于阿里云百炼的账户现金余额）。

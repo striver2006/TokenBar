@@ -82,7 +82,7 @@ public final class DeepSeekService: @unchecked Sendable {
 
         if let bal = balance {
             secondaryWindow = TokenWindow.balance(
-                title: "账户可用余额",
+                title: .accountAvailableBalance,
                 amount: bal.amount,
                 currency: bal.currency,
                 warningThreshold: balanceAlertThreshold,
@@ -99,7 +99,7 @@ public final class DeepSeekService: @unchecked Sendable {
             let now = Date()
 
             primaryWindow = TokenWindow(
-                title: "TPM 速率配额",
+                title: .tpmRate,
                 usedPercentage: usedPct,
                 startTime: now,
                 endTime: now.addingTimeInterval(duration),
@@ -111,7 +111,7 @@ public final class DeepSeekService: @unchecked Sendable {
         }
 
         if primaryWindow == nil && secondaryWindow == nil {
-            primaryWindow = TokenWindow.status(title: "DeepSeek 连接正常")
+            primaryWindow = TokenWindow.status(title: .connected(subject: "DeepSeek"))
         }
 
         let keySuffix = cleanKey.count > 6 ? String(cleanKey.suffix(4)) : cleanKey

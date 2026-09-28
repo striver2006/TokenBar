@@ -88,7 +88,7 @@ namespace TokenBar.Services
 
                 primaryWindow = new TokenWindow
                 {
-                    Title = "TPM 速率配额",
+                    Title = WindowTitle.TpmRate,
                     UsedPercentage = usedPct,
                     StartTime = now,
                     EndTime = now.Add(duration),
@@ -115,7 +115,7 @@ namespace TokenBar.Services
 
             if (primaryWindow == null)
             {
-                primaryWindow = TokenWindow.Status("接入点连接正常");
+                primaryWindow = TokenWindow.Status(WindowTitle.ConnectedFor("接入点"));
             }
 
             var keySuffix = cleanKey.Length > 6 ? cleanKey[^4..] : cleanKey;

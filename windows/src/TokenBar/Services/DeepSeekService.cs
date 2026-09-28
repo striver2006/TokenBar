@@ -93,7 +93,7 @@ namespace TokenBar.Services
             {
                 secondaryWindow = new TokenWindow
                 {
-                    Title = "账户可用余额",
+                    Title = WindowTitle.AccountAvailableBalance,
                     Kind = TokenWindowKind.Balance,
                     BalanceAmount = balance.Value.Amount,
                     Currency = balance.Value.Currency,
@@ -115,7 +115,7 @@ namespace TokenBar.Services
 
                 primaryWindow = new TokenWindow
                 {
-                    Title = "TPM 速率配额",
+                    Title = WindowTitle.TpmRate,
                     UsedPercentage = usedPct,
                     StartTime = now,
                     EndTime = now.Add(duration),
@@ -128,7 +128,7 @@ namespace TokenBar.Services
 
             if (primaryWindow == null && secondaryWindow == null)
             {
-                primaryWindow = TokenWindow.Status("DeepSeek 连接正常");
+                primaryWindow = TokenWindow.Status(WindowTitle.ConnectedFor("DeepSeek"));
             }
 
             var keySuffix = cleanKey.Length > 6 ? cleanKey[^4..] : cleanKey;

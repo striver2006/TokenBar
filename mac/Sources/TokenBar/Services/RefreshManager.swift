@@ -888,7 +888,7 @@ public final class RefreshManager: ObservableObject {
             if credentials.hasAccessKey,
                let balance = try? await AliyunBailianService.shared.fetchAccountBalance(credentials) {
                 let window = TokenWindow.balance(
-                    title: I18n(.menuBarMetricBalance),
+                    title: .accountBalance,
                     amount: balance.amount,
                     currency: balance.currency,
                     warningThreshold: settings.aliyunBalanceAlertThreshold,

@@ -165,15 +165,15 @@ namespace TokenBar.Services
             if (envelopeError != null) throw envelopeError;
 
             var payload = UnwrapTokenPlanPayload(root);
-            var monthly = MakeWindow("月度额度",
+            var monthly = MakeWindow(WindowTitle.Monthly,
                 DoubleValue(payload["per1MonthPercentage"]),
                 DoubleValue(payload["per1MonthResetTime"]),
                 TimeSpan.FromDays(30));
-            var weekly = MakeWindow("7天周期额度",
+            var weekly = MakeWindow(WindowTitle.SevenDays,
                 DoubleValue(payload["per1WeekPercentage"]),
                 DoubleValue(payload["per1WeekResetTime"]),
                 TimeSpan.FromDays(7));
-            var fiveHour = MakeWindow("5小时额度",
+            var fiveHour = MakeWindow(WindowTitle.FiveHour,
                 DoubleValue(payload["per5HourPercentage"]),
                 DoubleValue(payload["per5HourResetTime"]),
                 TimeSpan.FromHours(5));
@@ -181,7 +181,7 @@ namespace TokenBar.Services
             // 靠「重置点不可能超出 7 天窗口」识别（与 mac 端一致）
             TokenWindow? longWindow = monthly
                 ?? (LooksLikeMonthlyReset(DoubleValue(payload["per1WeekResetTime"]))
-                    ? MakeWindow("月度额度",
+                    ? MakeWindow(WindowTitle.Monthly,
                         DoubleValue(payload["per1WeekPercentage"]),
                         DoubleValue(payload["per1WeekResetTime"]),
                         TimeSpan.FromDays(30))
@@ -219,7 +219,7 @@ namespace TokenBar.Services
 
         /// <summary>百分比是 0~1 的小数，重置时间是 epoch 毫秒。</summary>
         internal static TokenWindow? MakeWindow(
-            string title, double? percentage, double? resetMilliseconds, TimeSpan duration)
+            WindowTitle title, double? percentage, double? resetMilliseconds, TimeSpan duration)
         {
             if (!percentage.HasValue) return null;
 

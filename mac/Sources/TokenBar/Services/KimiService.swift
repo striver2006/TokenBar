@@ -89,7 +89,7 @@ public final class KimiService: @unchecked Sendable {
 
         if let bal = balance {
             secondaryWindow = TokenWindow.balance(
-                title: "账户可用余额",
+                title: .accountAvailableBalance,
                 amount: bal,
                 currency: "CNY",
                 warningThreshold: balanceAlertThreshold,
@@ -106,7 +106,7 @@ public final class KimiService: @unchecked Sendable {
             let now = Date()
 
             primaryWindow = TokenWindow(
-                title: "TPM 速率配额",
+                title: .tpmRate,
                 usedPercentage: usedPct,
                 startTime: now,
                 endTime: now.addingTimeInterval(duration),
@@ -118,7 +118,7 @@ public final class KimiService: @unchecked Sendable {
         }
 
         if primaryWindow == nil && secondaryWindow == nil {
-            primaryWindow = TokenWindow.status(title: "KIMI 连接正常")
+            primaryWindow = TokenWindow.status(title: .connected(subject: "KIMI"))
         }
 
         let keySuffix = cleanKey.count > 6 ? String(cleanKey.suffix(4)) : cleanKey
@@ -247,7 +247,7 @@ public final class KimiService: @unchecked Sendable {
                       let used = Self.numberValue(detail["used"]) else { continue }
                 let reset = Self.parseResetTime(detail["resetTime"]) ?? now.addingTimeInterval(5 * 3600)
                 fiveHour = TokenWindow(
-                    title: "5小时额度",
+                    title: .fiveHour,
                     usedPercentage: used / limit * 100,
                     startTime: now,
                     endTime: reset,
@@ -266,7 +266,7 @@ public final class KimiService: @unchecked Sendable {
            let ratio = Self.numberValue(entry["used_ratio"] ?? entry["usedRatio"]) {
             let reset = Self.parseResetTime(entry["reset_time"] ?? entry["resetAt"]) ?? now.addingTimeInterval(5 * 3600)
             fiveHour = TokenWindow(
-                title: "5小时额度",
+                title: .fiveHour,
                 usedPercentage: ratio * 100,
                 startTime: now,
                 endTime: reset,
@@ -281,7 +281,7 @@ public final class KimiService: @unchecked Sendable {
            let ratio = Self.numberValue(entry["used_ratio"] ?? entry["usedRatio"]) {
             let reset = Self.parseResetTime(entry["reset_time"] ?? entry["resetAt"]) ?? now.addingTimeInterval(30 * 86400)
             longWindow = TokenWindow(
-                title: "月度额度",
+                title: .monthly,
                 usedPercentage: ratio * 100,
                 startTime: now,
                 endTime: reset,
@@ -294,7 +294,7 @@ public final class KimiService: @unchecked Sendable {
                 let limit = Self.numberValue(usage["limit"]), limit > 0,
                 let used = Self.numberValue(usage["used"]) {
             let reset = Self.parseResetTime(usage["resetTime"]) ?? now.addingTimeInterval(7 * 86400)
-            let title = reset.timeIntervalSince(now) >= 20 * 86400 ? "月度额度" : "每周额度"
+            let title: WindowTitle = reset.timeIntervalSince(now) >= 20 * 86400 ? .monthly : .weekly
             longWindow = TokenWindow(
                 title: title,
                 usedPercentage: used / limit * 100,
@@ -311,7 +311,7 @@ public final class KimiService: @unchecked Sendable {
                 let ratio = Self.numberValue(entry["usedRatio"] ?? entry["used_ratio"]) {
             let reset = Self.parseResetTime(entry["resetAt"] ?? entry["reset_time"]) ?? now.addingTimeInterval(7 * 86400)
             longWindow = TokenWindow(
-                title: "每周额度",
+                title: .weekly,
                 usedPercentage: ratio * 100,
                 startTime: now,
                 endTime: reset,
@@ -360,7 +360,7 @@ public final class KimiService: @unchecked Sendable {
 
         // 两种形状都没解析到任何窗口但 HTTP 200 → 保持现有兜底
         if fiveHour == nil && longWindow == nil {
-            fiveHour = TokenWindow.status(title: "KIMI 连接正常")
+            fiveHour = TokenWindow.status(title: .connected(subject: "KIMI"))
         }
 
         // /me 失败沿用现有「KIMI (尾号 xxxx)」逻辑
