@@ -486,14 +486,21 @@ namespace TokenBar.Services
             }
         }
 
+        private readonly object _timerLock = new();
+
         public void StartTimer()
         {
-            _timer?.Dispose();
-            var interval = Math.Max(1, Settings.RefreshIntervalMinutes);
-            _timer = new Timer(TimerTickAsync, null, TimeSpan.FromMinutes(interval), TimeSpan.FromMinutes(interval));
-            _activeIntervalMinutes = Settings.RefreshIntervalMinutes;
-            _lastTimerFire = null;
-            Log.Notice("timer", $"定时器已创建：interval={interval}min");
+            // UI 线程（SaveSettings）与线程池（RefreshAllAsync finally 的定时器自愈）
+            // 可能并发进入；Dispose+new 非原子会泄漏一个永不释放、按旧间隔继续 tick 的 Timer。
+            lock (_timerLock)
+            {
+                _timer?.Dispose();
+                var interval = Math.Max(1, Settings.RefreshIntervalMinutes);
+                _timer = new Timer(TimerTickAsync, null, TimeSpan.FromMinutes(interval), TimeSpan.FromMinutes(interval));
+                _activeIntervalMinutes = Settings.RefreshIntervalMinutes;
+                _lastTimerFire = null;
+                Log.Notice("timer", $"定时器已创建：interval={interval}min");
+            }
         }
 
         // TimerCallback 返回 void，异常一旦逃出这个 async void 方法就会终止进程，
@@ -647,6 +654,26 @@ namespace TokenBar.Services
             _ => TimeSpan.FromSeconds(25)
         };
 
+        // 单厂商互斥锁。设置页「测试连接」直调 RefreshXxxAsync（绕过整轮闸门），
+        // 与定时轮次可能并发写同一 ProviderQuota——它是无锁普通字段类，会产生
+        // 数据竞争且状态互相覆盖（如测试成功清掉轮次刚写的超时错误）。
+        // 每个厂商一把锁，把所有入口（轮次 / 托盘手动 / 设置页测试）串行化。
+        private readonly ConcurrentDictionary<string, SemaphoreSlim> _providerLocks = new();
+
+        private async Task WithProviderLockAsync(string name, CancellationToken ct, Func<Task> body)
+        {
+            var sem = _providerLocks.GetOrAdd(name, static _ => new SemaphoreSlim(1, 1));
+            await sem.WaitAsync(ct).ConfigureAwait(false);
+            try
+            {
+                await body().ConfigureAwait(false);
+            }
+            finally
+            {
+                sem.Release();
+            }
+        }
+
         /// <summary>
         /// 给单个厂商的刷新套一层独立超时。
         ///
@@ -751,7 +778,10 @@ namespace TokenBar.Services
             return latest;
         }
 
-        public async Task RefreshOpenAIAsync(CancellationToken ct = default, long? generation = null)
+        public Task RefreshOpenAIAsync(CancellationToken ct = default, long? generation = null) =>
+            WithProviderLockAsync("openai", ct, () => RefreshOpenAICoreAsync(ct, generation));
+
+        private async Task RefreshOpenAICoreAsync(CancellationToken ct, long? generation)
         {
             var quota = Quotas[ProviderType.OpenAI];
             quota.IsLoading = true;
@@ -800,7 +830,10 @@ namespace TokenBar.Services
             }
         }
 
-        public async Task RefreshClaudeAsync(CancellationToken ct = default, long? generation = null)
+        public Task RefreshClaudeAsync(CancellationToken ct = default, long? generation = null) =>
+            WithProviderLockAsync("claude", ct, () => RefreshClaudeCoreAsync(ct, generation));
+
+        private async Task RefreshClaudeCoreAsync(CancellationToken ct, long? generation)
         {
             var quota = Quotas[ProviderType.ClaudeCode];
             quota.IsLoading = true;
@@ -933,7 +966,10 @@ namespace TokenBar.Services
                     : "Cannot reach Google services; check network or proxy"
                 : ex.Message;
 
-        public async Task RefreshGeminiAsync(CancellationToken ct = default, long? generation = null)
+        public Task RefreshGeminiAsync(CancellationToken ct = default, long? generation = null) =>
+            WithProviderLockAsync("gemini", ct, () => RefreshGeminiCoreAsync(ct, generation));
+
+        private async Task RefreshGeminiCoreAsync(CancellationToken ct, long? generation)
         {
             var quota = Quotas[ProviderType.Gemini];
             quota.IsLoading = true;
@@ -1010,7 +1046,10 @@ namespace TokenBar.Services
             }
         }
 
-        public async Task RefreshDeepSeekAsync(CancellationToken ct = default, long? generation = null)
+        public Task RefreshDeepSeekAsync(CancellationToken ct = default, long? generation = null) =>
+            WithProviderLockAsync("deepseek", ct, () => RefreshDeepSeekCoreAsync(ct, generation));
+
+        private async Task RefreshDeepSeekCoreAsync(CancellationToken ct, long? generation)
         {
             var quota = Quotas[ProviderType.DeepSeek];
             quota.IsLoading = true;
@@ -1062,7 +1101,10 @@ namespace TokenBar.Services
             }
         }
 
-        public async Task RefreshVolcengineAsync(CancellationToken ct = default, long? generation = null)
+        public Task RefreshVolcengineAsync(CancellationToken ct = default, long? generation = null) =>
+            WithProviderLockAsync("volcengine", ct, () => RefreshVolcengineCoreAsync(ct, generation));
+
+        private async Task RefreshVolcengineCoreAsync(CancellationToken ct, long? generation)
         {
             var quota = Quotas[ProviderType.Volcengine];
             quota.IsLoading = true;
@@ -1110,7 +1152,10 @@ namespace TokenBar.Services
             }
         }
 
-        public async Task RefreshKimiAsync(CancellationToken ct = default, long? generation = null)
+        public Task RefreshKimiAsync(CancellationToken ct = default, long? generation = null) =>
+            WithProviderLockAsync("kimi", ct, () => RefreshKimiCoreAsync(ct, generation));
+
+        private async Task RefreshKimiCoreAsync(CancellationToken ct, long? generation)
         {
             var quota = Quotas[ProviderType.Kimi];
             quota.IsLoading = true;
@@ -1162,7 +1207,10 @@ namespace TokenBar.Services
             }
         }
 
-        public async Task RefreshOpenRouterAsync(CancellationToken ct = default, long? generation = null)
+        public Task RefreshOpenRouterAsync(CancellationToken ct = default, long? generation = null) =>
+            WithProviderLockAsync("openrouter", ct, () => RefreshOpenRouterCoreAsync(ct, generation));
+
+        private async Task RefreshOpenRouterCoreAsync(CancellationToken ct, long? generation)
         {
             var quota = Quotas[ProviderType.OpenRouter];
             quota.IsLoading = true;
@@ -1213,7 +1261,10 @@ namespace TokenBar.Services
             }
         }
 
-        public async Task RefreshGLMAsync(CancellationToken ct = default, long? generation = null)
+        public Task RefreshGLMAsync(CancellationToken ct = default, long? generation = null) =>
+            WithProviderLockAsync("glm", ct, () => RefreshGLMCoreAsync(ct, generation));
+
+        private async Task RefreshGLMCoreAsync(CancellationToken ct, long? generation)
         {
             var quota = Quotas[ProviderType.GLM];
             quota.IsLoading = true;
@@ -1260,7 +1311,10 @@ namespace TokenBar.Services
             }
         }
 
-        public async Task RefreshAliyunAsync(CancellationToken ct = default, long? generation = null)
+        public Task RefreshAliyunAsync(CancellationToken ct = default, long? generation = null) =>
+            WithProviderLockAsync("aliyun", ct, () => RefreshAliyunCoreAsync(ct, generation));
+
+        private async Task RefreshAliyunCoreAsync(CancellationToken ct, long? generation)
         {
             var quota = Quotas[ProviderType.AliyunBailian];
             quota.IsLoading = true;
@@ -1351,7 +1405,10 @@ namespace TokenBar.Services
             }
         }
 
-        public async Task RefreshCustomProviderAsync(CustomProviderConfig config, CancellationToken ct = default, long? generation = null)
+        public Task RefreshCustomProviderAsync(CustomProviderConfig config, CancellationToken ct = default, long? generation = null) =>
+            WithProviderLockAsync($"custom:{config.Id}", ct, () => RefreshCustomProviderCoreAsync(config, ct, generation));
+
+        private async Task RefreshCustomProviderCoreAsync(CustomProviderConfig config, CancellationToken ct, long? generation)
         {
             var q = CustomQuotas.GetOrAdd(config.Id, _ => new CustomProviderQuota
             {
@@ -1550,7 +1607,15 @@ namespace TokenBar.Services
                 _networkHooked = false;
             }
             _secretSyncGate.Dispose();
-            _timer?.Dispose();
+            lock (_timerLock)
+            {
+                _timer?.Dispose();
+            }
+            foreach (var sem in _providerLocks.Values)
+            {
+                sem.Dispose();
+            }
+            _providerLocks.Clear();
         }
     }
 }

@@ -50,7 +50,7 @@ namespace TokenBar.Services
             TimeSpan budget,
             TimeSpan grace)
         {
-            using var cts = new CancellationTokenSource(budget);
+            var cts = new CancellationTokenSource(budget);
 
             Task work;
             try
@@ -59,6 +59,7 @@ namespace TokenBar.Services
             }
             catch (Exception ex)
             {
+                cts.Dispose();
                 return new ProviderRunResult(ProviderRunOutcome.StartFailed, ex);
             }
 
@@ -71,20 +72,39 @@ namespace TokenBar.Services
             if (winner == work)
             {
                 graceCts.Cancel();   // 回收 Task.Delay 的定时器，避免堆积
-                try
+                using (cts)
                 {
-                    await work.ConfigureAwait(false);
-                    return new ProviderRunResult(ProviderRunOutcome.Completed);
-                }
-                catch (OperationCanceledException ex)
-                {
-                    return new ProviderRunResult(ProviderRunOutcome.TimedOut, ex);
-                }
-                catch (Exception ex)
-                {
-                    return new ProviderRunResult(ProviderRunOutcome.Faulted, ex);
+                    try
+                    {
+                        await work.ConfigureAwait(false);
+                        return new ProviderRunResult(ProviderRunOutcome.Completed);
+                    }
+                    catch (OperationCanceledException ex)
+                    {
+                        return new ProviderRunResult(ProviderRunOutcome.TimedOut, ex);
+                    }
+                    catch (Exception ex)
+                    {
+                        return new ProviderRunResult(ProviderRunOutcome.Faulted, ex);
+                    }
                 }
             }
+
+            // 放弃等待，但 work 还活着：
+            // - cts 不能立即 Dispose——服务内部可能对该 token 再 CreateLinkedTokenSource，
+            //   对已释放的 source 操作会抛 ObjectDisposedException；
+            // - work 之后的异常必须被观察，否则成为 unobserved task exception。
+            // 挂一个只观察异常、真正结束后再释放 cts 的延续。
+            _ = work.ContinueWith(
+                static (t, state) =>
+                {
+                    _ = t.Exception;
+                    ((CancellationTokenSource)state!).Dispose();
+                },
+                cts,
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
 
             return new ProviderRunResult(ProviderRunOutcome.Abandoned);
         }

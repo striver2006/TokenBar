@@ -43,8 +43,11 @@ namespace TokenBar.Services
 
         private static List<(string Id, string Secret)> GetAntigravityClientCandidates()
         {
-            if (_antigravityClientCandidates != null)
-                return _antigravityClientCandidates;
+            lock (_staticStateLock)
+            {
+                if (_antigravityClientCandidates != null)
+                    return _antigravityClientCandidates;
+            }
 
             var list = new List<(string Id, string Secret)>();
             var envId = Environment.GetEnvironmentVariable("ANTIGRAVITY_CLIENT_ID");
@@ -52,8 +55,10 @@ namespace TokenBar.Services
             if (!string.IsNullOrWhiteSpace(envId) && !string.IsNullOrWhiteSpace(envSecret))
             {
                 list.Add((envId!.Trim(), envSecret!.Trim()));
-                _antigravityClientCandidates = list;
-                return list;
+                lock (_staticStateLock)
+                {
+                    return _antigravityClientCandidates ??= list;
+                }
             }
 
             var ids = new HashSet<string>();
@@ -83,8 +88,11 @@ namespace TokenBar.Services
                 }
             }
 
-            _antigravityClientCandidates = list;
-            return list;
+            lock (_staticStateLock)
+            {
+                // 并发下先到者 wins：另一个线程已填充就直接复用它的结果
+                return _antigravityClientCandidates ??= list;
+            }
         }
 
         /// <summary>Scans a large binary in overlapping chunks for the embedded OAuth client patterns.</summary>
@@ -126,6 +134,11 @@ namespace TokenBar.Services
 
         // 上一次令牌刷新整体失败的时刻。候选逐个试是昂贵操作，凭证真失效时每轮都重试纯属浪费。
         private static DateTime? _lastTokenRefreshFailureUtc;
+        // 以上字段与 _antigravityClientCandidates 都是 static 可变状态：设置页「测试连接」
+        // 会与定时轮次并发进入，必须持锁成对读写，否则出现「旧 token 配新 expiry」错配。
+        private static readonly object _staticStateLock = new();
+        // token 刷新整体串行化（候选循环含 HTTP 请求，用 SemaphoreSlim 而非 lock），防并发刷新互相踩踏。
+        private static readonly SemaphoreSlim _tokenRefreshSemaphore = new(1, 1);
         private static readonly TimeSpan TokenRefreshCooldown = TimeSpan.FromSeconds(120);
         // 候选循环的总预算。共享 HttpClient 的 Timeout 是 30s，多个候选串行最坏会到分钟级，
         // 远超刷新间隔，会把 RefreshManager 的闸门长时间占住。
@@ -426,7 +439,12 @@ namespace TokenBar.Services
 
             // Resolve an access token: cached refresh result > valid local token > explicit setting (if valid) > refreshed.
             string accessToken;
-            var cached = (_cachedAccessToken != null && DateTime.UtcNow < _cachedAccessTokenExpiryUtc) ? _cachedAccessToken : null;
+            string? cached;
+            lock (_staticStateLock)
+            {
+                // token 与 expiry 必须成对读，否则并发刷新时可能拿到「旧 token 配新 expiry」
+                cached = (_cachedAccessToken != null && DateTime.UtcNow < _cachedAccessTokenExpiryUtc) ? _cachedAccessToken : null;
+            }
             if (cached != null)
             {
                 accessToken = cached;
@@ -490,77 +508,103 @@ namespace TokenBar.Services
         /// </summary>
         private async Task<string> RefreshAntigravityTokenAsync(string refreshToken, CancellationToken ct)
         {
-            if (_lastTokenRefreshFailureUtc is DateTime lastFailure
-                && DateTime.UtcNow - lastFailure < TokenRefreshCooldown)
+            // 设置页「测试连接」与定时轮次可能并发进入（前者绕过刷新闸门），
+            // 串行化整个刷新流程，防止两个线程同时跑候选循环、互相踩踏静态缓存。
+            await _tokenRefreshSemaphore.WaitAsync(ct).ConfigureAwait(false);
+            try
             {
-                Log.Info("provider", "gemini token 刷新处于冷却期，跳过本轮");
-                throw new Exception(LocalizationManager.Instance.IsChinese
-                    ? "Google 凭证刷新处于冷却期，请稍后重试或重新运行 agy 登录"
-                    : "Google credential refresh is cooling down; retry later or log in again via agy");
-            }
-
-            var candidates = GetAntigravityClientCandidates();
-            string? lastDetail = null;
-
-            // 整个候选循环的硬预算：任何一个候选慢下来都不能让整轮刷新失控
-            var budget = System.Diagnostics.Stopwatch.StartNew();
-
-            // ToList 物化成快照：循环体内成功时会 Remove/Insert 修改 _antigravityClientCandidates
-            // （candidates 就是它的同一个引用），而 Take 是延迟求值、包装原 List 的迭代器。
-            // 当前靠"改完立即 return"侥幸不触发迭代器校验，快照能彻底消除这个隐患。
-            foreach (var client in candidates.Take(TokenClientCandidateLimit).ToList())
-            {
-                if (budget.Elapsed > TokenRefreshBudget)
+                lock (_staticStateLock)
                 {
-                    Log.Error("provider", $"gemini token 刷新超出 {TokenRefreshBudget.TotalSeconds:F0}s 预算，放弃剩余候选");
-                    break;
-                }
+                    // 双重检查：等锁期间另一个线程可能刚刚刷新成功
+                    if (_cachedAccessToken != null && DateTime.UtcNow < _cachedAccessTokenExpiryUtc)
+                        return _cachedAccessToken;
 
-                using var resp = await Http.Shared.PostAsync("https://oauth2.googleapis.com/token",
-                    new FormUrlEncodedContent(new[]
+                    if (_lastTokenRefreshFailureUtc is DateTime lastFailure
+                        && DateTime.UtcNow - lastFailure < TokenRefreshCooldown)
                     {
-                        new System.Collections.Generic.KeyValuePair<string, string>("client_id", client.Id),
-                        new System.Collections.Generic.KeyValuePair<string, string>("client_secret", client.Secret),
-                        new System.Collections.Generic.KeyValuePair<string, string>("grant_type", "refresh_token"),
-                        new System.Collections.Generic.KeyValuePair<string, string>("refresh_token", refreshToken)
-                    }), ct);
-
-                var body = await resp.Content.ReadAsStringAsync(ct);
-                if (!resp.IsSuccessStatusCode)
-                {
-                    lastDetail = $"{(int)resp.StatusCode}";
-                    continue;
+                        Log.Info("provider", "gemini token 刷新处于冷却期，跳过本轮");
+                        throw new Exception(LocalizationManager.Instance.IsChinese
+                            ? "Google 凭证刷新处于冷却期，请稍后重试或重新运行 agy 登录"
+                            : "Google credential refresh is cooling down; retry later or log in again via agy");
+                    }
                 }
 
-                using var doc = JsonDocument.Parse(body);
-                if (!doc.RootElement.TryGetProperty("access_token", out var at) || at.GetString() is not { Length: > 0 })
+                var candidates = GetAntigravityClientCandidates();
+                string? lastDetail = null;
+
+                // 整个候选循环的硬预算：任何一个候选慢下来都不能让整轮刷新失控
+                var budget = System.Diagnostics.Stopwatch.StartNew();
+
+                // ToList 物化成快照：循环体内成功时会 Remove/Insert 修改 _antigravityClientCandidates
+                // （candidates 就是它的同一个引用），而 Take 是延迟求值、包装原 List 的迭代器。
+                // 当前靠"改完立即 return"侥幸不触发迭代器校验，快照能彻底消除这个隐患。
+                foreach (var client in candidates.Take(TokenClientCandidateLimit).ToList())
                 {
-                    lastDetail = LocalizationManager.Instance.IsChinese ? "响应缺少 access_token" : "missing access_token";
-                    continue;
+                    if (budget.Elapsed > TokenRefreshBudget)
+                    {
+                        Log.Error("provider", $"gemini token 刷新超出 {TokenRefreshBudget.TotalSeconds:F0}s 预算，放弃剩余候选");
+                        break;
+                    }
+
+                    using var resp = await Http.Shared.PostAsync("https://oauth2.googleapis.com/token",
+                        new FormUrlEncodedContent(new[]
+                        {
+                            new System.Collections.Generic.KeyValuePair<string, string>("client_id", client.Id),
+                            new System.Collections.Generic.KeyValuePair<string, string>("client_secret", client.Secret),
+                            new System.Collections.Generic.KeyValuePair<string, string>("grant_type", "refresh_token"),
+                            new System.Collections.Generic.KeyValuePair<string, string>("refresh_token", refreshToken)
+                        }), ct).ConfigureAwait(false);
+
+                    var body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                    if (!resp.IsSuccessStatusCode)
+                    {
+                        lastDetail = $"{(int)resp.StatusCode}";
+                        continue;
+                    }
+
+                    using var doc = JsonDocument.Parse(body);
+                    if (!doc.RootElement.TryGetProperty("access_token", out var at) || at.GetString() is not { Length: > 0 })
+                    {
+                        lastDetail = LocalizationManager.Instance.IsChinese ? "响应缺少 access_token" : "missing access_token";
+                        continue;
+                    }
+
+                    var newToken = at.GetString()!;
+                    var expiresIn = 3600;
+                    if (doc.RootElement.TryGetProperty("expires_in", out var ei) && ei.ValueKind == JsonValueKind.Number && ei.TryGetInt32(out var secs))
+                    {
+                        expiresIn = secs;
+                    }
+
+                    // Cache the working pair first so later refreshes skip the trial-and-error.
+                    lock (_staticStateLock)
+                    {
+                        _antigravityClientCandidates?.Remove(client);
+                        _antigravityClientCandidates?.Insert(0, client);
+                        _cachedAccessToken = newToken;
+                        _cachedAccessTokenExpiryUtc = DateTime.UtcNow.AddSeconds(Math.Max(60, expiresIn - 120));
+                        _lastTokenRefreshFailureUtc = null;
+                    }
+                    return newToken;
                 }
 
-                // Cache the working pair first so later refreshes skip the trial-and-error.
-                _antigravityClientCandidates?.Remove(client);
-                _antigravityClientCandidates?.Insert(0, client);
-
-                _cachedAccessToken = at.GetString();
-                var expiresIn = 3600;
-                if (doc.RootElement.TryGetProperty("expires_in", out var ei) && ei.ValueKind == JsonValueKind.Number && ei.TryGetInt32(out var secs))
+                bool noCandidates;
+                lock (_staticStateLock)
                 {
-                    expiresIn = secs;
+                    _lastTokenRefreshFailureUtc = DateTime.UtcNow;
+                    noCandidates = _antigravityClientCandidates is { Count: 0 };
                 }
-                _cachedAccessTokenExpiryUtc = DateTime.UtcNow.AddSeconds(Math.Max(60, expiresIn - 120));
-                _lastTokenRefreshFailureUtc = null;
-                return _cachedAccessToken!;
+                Log.Error("provider", "gemini token 刷新失败：所有候选都没能换到 access token");
+
+                var hint = LocalizationManager.Instance.IsChinese
+                    ? $"Google 凭证刷新失败{(noCandidates ? "（未在本机找到 Antigravity/agy 安装，可设置环境变量 ANTIGRAVITY_CLIENT_ID / ANTIGRAVITY_CLIENT_SECRET）" : $"（HTTP {lastDetail}）")}，请重新运行 agy 登录"
+                    : $"Failed to refresh Google credentials{(noCandidates ? " (no local Antigravity/agy installation found; set ANTIGRAVITY_CLIENT_ID / ANTIGRAVITY_CLIENT_SECRET)" : $" (HTTP {lastDetail})")}. Please log in again via agy";
+                throw new Exception(hint);
             }
-
-            _lastTokenRefreshFailureUtc = DateTime.UtcNow;
-            Log.Error("provider", "gemini token 刷新失败：所有候选都没能换到 access token");
-
-            var hint = LocalizationManager.Instance.IsChinese
-                ? $"Google 凭证刷新失败{(_antigravityClientCandidates is { Count: 0 } ? "（未在本机找到 Antigravity/agy 安装，可设置环境变量 ANTIGRAVITY_CLIENT_ID / ANTIGRAVITY_CLIENT_SECRET）" : $"（HTTP {lastDetail}）")}，请重新运行 agy 登录"
-                : $"Failed to refresh Google credentials{(_antigravityClientCandidates is { Count: 0 } ? " (no local Antigravity/agy installation found; set ANTIGRAVITY_CLIENT_ID / ANTIGRAVITY_CLIENT_SECRET)" : $" (HTTP {lastDetail})")}. Please log in again via agy";
-            throw new Exception(hint);
+            finally
+            {
+                _tokenRefreshSemaphore.Release();
+            }
         }
 
         /// <summary>

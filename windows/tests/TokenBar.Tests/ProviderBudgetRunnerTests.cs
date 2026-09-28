@@ -73,7 +73,6 @@ namespace TokenBar.Tests
         [Fact]
         public async Task TokenIsCancelledAfterBudget()
         {
-            using var observed = new CancellationTokenSource();
             var sawCancellation = false;
 
             var bodyTask = ProviderBudgetRunner.RunAsync(async ct =>
@@ -92,6 +91,37 @@ namespace TokenBar.Tests
             var result = await bodyTask;
             Assert.Equal(ProviderRunOutcome.TimedOut, result.Outcome);
             Assert.True(sawCancellation);
+        }
+
+        [Fact]
+        public async Task AbandonedBodyCanStillUseTokenWithoutObjectDisposedException()
+        {
+            // 回归：旧实现在放弃等待时立即 Dispose cts，而服务内部（如 KimiService）
+            // 可能随后对该 token 再 CreateLinkedTokenSource，直接抛 ObjectDisposedException。
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var finished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            Exception? tokenError = null;
+
+            var result = await ProviderBudgetRunner.RunAsync(async ct =>
+            {
+                await release.Task;   // 不响应取消，硬等到预算+宽限之后
+                try
+                {
+                    using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    linked.CancelAfter(TimeSpan.FromSeconds(1));
+                }
+                catch (Exception ex)
+                {
+                    tokenError = ex;
+                }
+                finished.SetResult();
+            }, Budget, Grace);
+
+            Assert.Equal(ProviderRunOutcome.Abandoned, result.Outcome);
+
+            release.SetResult();
+            await finished.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.Null(tokenError);
         }
     }
 }
