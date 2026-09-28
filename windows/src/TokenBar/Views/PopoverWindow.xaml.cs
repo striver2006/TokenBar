@@ -186,7 +186,95 @@ namespace TokenBar.Views
             }
         }
 
+        /// <summary>
+        /// 卡片窗口槽位：槽位窗口（null 表示不渲染该行）、默认角标文本、
+        /// 以及本行渲染前是否画分隔线的判定（仅在本行确实渲染时求值）。
+        /// </summary>
+        private sealed record CardRow(TokenWindow? Window, string Label, Func<bool>? SepBefore);
+
+        /// <summary>内置/自定义厂商卡片的共享入参，两类卡片的全部差异都在这里表达。</summary>
+        private sealed record CardSpec(
+            Geometry? IconGeometry,      // 非 null 时角标画官方 glyph；null 时退回名字首字母
+            Color IconColor,             // 角标底色（alpha 30）与 glyph/首字母前景色
+            string? IconFallbackLetter,  // 自定义厂商无预设 Logo 时的首字母（内置厂商恒有 Geometry）
+            string DisplayName,
+            string? AccountInfo,
+            Color StatusColor,           // 头部状态点颜色（内置有蓝色 loading 态，自定义没有）
+            bool IsAuthorized,
+            bool HadRefreshError,
+            string? ErrorMessage,
+            string? SyncingMessage,      // 已授权但无任何窗口数据时的提示；null 表示无此分支（自定义厂商）
+            IReadOnlyList<CardRow> Rows,
+            Action OnConfigure);
+
         private UIElement CreateProviderCard(ProviderQuota quota, Action onConfigure)
+        {
+            var i18n = LocalizationManager.Instance;
+            var themeColor = quota.Provider.GetThemeColor();
+            // 状态点：加载中蓝色 > 已授权绿色 > 未授权橙色
+            var statusColor = quota.IsLoading ? Color.FromRgb(59, 130, 246)
+                : quota.IsAuthorized ? Color.FromRgb(34, 197, 94)
+                : Color.FromRgb(245, 158, 11);
+
+            return CreateQuotaCard(new CardSpec(
+                ProviderIcons.GetIconGeometry(quota.Provider),
+                themeColor,
+                null,
+                quota.Provider.GetDisplayName(),
+                quota.AccountInfo,
+                statusColor,
+                quota.IsAuthorized,
+                quota.HadRefreshError,
+                quota.ErrorMessage,
+                quota.ErrorMessage ?? i18n.SyncingData,
+                new[]
+                {
+                    // 5小时窗口
+                    new CardRow(quota.FiveHourWindow, i18n.FiveHourWindow, null),
+                    // 账户余额（与时间窗口并存，例如百炼的账户现金余额）
+                    new CardRow(quota.BalanceWindow, i18n.BalanceBadge, () => quota.FiveHourWindow != null),
+                    // 每周/周期窗口
+                    new CardRow(quota.WeeklyWindow, i18n.WeeklyWindow,
+                        () => (quota.FiveHourWindow != null && quota.BalanceWindow == null) || quota.BalanceWindow != null),
+                    // 按模型圈定的周额度（如 Fable）
+                    new CardRow(quota.ScopedWeeklyWindow, i18n.WeeklyWindow, () => quota.WeeklyWindow != null),
+                },
+                onConfigure));
+        }
+
+        private UIElement CreateCustomProviderCard(CustomProviderConfig config, CustomProviderQuota quota, Action onConfigure)
+        {
+            var i18n = LocalizationManager.Instance;
+            var displayName = config.Name.Length > 0 ? config.Name : i18n.FallbackCustomProviderName;
+            var presetLogo = ProviderIcons.GetPresetLogo(displayName);
+            var badgeColor = presetLogo?.Color ?? Color.FromRgb(99, 102, 241); // Indigo
+
+            return CreateQuotaCard(new CardSpec(
+                // 命中品牌预设:渲染官方 Logo(与内置厂商卡片同款 13x13 单色 glyph)
+                presetLogo?.Geometry,
+                badgeColor,
+                displayName.Substring(0, 1),
+                displayName,
+                quota.AccountInfo,
+                // 状态点：已授权绿色 > 未授权橙色（自定义卡片没有 loading 蓝色态）
+                quota.IsAuthorized ? Color.FromRgb(34, 197, 94) : Color.FromRgb(245, 158, 11),
+                quota.IsAuthorized,
+                quota.HadRefreshError,
+                quota.ErrorMessage,
+                null,
+                new[]
+                {
+                    new CardRow(quota.PrimaryWindow, i18n.QuotaBadge, null),
+                    new CardRow(quota.SecondaryWindow, i18n.RateBadge, () => quota.PrimaryWindow != null),
+                },
+                onConfigure));
+        }
+
+        /// <summary>
+        /// 共享卡片构造器：Border 容器 + header（图标角标/名称/账号/状态点）
+        /// + body 分支（去配置 / 刷新失败重试 / 同步中 / 窗口额度行 + 刷新失败小字提示）。
+        /// </summary>
+        private UIElement CreateQuotaCard(CardSpec spec)
         {
             var card = new Border
             {
@@ -208,32 +296,46 @@ namespace TokenBar.Views
             headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto }); // Status dot
 
             // Icon badge
-            var themeColor = quota.Provider.GetThemeColor();
             var iconBadge = new Border
             {
                 Width = 22,
                 Height = 22,
                 CornerRadius = new CornerRadius(6),
-                Background = new SolidColorBrush(Color.FromArgb(30, themeColor.R, themeColor.G, themeColor.B)),
+                Background = new SolidColorBrush(Color.FromArgb(30, spec.IconColor.R, spec.IconColor.G, spec.IconColor.B)),
                 Margin = new Thickness(0, 0, 8, 0)
             };
-            iconBadge.Child = new System.Windows.Shapes.Path
+            if (spec.IconGeometry != null)
             {
-                Data = ProviderIcons.GetIconGeometry(quota.Provider),
-                Fill = new SolidColorBrush(themeColor),
-                Stretch = Stretch.Uniform,
-                Width = 13,
-                Height = 13,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center
-            };
+                iconBadge.Child = new System.Windows.Shapes.Path
+                {
+                    Data = spec.IconGeometry,
+                    Fill = new SolidColorBrush(spec.IconColor),
+                    Stretch = Stretch.Uniform,
+                    Width = 13,
+                    Height = 13,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+            }
+            else
+            {
+                iconBadge.Child = new TextBlock
+                {
+                    Text = spec.IconFallbackLetter,
+                    FontSize = 11,
+                    FontWeight = FontWeights.Bold,
+                    Foreground = new SolidColorBrush(spec.IconColor),
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+            }
             Grid.SetColumn(iconBadge, 0);
             headerGrid.Children.Add(iconBadge);
 
             // Name
             var nameBlock = new TextBlock
             {
-                Text = quota.Provider.GetDisplayName(),
+                Text = spec.DisplayName,
                 FontWeight = FontWeights.Bold,
                 FontSize = 12,
                 Foreground = new SolidColorBrush(Color.FromRgb(17, 24, 39)),
@@ -244,11 +346,11 @@ namespace TokenBar.Views
             headerGrid.Children.Add(nameBlock);
 
             // Account
-            if (!string.IsNullOrEmpty(quota.AccountInfo))
+            if (!string.IsNullOrEmpty(spec.AccountInfo))
             {
                 var accBlock = new TextBlock
                 {
-                    Text = quota.AccountInfo,
+                    Text = spec.AccountInfo,
                     FontSize = 10,
                     Foreground = new SolidColorBrush(Color.FromRgb(107, 114, 128)),
                     VerticalAlignment = VerticalAlignment.Center,
@@ -265,30 +367,18 @@ namespace TokenBar.Views
                 Width = 7,
                 Height = 7,
                 VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(4, 0, 0, 0)
+                Margin = new Thickness(4, 0, 0, 0),
+                Fill = new SolidColorBrush(spec.StatusColor)
             };
-            if (quota.IsLoading)
-            {
-                statusEllipse.Fill = new SolidColorBrush(Color.FromRgb(59, 130, 246)); // Blue loading
-            }
-            else if (quota.IsAuthorized)
-            {
-                statusEllipse.Fill = new SolidColorBrush(Color.FromRgb(34, 197, 94)); // Green
-            }
-            else
-            {
-                statusEllipse.Fill = new SolidColorBrush(Color.FromRgb(245, 158, 11)); // Orange
-            }
             Grid.SetColumn(statusEllipse, 3);
             headerGrid.Children.Add(statusEllipse);
 
             stack.Children.Add(headerGrid);
 
             // Body
-            bool hasWindowData = quota.FiveHourWindow != null || quota.WeeklyWindow != null
-                                 || quota.BalanceWindow != null || quota.ScopedWeeklyWindow != null;
+            bool hasWindowData = spec.Rows.Any(r => r.Window != null);
 
-            if (!quota.IsAuthorized && !quota.HadRefreshError)
+            if (!spec.IsAuthorized && !spec.HadRefreshError)
             {
                 var errorDock = new DockPanel { Margin = new Thickness(0, 8, 0, 2) };
                 var btnConfig = new Button
@@ -301,13 +391,13 @@ namespace TokenBar.Views
                     Cursor = System.Windows.Input.Cursors.Hand,
                     HorizontalAlignment = HorizontalAlignment.Right
                 };
-                btnConfig.Click += (s, e) => onConfigure();
+                btnConfig.Click += (s, e) => spec.OnConfigure();
                 DockPanel.SetDock(btnConfig, Dock.Right);
                 errorDock.Children.Add(btnConfig);
 
                 var msgBlock = new TextBlock
                 {
-                    Text = quota.ErrorMessage ?? LocalizationManager.Instance.NotAuthorized,
+                    Text = spec.ErrorMessage ?? LocalizationManager.Instance.NotAuthorized,
                     FontSize = 11,
                     Foreground = new SolidColorBrush(Color.FromRgb(239, 68, 68)),
                     TextTrimming = TextTrimming.CharacterEllipsis,
@@ -316,16 +406,16 @@ namespace TokenBar.Views
                 errorDock.Children.Add(msgBlock);
                 stack.Children.Add(errorDock);
             }
-            else if (quota.HadRefreshError && !hasWindowData)
+            else if (spec.HadRefreshError && !hasWindowData)
             {
                 // 已配置但刷新失败（多为开机网络未就绪）：显示错误 + 「重试」，而不是误导性的「去配置」
-                AddRefreshErrorRow(stack, quota.ErrorMessage);
+                AddRefreshErrorRow(stack, spec.ErrorMessage);
             }
-            else if (!hasWindowData)
+            else if (!hasWindowData && spec.SyncingMessage != null)
             {
                 var syncBlock = new TextBlock
                 {
-                    Text = quota.ErrorMessage ?? LocalizationManager.Instance.SyncingData,
+                    Text = spec.SyncingMessage,
                     FontSize = 11,
                     Foreground = new SolidColorBrush(Color.FromRgb(107, 114, 128)),
                     Margin = new Thickness(0, 6, 0, 2)
@@ -334,225 +424,25 @@ namespace TokenBar.Views
             }
             else
             {
-                UIElement CreateSeparator() => new Border
+                foreach (var row in spec.Rows)
                 {
-                    Height = 1,
-                    Background = new SolidColorBrush(Color.FromRgb(243, 244, 246)),
-                    Margin = new Thickness(0, 6, 0, 6)
-                };
-
-                // 5小时窗口
-                if (quota.FiveHourWindow != null)
-                {
-                    stack.Children.Add(CreateWindowQuotaRow(quota.FiveHourWindow, LocalizationManager.Instance.FiveHourWindow));
-                }
-
-                if (quota.FiveHourWindow != null && quota.WeeklyWindow != null && quota.BalanceWindow == null)
-                {
-                    stack.Children.Add(CreateSeparator());
-                }
-
-                // 账户余额（与时间窗口并存，例如百炼的账户现金余额）
-                if (quota.BalanceWindow != null)
-                {
-                    if (quota.FiveHourWindow != null)
+                    if (row.Window == null) continue;
+                    if (row.SepBefore != null && row.SepBefore())
                     {
-                        stack.Children.Add(CreateSeparator());
+                        stack.Children.Add(new Border
+                        {
+                            Height = 1,
+                            Background = new SolidColorBrush(Color.FromRgb(243, 244, 246)),
+                            Margin = new Thickness(0, 6, 0, 6)
+                        });
                     }
-                    stack.Children.Add(CreateWindowQuotaRow(quota.BalanceWindow, LocalizationManager.Instance.BalanceBadge));
+                    stack.Children.Add(CreateWindowQuotaRow(row.Window, row.Label));
                 }
 
-                if (quota.BalanceWindow != null && quota.WeeklyWindow != null)
-                {
-                    stack.Children.Add(CreateSeparator());
-                }
-
-                // 每周/周期窗口
-                if (quota.WeeklyWindow != null)
-                {
-                    stack.Children.Add(CreateWindowQuotaRow(quota.WeeklyWindow, LocalizationManager.Instance.WeeklyWindow));
-                }
-
-                if (quota.WeeklyWindow != null && quota.ScopedWeeklyWindow != null)
-                {
-                    stack.Children.Add(CreateSeparator());
-                }
-
-                // 按模型圈定的周额度（如 Fable）
-                if (quota.ScopedWeeklyWindow != null)
-                {
-                    stack.Children.Add(CreateWindowQuotaRow(quota.ScopedWeeklyWindow, LocalizationManager.Instance.WeeklyWindow));
-                }
-
-                if (quota.HadRefreshError)
+                if (spec.HadRefreshError)
                 {
                     // 本轮刷新失败但旧数据仍可参考：末尾叠一行小字提示，不打断余额展示
-                    AddRefreshErrorHint(stack, quota.ErrorMessage);
-                }
-            }
-
-            card.Child = stack;
-            return card;
-        }
-
-        private UIElement CreateCustomProviderCard(CustomProviderConfig config, CustomProviderQuota quota, Action onConfigure)
-        {
-            var card = new Border
-            {
-                Background = Brushes.White,
-                CornerRadius = new CornerRadius(10),
-                Padding = new Thickness(12, 10, 12, 10),
-                Margin = new Thickness(0, 0, 0, 8),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(229, 231, 235)),
-                BorderThickness = new Thickness(1)
-            };
-
-            var stack = new StackPanel();
-
-            var headerGrid = new Grid();
-            headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-
-            var displayName = config.Name.Length > 0 ? config.Name : LocalizationManager.Instance.FallbackCustomProviderName;
-            var presetLogo = ProviderIcons.GetPresetLogo(displayName);
-            var badgeColor = presetLogo?.Color ?? Color.FromRgb(99, 102, 241); // Indigo
-            var iconBadge = new Border
-            {
-                Width = 22,
-                Height = 22,
-                CornerRadius = new CornerRadius(6),
-                Background = new SolidColorBrush(Color.FromArgb(30, badgeColor.R, badgeColor.G, badgeColor.B)),
-                Margin = new Thickness(0, 0, 8, 0)
-            };
-            if (presetLogo != null)
-            {
-                // 命中品牌预设:渲染官方 Logo(与内置厂商卡片同款 13x13 单色 glyph)
-                iconBadge.Child = new System.Windows.Shapes.Path
-                {
-                    Data = presetLogo.Value.Geometry,
-                    Fill = new SolidColorBrush(presetLogo.Value.Color),
-                    Stretch = Stretch.Uniform,
-                    Width = 13,
-                    Height = 13,
-                    HorizontalAlignment = HorizontalAlignment.Center,
-                    VerticalAlignment = VerticalAlignment.Center
-                };
-            }
-            else
-            {
-                iconBadge.Child = new TextBlock
-                {
-                    Text = displayName.Substring(0, 1),
-                    FontSize = 11,
-                    FontWeight = FontWeights.Bold,
-                    Foreground = new SolidColorBrush(Color.FromRgb(99, 102, 241)),
-                    HorizontalAlignment = HorizontalAlignment.Center,
-                    VerticalAlignment = VerticalAlignment.Center
-                };
-            }
-            Grid.SetColumn(iconBadge, 0);
-            headerGrid.Children.Add(iconBadge);
-
-            var nameBlock = new TextBlock
-            {
-                Text = displayName,
-                FontWeight = FontWeights.Bold,
-                FontSize = 12,
-                Foreground = new SolidColorBrush(Color.FromRgb(17, 24, 39)),
-                VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(0, 0, 6, 0)
-            };
-            Grid.SetColumn(nameBlock, 1);
-            headerGrid.Children.Add(nameBlock);
-
-            if (!string.IsNullOrEmpty(quota.AccountInfo))
-            {
-                var accBlock = new TextBlock
-                {
-                    Text = quota.AccountInfo,
-                    FontSize = 10,
-                    Foreground = new SolidColorBrush(Color.FromRgb(107, 114, 128)),
-                    VerticalAlignment = VerticalAlignment.Center,
-                    TextTrimming = TextTrimming.CharacterEllipsis,
-                    MaxWidth = 100
-                };
-                Grid.SetColumn(accBlock, 2);
-                headerGrid.Children.Add(accBlock);
-            }
-
-            var statusEllipse = new Ellipse
-            {
-                Width = 7,
-                Height = 7,
-                VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(4, 0, 0, 0),
-                Fill = quota.IsAuthorized ? new SolidColorBrush(Color.FromRgb(34, 197, 94)) : new SolidColorBrush(Color.FromRgb(245, 158, 11))
-            };
-            Grid.SetColumn(statusEllipse, 3);
-            headerGrid.Children.Add(statusEllipse);
-
-            stack.Children.Add(headerGrid);
-
-            if (!quota.IsAuthorized && !quota.HadRefreshError)
-            {
-                var errorDock = new DockPanel { Margin = new Thickness(0, 8, 0, 2) };
-                var btnConfig = new Button
-                {
-                    Content = LocalizationManager.Instance.Configure,
-                    Padding = new Thickness(8, 2, 8, 2),
-                    FontSize = 11,
-                    Background = new SolidColorBrush(Color.FromRgb(37, 99, 235)),
-                    Foreground = Brushes.White,
-                    Cursor = System.Windows.Input.Cursors.Hand,
-                    HorizontalAlignment = HorizontalAlignment.Right
-                };
-                btnConfig.Click += (s, e) => onConfigure();
-                DockPanel.SetDock(btnConfig, Dock.Right);
-                errorDock.Children.Add(btnConfig);
-
-                var msgBlock = new TextBlock
-                {
-                    Text = quota.ErrorMessage ?? LocalizationManager.Instance.NotAuthorized,
-                    FontSize = 11,
-                    Foreground = new SolidColorBrush(Color.FromRgb(239, 68, 68)),
-                    TextTrimming = TextTrimming.CharacterEllipsis,
-                    VerticalAlignment = VerticalAlignment.Center
-                };
-                errorDock.Children.Add(msgBlock);
-                stack.Children.Add(errorDock);
-            }
-            else if (quota.HadRefreshError && quota.PrimaryWindow == null && quota.SecondaryWindow == null)
-            {
-                // 已配置但刷新失败（多为开机网络未就绪）：显示错误 + 「重试」，而不是误导性的「去配置」
-                AddRefreshErrorRow(stack, quota.ErrorMessage);
-            }
-            else
-            {
-                if (quota.PrimaryWindow != null)
-                {
-                    stack.Children.Add(CreateWindowQuotaRow(quota.PrimaryWindow, LocalizationManager.Instance.QuotaBadge));
-                }
-                if (quota.PrimaryWindow != null && quota.SecondaryWindow != null)
-                {
-                    var sep = new Border
-                    {
-                        Height = 1,
-                        Background = new SolidColorBrush(Color.FromRgb(243, 244, 246)),
-                        Margin = new Thickness(0, 6, 0, 6)
-                    };
-                    stack.Children.Add(sep);
-                }
-                if (quota.SecondaryWindow != null)
-                {
-                    stack.Children.Add(CreateWindowQuotaRow(quota.SecondaryWindow, LocalizationManager.Instance.RateBadge));
-                }
-
-                if (quota.HadRefreshError)
-                {
-                    // 本轮刷新失败但旧数据仍可参考：末尾叠一行小字提示
-                    AddRefreshErrorHint(stack, quota.ErrorMessage);
+                    AddRefreshErrorHint(stack, spec.ErrorMessage);
                 }
             }
 
