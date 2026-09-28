@@ -1,5 +1,4 @@
 using System;
-using System.IO;
 using System.Threading;
 using System.Windows;
 using Microsoft.Win32;
@@ -19,31 +18,39 @@ namespace TokenBar
         private Mutex? _singleInstanceMutex;
         private EventWaitHandle? _activateSignal;
 
+        // App 级日志统一走 Services/Log（%APPDATA%\TokenBar\tokenbar.log，2MB 轮转），category 固定 "app"。
+        // Log 的静态构造只依赖 Environment.SpecialFolder.ApplicationData，且失败即整体降级为 no-op，
+        // 在 App 构造函数里调用没有鸡生蛋问题。
+        private const string LogCategory = "app";
+
         public App()
         {
             ShutdownMode = ShutdownMode.OnExplicitShutdown;
 
             AppDomain.CurrentDomain.UnhandledException += (s, e) =>
             {
-                Log($"Unhandled AppDomain Exception: {e.ExceptionObject}");
+                Log.Error(LogCategory, $"Unhandled AppDomain Exception: {e.ExceptionObject}");
             };
 
             DispatcherUnhandledException += (s, e) =>
             {
-                Log($"Unhandled Dispatcher Exception: {e.Exception}");
+                // 刻意行为：完整记录（e.Exception.ToString() 含类型、消息与 stack trace）之后吞掉异常。
+                // TokenBar 是菜单栏常驻应用，一次 UI 回调异常不应该带崩整个进程；代价是异常后的
+                // UI 状态可能不一致，因此必须留下日志供排查，绝不允许静默。
+                Log.Error(LogCategory, $"Unhandled Dispatcher Exception: {e.Exception}");
                 e.Handled = true;
             };
         }
 
         protected override void OnStartup(StartupEventArgs e)
         {
-            Log("App.OnStartup enter");
+            Log.Info(LogCategory, "App.OnStartup enter");
             base.OnStartup(e);
             ShutdownMode = ShutdownMode.OnExplicitShutdown;
 
             if (!TryAcquireSingleInstance())
             {
-                Log("Another instance is already running; activation signaled, exiting");
+                Log.Info(LogCategory, "Another instance is already running; activation signaled, exiting");
                 Shutdown();
                 return;
             }
@@ -51,11 +58,11 @@ namespace TokenBar
             try
             {
                 // Initialize RefreshManager & load settings
-                Log("Initializing RefreshManager");
+                Log.Info(LogCategory, "Initializing RefreshManager");
                 RefreshManager.Instance.Initialize();
 
                 // Initialize System Tray Icon
-                Log("Initializing TrayIconManager");
+                Log.Info(LogCategory, "Initializing TrayIconManager");
                 _trayManager = new TrayIconManager();
                 _trayManager.Initialize();
 
@@ -69,17 +76,17 @@ namespace TokenBar
                 // 睡眠期间定时器不 fire，唤醒后数据可能已经过期若干个周期
                 SystemEvents.PowerModeChanged += OnPowerModeChanged;
 
-                Log("TokenBar startup completed successfully");
+                Log.Info(LogCategory, "TokenBar startup completed successfully");
             }
             catch (Exception ex)
             {
-                Log($"Error in OnStartup: {ex}");
+                Log.Error(LogCategory, $"Error in OnStartup: {ex}");
             }
         }
 
         protected override void OnExit(ExitEventArgs e)
         {
-            Log($"App.OnExit enter (Code: {e.ApplicationExitCode})");
+            Log.Info(LogCategory, $"App.OnExit enter (Code: {e.ApplicationExitCode})");
             SystemEvents.PowerModeChanged -= OnPowerModeChanged;
             _trayManager?.Dispose();
             RefreshManager.Instance.Dispose();
@@ -108,7 +115,7 @@ namespace TokenBar
                 }
                 catch (Exception ex)
                 {
-                    Log($"Failed to signal the first instance: {ex.Message}");
+                    Log.Error(LogCategory, $"Failed to signal the first instance: {ex.Message}");
                 }
                 return false;
             }
@@ -134,7 +141,7 @@ namespace TokenBar
                 }
                 catch (Exception ex)
                 {
-                    Log($"Activation listener stopped: {ex.Message}");
+                    Log.Error(LogCategory, $"Activation listener stopped: {ex.Message}");
                     return;
                 }
 
@@ -148,7 +155,7 @@ namespace TokenBar
         {
             if (e.Mode != PowerModes.Resume) return;
 
-            _ = System.Threading.Tasks.Task.Run(async () =>
+            System.Threading.Tasks.Task.Run(async () =>
             {
                 try
                 {
@@ -158,24 +165,9 @@ namespace TokenBar
                 }
                 catch (Exception ex)
                 {
-                    Log($"Refresh after resume failed: {ex}");
+                    Log.Error(LogCategory, $"Refresh after resume failed: {ex}");
                 }
-            });
-        }
-
-        private static void Log(string message)
-        {
-            try
-            {
-                var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "TokenBar");
-                Directory.CreateDirectory(dir);
-                File.AppendAllText(Path.Combine(dir, "app.log"), $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] {message}\r\n");
-            }
-            catch (Exception ex)
-            {
-                // app.log 自身写不进去时只能退回 Debug 输出：这里已是最底层的日志通道
-                System.Diagnostics.Debug.WriteLine($"app.log 写入失败: {ex.Message}");
-            }
+            }).FireAndForget("resume-refresh");
         }
     }
 }

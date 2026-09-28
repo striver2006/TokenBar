@@ -20,8 +20,9 @@ namespace TokenBar.Services
         /// <summary>
         /// 只在探测阶段「可选失败」时抛出：例如配额接口 404 / 401 / 403 / 返回格式不符。
         /// /models 的鉴权失败与网络错误不属于这一类，必须上抛让卡片显示错误。
+        /// internal 只为让单测能断言「响应形状不符 → 可选降级」这一分支，语义不变。
         /// </summary>
-        private sealed class OptionalProbeException : Exception
+        internal sealed class OptionalProbeException : Exception
         {
             public OptionalProbeException(string message) : base(message) { }
         }
@@ -216,95 +217,105 @@ namespace TokenBar.Services
 
             using (doc)
             {
-                var root = doc.RootElement;
-                JsonElement limitsArray = default;
-                if (root.ValueKind == JsonValueKind.Object)
-                {
-                    if (root.TryGetProperty("data", out var dataObj) &&
-                        dataObj.ValueKind == JsonValueKind.Object &&
-                        dataObj.TryGetProperty("limits", out var lim1))
-                    {
-                        limitsArray = lim1;
-                    }
-                    else if (root.TryGetProperty("limits", out var lim2))
-                    {
-                        limitsArray = lim2;
-                    }
-                }
-
-                if (limitsArray.ValueKind != JsonValueKind.Array)
-                {
-                    throw new OptionalProbeException("响应中没有 limits 数组");
-                }
-
-                TokenWindow? fiveHourWindow = null;
-                TokenWindow? weeklyWindow = null;
-
-                foreach (var item in limitsArray.EnumerateArray())
-                {
-                    if (item.ValueKind != JsonValueKind.Object) continue;
-
-                    var type = item.TryGetProperty("type", out var tp) && tp.ValueKind == JsonValueKind.String
-                        ? tp.GetString()?.ToUpperInvariant() ?? ""
-                        : "";
-
-                    double pct = 0.0;
-                    if (item.TryGetProperty("percentage", out var p1) && p1.ValueKind == JsonValueKind.Number) pct = p1.GetDouble();
-                    else if (item.TryGetProperty("utilization", out var p2) && p2.ValueKind == JsonValueKind.Number) pct = p2.GetDouble();
-                    pct = Math.Clamp(pct, 0.0, 100.0);
-
-                    // nextResetTime 按量级区分秒 / 毫秒：> 1e12 视为毫秒（秒级时间戳到 2286 年也不会超过 1e10）
-                    DateTime? resetDate = null;
-                    if (item.TryGetProperty("nextResetTime", out var nrProp) && nrProp.ValueKind == JsonValueKind.Number)
-                    {
-                        var val = nrProp.GetDouble();
-                        if (val > 0)
-                        {
-                            var resetMs = val > 1e12 ? val : val * 1000;
-                            resetDate = DateTimeOffset.FromUnixTimeMilliseconds((long)resetMs).LocalDateTime;
-                        }
-                    }
-
-                    double? usedTokens = item.TryGetProperty("used", out var up) && up.ValueKind == JsonValueKind.Number ? up.GetDouble() : null;
-                    double? totalTokens = item.TryGetProperty("total", out var top) && top.ValueKind == JsonValueKind.Number ? top.GetDouble() : null;
-
-                    var isWeekly = type.Contains("WEEK");
-                    var isFiveHour = !isWeekly && (type.Contains("TOKEN") || type.Contains("5H") || type.Contains("SESSION"));
-
-                    if (isFiveHour || (!isWeekly && fiveHourWindow == null))
-                    {
-                        var end = resetDate ?? DateTime.Now.AddHours(5);
-                        fiveHourWindow = new TokenWindow
-                        {
-                            Title = WindowTitle.FiveHour,
-                            UsedPercentage = pct,
-                            StartTime = end.AddHours(-5),
-                            EndTime = end,
-                            UsedAmount = usedTokens,
-                            TotalLimit = totalTokens,
-                            Unit = totalTokens != null ? "Tokens" : "%",
-                            IsIdle = pct == 0.0
-                        };
-                    }
-                    else if (isWeekly || weeklyWindow == null)
-                    {
-                        var end = resetDate ?? DateTime.Now.AddDays(7);
-                        weeklyWindow = new TokenWindow
-                        {
-                            Title = WindowTitle.Weekly,
-                            UsedPercentage = pct,
-                            StartTime = end.AddDays(-7),
-                            EndTime = end,
-                            UsedAmount = usedTokens,
-                            TotalLimit = totalTokens,
-                            Unit = totalTokens != null ? "Tokens" : "%",
-                            IsIdle = pct == 0.0
-                        };
-                    }
-                }
-
-                return (fiveHourWindow, weeklyWindow);
+                return ParseQuotaLimits(doc.RootElement, DateTime.Now);
             }
+        }
+
+        /// <summary>
+        /// /api/monitor/usage/quota/limit 响应体 → 窗口的纯解析：data.limits 与顶层 limits 两种形状、
+        /// nextResetTime 秒/毫秒量级判断（&gt; 1e12 视为毫秒）、TOKEN/5H/SESSION → 5小时窗、WEEK → 周窗、
+        /// 未知 type 的首个非周条目兜底进 5小时窗。没有 limits 数组时抛 OptionalProbeException（静默降级）。
+        /// now 由调用方注入（生产传 DateTime.Now）。
+        /// </summary>
+        internal static (TokenWindow? FiveHour, TokenWindow? Weekly) ParseQuotaLimits(JsonElement root, DateTime now)
+        {
+            JsonElement limitsArray = default;
+            if (root.ValueKind == JsonValueKind.Object)
+            {
+                if (root.TryGetProperty("data", out var dataObj) &&
+                    dataObj.ValueKind == JsonValueKind.Object &&
+                    dataObj.TryGetProperty("limits", out var lim1))
+                {
+                    limitsArray = lim1;
+                }
+                else if (root.TryGetProperty("limits", out var lim2))
+                {
+                    limitsArray = lim2;
+                }
+            }
+
+            if (limitsArray.ValueKind != JsonValueKind.Array)
+            {
+                throw new OptionalProbeException("响应中没有 limits 数组");
+            }
+
+            TokenWindow? fiveHourWindow = null;
+            TokenWindow? weeklyWindow = null;
+
+            foreach (var item in limitsArray.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object) continue;
+
+                var type = item.TryGetProperty("type", out var tp) && tp.ValueKind == JsonValueKind.String
+                    ? tp.GetString()?.ToUpperInvariant() ?? ""
+                    : "";
+
+                double pct = 0.0;
+                if (item.TryGetProperty("percentage", out var p1) && p1.ValueKind == JsonValueKind.Number) pct = p1.GetDouble();
+                else if (item.TryGetProperty("utilization", out var p2) && p2.ValueKind == JsonValueKind.Number) pct = p2.GetDouble();
+                pct = Math.Clamp(pct, 0.0, 100.0);
+
+                // nextResetTime 按量级区分秒 / 毫秒：> 1e12 视为毫秒（秒级时间戳到 2286 年也不会超过 1e10）
+                DateTime? resetDate = null;
+                if (item.TryGetProperty("nextResetTime", out var nrProp) && nrProp.ValueKind == JsonValueKind.Number)
+                {
+                    var val = nrProp.GetDouble();
+                    if (val > 0)
+                    {
+                        var resetMs = val > 1e12 ? val : val * 1000;
+                        resetDate = DateTimeOffset.FromUnixTimeMilliseconds((long)resetMs).LocalDateTime;
+                    }
+                }
+
+                double? usedTokens = item.TryGetProperty("used", out var up) && up.ValueKind == JsonValueKind.Number ? up.GetDouble() : null;
+                double? totalTokens = item.TryGetProperty("total", out var top) && top.ValueKind == JsonValueKind.Number ? top.GetDouble() : null;
+
+                var isWeekly = type.Contains("WEEK");
+                var isFiveHour = !isWeekly && (type.Contains("TOKEN") || type.Contains("5H") || type.Contains("SESSION"));
+
+                if (isFiveHour || (!isWeekly && fiveHourWindow == null))
+                {
+                    var end = resetDate ?? now.AddHours(5);
+                    fiveHourWindow = new TokenWindow
+                    {
+                        Title = WindowTitle.FiveHour,
+                        UsedPercentage = pct,
+                        StartTime = end.AddHours(-5),
+                        EndTime = end,
+                        UsedAmount = usedTokens,
+                        TotalLimit = totalTokens,
+                        Unit = totalTokens != null ? "Tokens" : "%",
+                        IsIdle = pct == 0.0
+                    };
+                }
+                else if (isWeekly || weeklyWindow == null)
+                {
+                    var end = resetDate ?? now.AddDays(7);
+                    weeklyWindow = new TokenWindow
+                    {
+                        Title = WindowTitle.Weekly,
+                        UsedPercentage = pct,
+                        StartTime = end.AddDays(-7),
+                        EndTime = end,
+                        UsedAmount = usedTokens,
+                        TotalLimit = totalTokens,
+                        Unit = totalTokens != null ? "Tokens" : "%",
+                        IsIdle = pct == 0.0
+                    };
+                }
+            }
+
+            return (fiveHourWindow, weeklyWindow);
         }
     }
 }

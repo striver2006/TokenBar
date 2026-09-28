@@ -1015,7 +1015,7 @@ namespace TokenBar.Views
                 var s = RefreshManager.Instance.Settings;
                 await AliyunBailianService.Instance.FetchViaCliAsync(s.AliyunConsoleRegion, s.AliyunConsoleSite);
                 MessageBox.Show(i18n.IsChinese ? "百炼 CLI 配额读取成功！已检测到额度窗口。" : "Bailian CLI quota retrieved successfully! Quota windows detected.", i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Information);
-                _ = RefreshManager.Instance.RefreshAliyunAsync();
+                RefreshManager.Instance.RefreshAliyunAsync().FireAndForget("aliyun-cli-refresh");
             }
             catch (Exception ex)
             {
@@ -1464,7 +1464,7 @@ namespace TokenBar.Views
                 i18n.AlertNotice,
                 MessageBoxButton.OK,
                 MessageBoxImage.Information);
-            _ = RefreshManager.Instance.RefreshAllAsync(RefreshTrigger.Settings);
+            RefreshManager.Instance.RefreshAllAsync(RefreshTrigger.Settings).FireAndForget("settings-save-refresh");
         }
 
         private void BtnClose_Click(object sender, RoutedEventArgs e)

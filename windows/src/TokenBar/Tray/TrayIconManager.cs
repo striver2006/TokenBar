@@ -202,7 +202,16 @@ namespace TokenBar.Tray
 
             var refreshItem = new ToolStripMenuItem(LocalizationManager.Instance.RefreshAll, null, async (s, e) =>
             {
-                await RefreshManager.Instance.RefreshAllAsync(RefreshTrigger.Manual);
+                // WinForms 的 async void 事件回调一旦抛异常会直接进消息循环（进程级），
+                // RefreshAllAsync 主体虽自带 catch，入口段仍在保护范围之外，这里兜底记录。
+                try
+                {
+                    await RefreshManager.Instance.RefreshAllAsync(RefreshTrigger.Manual);
+                }
+                catch (Exception ex)
+                {
+                    Log.Error("tray", $"托盘菜单手动刷新异常: {ex}");
+                }
             });
             contextMenu.Items.Add(refreshItem);
 

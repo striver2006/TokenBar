@@ -1,8 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
-using System.Windows.Media;
-using Color = System.Windows.Media.Color;
 using TokenBar.I18n;
 
 namespace TokenBar.Models
@@ -58,22 +56,8 @@ namespace TokenBar.Models
             };
         }
 
-        public static Color GetThemeColor(this ProviderType type) => type switch
-        {
-            ProviderType.OpenAI => Color.FromRgb(15, 166, 135),       // Teal green
-            ProviderType.ClaudeCode => Color.FromRgb(217, 115, 71),   // Terracotta
-            ProviderType.Gemini => Color.FromRgb(64, 133, 244),       // Google blue
-            ProviderType.DeepSeek => Color.FromRgb(56, 122, 245),     // Royal Blue
-            ProviderType.Volcengine => Color.FromRgb(0, 110, 255),    // Volcengine Blue（官方品牌蓝 #006EFF）
-            ProviderType.Kimi => Color.FromRgb(140, 89, 235),        // Moonshot Purple
-            ProviderType.OpenRouter => Color.FromRgb(100, 103, 242), // OpenRouter Indigo
-            ProviderType.GLM => Color.FromRgb(59, 184, 135),         // Emerald green
-            ProviderType.AliyunBailian => Color.FromRgb(255, 107, 0), // Aliyun Orange
-            _ => Color.FromRgb(37, 99, 235)
-        };
-
-        public static SolidColorBrush GetThemeBrush(this ProviderType type) =>
-            new SolidColorBrush(GetThemeColor(type));
+        // 主题色/画刷映射已移到 Helpers/ThemeBrushes.cs（GetThemeColor / GetThemeBrush 扩展方法），
+        // 模型层不再依赖 System.Windows.Media。
 
         public static SettingsTab GetSettingsTab(this ProviderType type) => type switch
         {
@@ -182,29 +166,8 @@ namespace TokenBar.Models
             IsIdle = true
         };
 
-        public SolidColorBrush StatusBrush
-        {
-            get
-            {
-                if (Kind == TokenWindowKind.Status)
-                    return new SolidColorBrush(Color.FromRgb(34, 197, 94)); // Green：状态型窗口只表示连接正常
-
-                if (Kind == TokenWindowKind.Balance)
-                {
-                    if (BalanceAmount.HasValue && CriticalThreshold.HasValue && BalanceAmount.Value < CriticalThreshold.Value)
-                        return new SolidColorBrush(Color.FromRgb(239, 68, 68)); // Red
-                    if (BalanceAmount.HasValue && WarningThreshold.HasValue && BalanceAmount.Value < WarningThreshold.Value)
-                        return new SolidColorBrush(Color.FromRgb(245, 158, 11)); // Orange
-                    return new SolidColorBrush(Color.FromRgb(34, 197, 94)); // Green
-                }
-
-                if (UsedPercentage >= 90)
-                    return new SolidColorBrush(Color.FromRgb(239, 68, 68)); // Red
-                if (UsedPercentage >= 70)
-                    return new SolidColorBrush(Color.FromRgb(245, 158, 11)); // Orange
-                return new SolidColorBrush(Color.FromRgb(34, 197, 94)); // Green
-            }
-        }
+        // StatusBrush 已移到 Helpers/ThemeBrushes.cs 的扩展方法 window.StatusBrush()，
+        // 模型层不再依赖 System.Windows.Media。
 
         public string TimeRemainingFormatted
         {

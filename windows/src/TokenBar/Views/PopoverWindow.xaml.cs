@@ -466,7 +466,18 @@ namespace TokenBar.Views
                 Cursor = System.Windows.Input.Cursors.Hand,
                 HorizontalAlignment = HorizontalAlignment.Right
             };
-            btnRetry.Click += async (s, e) => await RefreshManager.Instance.RefreshAllAsync(RefreshTrigger.Manual);
+            // async void 事件回调的异常会逃出到 Dispatcher（被 App 层吞掉），这里兜底记录便于排查
+            btnRetry.Click += async (s, e) =>
+            {
+                try
+                {
+                    await RefreshManager.Instance.RefreshAllAsync(RefreshTrigger.Manual);
+                }
+                catch (Exception ex)
+                {
+                    Log.Error("popover", $"重试按钮手动刷新异常: {ex}");
+                }
+            };
             DockPanel.SetDock(btnRetry, Dock.Right);
             dock.Children.Add(btnRetry);
 
@@ -554,7 +565,7 @@ namespace TokenBar.Views
                 {
                     Width = 7,
                     Height = 7,
-                    Fill = window.StatusBrush,
+                    Fill = window.StatusBrush(),
                     VerticalAlignment = VerticalAlignment.Center,
                     Margin = new Thickness(6, 0, 2, 0)
                 };
@@ -569,7 +580,7 @@ namespace TokenBar.Views
                     Text = window.BalanceFormatted,
                     FontSize = 13,
                     FontWeight = FontWeights.Bold,
-                    Foreground = window.StatusBrush,
+                    Foreground = window.StatusBrush(),
                     VerticalAlignment = VerticalAlignment.Bottom
                 };
                 Grid.SetColumn(balanceBlock, 2);
@@ -590,7 +601,7 @@ namespace TokenBar.Views
                     Text = $"{window.RemainingPercentage:0}%",
                     FontSize = 13,
                     FontWeight = FontWeights.Bold,
-                    Foreground = window.StatusBrush,
+                    Foreground = window.StatusBrush(),
                     VerticalAlignment = VerticalAlignment.Bottom
                 });
                 Grid.SetColumn(pctStack, 2);
@@ -657,7 +668,7 @@ namespace TokenBar.Views
 
             var fillBar = new Border
             {
-                Background = window.StatusBrush,
+                Background = window.StatusBrush(),
                 CornerRadius = new CornerRadius(3)
             };
             Grid.SetColumn(fillBar, 0);

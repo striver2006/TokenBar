@@ -446,11 +446,11 @@ namespace TokenBar.Services
         /// </summary>
         public void SetInBackground(SecretKey key, string value)
         {
-            _ = Task.Run(() =>
+            Task.Run(() =>
             {
                 try { Set(key, value); }
                 catch (Exception ex) { Log.Error("lifecycle", $"后台写入凭据失败 target={key}: {ex.Message}"); }
-            });
+            }).FireAndForget("background-secret-write");
         }
     }
 

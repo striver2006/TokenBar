@@ -6,7 +6,10 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
-    <!-- 被测工程是 WPF + WinForms 的 WinExe，测试工程要拉同样的框架引用才能解析 System.Windows.Media 等类型 -->
+    <!-- 保留 UseWPF/UseWindowsForms：被测主工程仍是 WPF + WinForms 的 WinExe（Views/Tray 层），
+         ProjectReference 要求测试工程解析 PresentationFramework 等同一套框架引用才能编译通过。
+         模型层（TokenQuota/ProviderQuota）与解析器已去 WPF 耦合（画刷映射在 Helpers/ThemeBrushes.cs），
+         测试用例本身不触碰任何 WPF 类型。 -->
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
   </PropertyGroup>

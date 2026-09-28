@@ -30,208 +30,7 @@ namespace TokenBar.Services
             try
             {
                 var content = File.ReadAllText(claudeJsonPath);
-                using var doc = JsonDocument.Parse(content);
-                var root = doc.RootElement;
-
-                string? accountEmail = null;
-                if (root.TryGetProperty("oauthAccount", out var oauthAccount))
-                {
-                    if (oauthAccount.TryGetProperty("emailAddress", out var emailProp))
-                    {
-                        accountEmail = emailProp.GetString();
-                    }
-                    else if (oauthAccount.TryGetProperty("displayName", out var nameProp))
-                    {
-                        accountEmail = nameProp.GetString();
-                    }
-                }
-
-                if (!root.TryGetProperty("cachedUsageUtilization", out var cached) ||
-                    !cached.TryGetProperty("utilization", out var utilization))
-                {
-                    // If account logged in but no cached utilization yet, create clean initial 5h window
-                    var now = DateTime.Now;
-                    var initialFiveHour = new TokenWindow
-                    {
-                        Title = WindowTitle.FiveHour,
-                        UsedPercentage = 0.0,
-                        StartTime = now,
-                        EndTime = now.AddHours(5),
-                        Unit = "%",
-                        IsIdle = true
-                    };
-                    return (initialFiveHour, null, null, accountEmail);
-                }
-
-                TokenWindow? fiveHourWindow = null;
-                TokenWindow? weeklyWindow = null;
-
-                // 1. Parse 5-hour session window
-                if (utilization.TryGetProperty("five_hour", out var fiveHour))
-                {
-                    double util = 0.0;
-                    if (fiveHour.TryGetProperty("utilization", out var utilProp))
-                    {
-                        util = utilProp.GetDouble();
-                    }
-
-                    string? resetsAtStr = null;
-                    if (fiveHour.TryGetProperty("resets_at", out var resetsAtProp) &&
-                        resetsAtProp.ValueKind == JsonValueKind.String)
-                    {
-                        resetsAtStr = resetsAtProp.GetString();
-                    }
-
-                    if (!string.IsNullOrEmpty(resetsAtStr) && TryParseUtc(resetsAtStr, out var resetsAt))
-                    {
-                        if (resetsAt > DateTime.Now)
-                        {
-                            fiveHourWindow = new TokenWindow
-                            {
-                                Title = WindowTitle.FiveHour,
-                                UsedPercentage = util,
-                                StartTime = resetsAt.AddHours(-5),
-                                EndTime = resetsAt,
-                                Unit = "%",
-                                IsIdle = false
-                            };
-                        }
-                        else
-                        {
-                            var now = DateTime.Now;
-                            fiveHourWindow = new TokenWindow
-                            {
-                                Title = WindowTitle.FiveHour,
-                                UsedPercentage = 0.0,
-                                StartTime = now,
-                                EndTime = now.AddHours(5),
-                                Unit = "%",
-                                IsIdle = true
-                            };
-                        }
-                    }
-                    else
-                    {
-                        var now = DateTime.Now;
-                        fiveHourWindow = new TokenWindow
-                        {
-                            Title = WindowTitle.FiveHour,
-                            UsedPercentage = util,
-                            StartTime = now,
-                            EndTime = now.AddHours(5),
-                            Unit = "%",
-                            IsIdle = true
-                        };
-                    }
-                }
-
-                // Fallback from limits array if fiveHourWindow is still null
-                if (fiveHourWindow == null && utilization.TryGetProperty("limits", out var limits) && limits.ValueKind == JsonValueKind.Array)
-                {
-                    foreach (var limit in limits.EnumerateArray())
-                    {
-                        var kind = limit.TryGetProperty("kind", out var kp) ? kp.GetString() : null;
-                        var group = limit.TryGetProperty("group", out var gp) ? gp.GetString() : null;
-
-                        if (kind == "session" || group == "session")
-                        {
-                            var pct = limit.TryGetProperty("percent", out var pp) ? pp.GetDouble() : 0.0;
-                            var now = DateTime.Now;
-                            fiveHourWindow = new TokenWindow
-                            {
-                                Title = WindowTitle.FiveHour,
-                                UsedPercentage = pct,
-                                StartTime = now,
-                                EndTime = now.AddHours(5),
-                                Unit = "%",
-                                IsIdle = pct == 0.0
-                            };
-                            break;
-                        }
-                    }
-                }
-
-                if (fiveHourWindow == null)
-                {
-                    var now = DateTime.Now;
-                    fiveHourWindow = new TokenWindow
-                    {
-                        Title = WindowTitle.FiveHour,
-                        UsedPercentage = 0.0,
-                        StartTime = now,
-                        EndTime = now.AddHours(5),
-                        Unit = "%",
-                        IsIdle = true
-                    };
-                }
-
-                // 2. Parse 7-day weekly window
-                if (utilization.TryGetProperty("seven_day", out var sevenDay))
-                {
-                    double util = 0.0;
-                    if (sevenDay.TryGetProperty("utilization", out var utilProp))
-                    {
-                        util = utilProp.GetDouble();
-                    }
-
-                    string? resetsAtStr = null;
-                    if (sevenDay.TryGetProperty("resets_at", out var resetsAtProp) &&
-                        resetsAtProp.ValueKind == JsonValueKind.String)
-                    {
-                        resetsAtStr = resetsAtProp.GetString();
-                    }
-
-                    if (!string.IsNullOrEmpty(resetsAtStr) && TryParseUtc(resetsAtStr, out var resetsAt))
-                    {
-                        weeklyWindow = new TokenWindow
-                        {
-                            Title = WindowTitle.Weekly,
-                            UsedPercentage = util,
-                            StartTime = resetsAt.AddDays(-7),
-                            EndTime = resetsAt,
-                            Unit = "%",
-                            IsIdle = false
-                        };
-                    }
-                }
-
-                if (weeklyWindow == null && utilization.TryGetProperty("limits", out var limitsWeekly) && limitsWeekly.ValueKind == JsonValueKind.Array)
-                {
-                    foreach (var limit in limitsWeekly.EnumerateArray())
-                    {
-                        var kind = limit.TryGetProperty("kind", out var kp) ? kp.GetString() : null;
-                        var group = limit.TryGetProperty("group", out var gp) ? gp.GetString() : null;
-
-                        if (kind == "weekly_all" || group == "weekly")
-                        {
-                            var pct = limit.TryGetProperty("percent", out var pp) ? pp.GetDouble() : 0.0;
-                            var resetsAtStr = limit.TryGetProperty("resets_at", out var rp) ? rp.GetString() : null;
-                            var now = DateTime.Now;
-                            var resetsAt = now.AddDays(7);
-                            if (!string.IsNullOrEmpty(resetsAtStr) && TryParseUtc(resetsAtStr, out var parsedReset))
-                            {
-                                resetsAt = parsedReset;
-                            }
-
-                            weeklyWindow = new TokenWindow
-                            {
-                                Title = WindowTitle.Weekly,
-                                UsedPercentage = pct,
-                                StartTime = resetsAt.AddDays(-7),
-                                EndTime = resetsAt,
-                                Unit = "%",
-                                IsIdle = false
-                            };
-                            break;
-                        }
-                    }
-                }
-
-                // 按模型圈定的周额度（如 Fable）：weekly fallback 取 first(group == "weekly")
-                // 仍命中 weekly_all 而非 weekly_scoped，互不干扰
-                var scopedWeeklyWindow = ParseScopedWeeklyLimit(utilization);
-
-                return (fiveHourWindow, weeklyWindow, scopedWeeklyWindow, accountEmail);
+                return ParseLocalClaudeJson(content, DateTime.Now);
             }
             catch (Exception ex)
             {
@@ -241,10 +40,214 @@ namespace TokenBar.Services
         }
 
         /// <summary>
+        /// ~/.claude.json 内容 → 窗口/账号 的纯解析（与 mac 端 ClaudeService.parseLocalClaudeJson 同语义）。
+        /// 不读文件、不打日志；now 由调用方注入（生产传 DateTime.Now），JSON 非法时抛 JsonException 由调用方兜底。
+        /// </summary>
+        internal static (TokenWindow? FiveHour, TokenWindow? Weekly, TokenWindow? ScopedWeekly, string? Account)? ParseLocalClaudeJson(string json, DateTime now)
+        {
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+
+            string? accountEmail = null;
+            if (root.TryGetProperty("oauthAccount", out var oauthAccount))
+            {
+                if (oauthAccount.TryGetProperty("emailAddress", out var emailProp))
+                {
+                    accountEmail = emailProp.GetString();
+                }
+                else if (oauthAccount.TryGetProperty("displayName", out var nameProp))
+                {
+                    accountEmail = nameProp.GetString();
+                }
+            }
+
+            if (!root.TryGetProperty("cachedUsageUtilization", out var cached) ||
+                !cached.TryGetProperty("utilization", out var utilization))
+            {
+                // If account logged in but no cached utilization yet, create clean initial 5h window
+                var initialFiveHour = new TokenWindow
+                {
+                    Title = WindowTitle.FiveHour,
+                    UsedPercentage = 0.0,
+                    StartTime = now,
+                    EndTime = now.AddHours(5),
+                    Unit = "%",
+                    IsIdle = true
+                };
+                return (initialFiveHour, null, null, accountEmail);
+            }
+
+            TokenWindow? fiveHourWindow = null;
+            TokenWindow? weeklyWindow = null;
+
+            // 1. Parse 5-hour session window
+            if (utilization.TryGetProperty("five_hour", out var fiveHour))
+            {
+                double util = 0.0;
+                if (fiveHour.TryGetProperty("utilization", out var utilProp))
+                {
+                    util = utilProp.GetDouble();
+                }
+
+                string? resetsAtStr = null;
+                if (fiveHour.TryGetProperty("resets_at", out var resetsAtProp) &&
+                    resetsAtProp.ValueKind == JsonValueKind.String)
+                {
+                    resetsAtStr = resetsAtProp.GetString();
+                }
+
+                if (!string.IsNullOrEmpty(resetsAtStr) && TryParseUtc(resetsAtStr, out var resetsAt))
+                {
+                    if (resetsAt > now)
+                    {
+                        fiveHourWindow = new TokenWindow
+                        {
+                            Title = WindowTitle.FiveHour,
+                            UsedPercentage = util,
+                            StartTime = resetsAt.AddHours(-5),
+                            EndTime = resetsAt,
+                            Unit = "%",
+                            IsIdle = false
+                        };
+                    }
+                    else
+                    {
+                        fiveHourWindow = new TokenWindow
+                        {
+                            Title = WindowTitle.FiveHour,
+                            UsedPercentage = 0.0,
+                            StartTime = now,
+                            EndTime = now.AddHours(5),
+                            Unit = "%",
+                            IsIdle = true
+                        };
+                    }
+                }
+                else
+                {
+                    fiveHourWindow = new TokenWindow
+                    {
+                        Title = WindowTitle.FiveHour,
+                        UsedPercentage = util,
+                        StartTime = now,
+                        EndTime = now.AddHours(5),
+                        Unit = "%",
+                        IsIdle = true
+                    };
+                }
+            }
+
+            // Fallback from limits array if fiveHourWindow is still null
+            if (fiveHourWindow == null && utilization.TryGetProperty("limits", out var limits) && limits.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var limit in limits.EnumerateArray())
+                {
+                    var kind = limit.TryGetProperty("kind", out var kp) ? kp.GetString() : null;
+                    var group = limit.TryGetProperty("group", out var gp) ? gp.GetString() : null;
+
+                    if (kind == "session" || group == "session")
+                    {
+                        var pct = limit.TryGetProperty("percent", out var pp) ? pp.GetDouble() : 0.0;
+                        fiveHourWindow = new TokenWindow
+                        {
+                            Title = WindowTitle.FiveHour,
+                            UsedPercentage = pct,
+                            StartTime = now,
+                            EndTime = now.AddHours(5),
+                            Unit = "%",
+                            IsIdle = pct == 0.0
+                        };
+                        break;
+                    }
+                }
+            }
+
+            if (fiveHourWindow == null)
+            {
+                fiveHourWindow = new TokenWindow
+                {
+                    Title = WindowTitle.FiveHour,
+                    UsedPercentage = 0.0,
+                    StartTime = now,
+                    EndTime = now.AddHours(5),
+                    Unit = "%",
+                    IsIdle = true
+                };
+            }
+
+            // 2. Parse 7-day weekly window
+            if (utilization.TryGetProperty("seven_day", out var sevenDay))
+            {
+                double util = 0.0;
+                if (sevenDay.TryGetProperty("utilization", out var utilProp))
+                {
+                    util = utilProp.GetDouble();
+                }
+
+                string? resetsAtStr = null;
+                if (sevenDay.TryGetProperty("resets_at", out var resetsAtProp) &&
+                    resetsAtProp.ValueKind == JsonValueKind.String)
+                {
+                    resetsAtStr = resetsAtProp.GetString();
+                }
+
+                if (!string.IsNullOrEmpty(resetsAtStr) && TryParseUtc(resetsAtStr, out var resetsAt))
+                {
+                    weeklyWindow = new TokenWindow
+                    {
+                        Title = WindowTitle.Weekly,
+                        UsedPercentage = util,
+                        StartTime = resetsAt.AddDays(-7),
+                        EndTime = resetsAt,
+                        Unit = "%",
+                        IsIdle = false
+                    };
+                }
+            }
+
+            if (weeklyWindow == null && utilization.TryGetProperty("limits", out var limitsWeekly) && limitsWeekly.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var limit in limitsWeekly.EnumerateArray())
+                {
+                    var kind = limit.TryGetProperty("kind", out var kp) ? kp.GetString() : null;
+                    var group = limit.TryGetProperty("group", out var gp) ? gp.GetString() : null;
+
+                    if (kind == "weekly_all" || group == "weekly")
+                    {
+                        var pct = limit.TryGetProperty("percent", out var pp) ? pp.GetDouble() : 0.0;
+                        var resetsAtStr = limit.TryGetProperty("resets_at", out var rp) ? rp.GetString() : null;
+                        var resetsAt = now.AddDays(7);
+                        if (!string.IsNullOrEmpty(resetsAtStr) && TryParseUtc(resetsAtStr, out var parsedReset))
+                        {
+                            resetsAt = parsedReset;
+                        }
+
+                        weeklyWindow = new TokenWindow
+                        {
+                            Title = WindowTitle.Weekly,
+                            UsedPercentage = pct,
+                            StartTime = resetsAt.AddDays(-7),
+                            EndTime = resetsAt,
+                            Unit = "%",
+                            IsIdle = false
+                        };
+                        break;
+                    }
+                }
+            }
+
+            // 按模型圈定的周额度（如 Fable）：weekly fallback 取 first(group == "weekly")
+            // 仍命中 weekly_all 而非 weekly_scoped，互不干扰
+            var scopedWeeklyWindow = ParseScopedWeeklyLimit(utilization, now);
+
+            return (fiveHourWindow, weeklyWindow, scopedWeeklyWindow, accountEmail);
+        }
+
+        /// <summary>
         /// 解析 ISO8601 / RFC3339 时间戳为本地时间。无时区后缀时按 UTC 理解
         /// （AssumeUniversal），有后缀时按后缀换算（AdjustToUniversal 再转本地）。
         /// </summary>
-        private static bool TryParseUtc(string? text, out DateTime local)
+        internal static bool TryParseUtc(string? text, out DateTime local)
         {
             local = default;
             if (string.IsNullOrWhiteSpace(text)) return false;
@@ -262,7 +265,7 @@ namespace TokenBar.Services
         /// 条目形如 {kind: "weekly_scoped", percent: 42, resets_at: ..., scope: {model: {display_name: "Fable"}}}。
         /// display_name 缺失的条目给不出有意义的标题，跳过；取第一条匹配。
         /// </summary>
-        private static TokenWindow? ParseScopedWeeklyLimit(JsonElement parent)
+        internal static TokenWindow? ParseScopedWeeklyLimit(JsonElement parent, DateTime now)
         {
             if (!parent.TryGetProperty("limits", out var limits) || limits.ValueKind != JsonValueKind.Array)
             {
@@ -291,7 +294,7 @@ namespace TokenBar.Services
 
                 var pct = limit.TryGetProperty("percent", out var pp) ? pp.GetDouble() : 0.0;
                 var resetsAtStr = limit.TryGetProperty("resets_at", out var rp) ? rp.GetString() : null;
-                var resetsAt = DateTime.Now.AddDays(7);
+                var resetsAt = now.AddDays(7);
                 if (!string.IsNullOrEmpty(resetsAtStr) && TryParseUtc(resetsAtStr, out var parsedReset))
                 {
                     resetsAt = parsedReset;
@@ -416,7 +419,7 @@ namespace TokenBar.Services
             }
 
             // 与 cachedUsageUtilization 同构；若暂未下发 limits 字段则自然为 null，由调用方回落本地缓存
-            var scopedWeeklyWindow = ParseScopedWeeklyLimit(root);
+            var scopedWeeklyWindow = ParseScopedWeeklyLimit(root, DateTime.Now);
 
             return (fiveHourWindow, weeklyWindow, scopedWeeklyWindow, null);
         }

@@ -651,7 +651,7 @@ namespace TokenBar.Services
         }
 
         /// <summary>Maps one quota bucket ({window/bucketId, remainingFraction, resetTime}) to a TokenWindow.</summary>
-        private static TokenWindow? ParseQuotaBucket(JsonElement bucket, out bool isWeekly)
+        internal static TokenWindow? ParseQuotaBucket(JsonElement bucket, out bool isWeekly)
         {
             isWeekly = false;
 

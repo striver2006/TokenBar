@@ -52,6 +52,11 @@ namespace TokenBar.Services
         /// <summary>最近一轮是否拿到了新数据，用于让"刷新了但全失败"对用户可见。</summary>
         public bool LastRoundAdvanced { get; private set; }
 
+        // 连续「全失败轮次」计数（LastRoundAdvanced == false），任一轮 advanced 即清零。
+        // 只被定时器退避消费：稳态下全失败时按 2^n（上限 8 倍）指数拉长实际请求间隔，
+        // 手动 / 唤醒 / 设置刷新不受影响。与 mac 端 failureBackoff 同语义。
+        private int _consecutiveFailedRounds;
+
         private Timer? _timer;
         // 当前定时器生效的间隔，用于判断设置变更是否真的需要重建定时器
         private int? _activeIntervalMinutes;
@@ -118,7 +123,7 @@ namespace TokenBar.Services
             StartTimer();
             HookNetworkRecovery();
             Log.Notice("lifecycle", $"TokenBar 启动，refreshInterval={Settings.RefreshIntervalMinutes}min");
-            _ = LoadSecretsThenInitialRefreshAsync();
+            LoadSecretsThenInitialRefreshAsync().FireAndForget("initial-refresh");
         }
 
         // 首刷全轮失败后的退避重试间隔。开机自启动时网络常未就绪，只等定时器要一个完整
@@ -240,7 +245,7 @@ namespace TokenBar.Services
             PersistSettingsToDisk();
             // 凭证差异写入凭据管理器在后台进行；失败会置 SecretStoreErrorState 并把明文重写回 settings.json 兜底。
             // 快照在这里（调用线程）取，后台任务只用这份不可变副本。
-            _ = _secretSync.SyncToStoreAsync(AppSecrets.Extract(Settings));
+            _secretSync.SyncToStoreAsync(AppSecrets.Extract(Settings)).FireAndForget("secret-sync");
 
             try
             {
@@ -292,12 +297,41 @@ namespace TokenBar.Services
                 }
                 _lastTimerFire = DateTime.Now;
 
+                // 稳态失败退避（#20，与 mac 端 failureBackoff 同一语义）：连续全失败 n 轮后，
+                // tick 到点但距上次尝试不足 baseInterval × min(2^n, 8) 时跳过本轮，
+                // 网络持续故障时不再按固定间隔硬打所有厂商。只拦定时器轮次——
+                // 手动 / 唤醒 / 设置变更刷新直接走 RefreshAllAsync，不经过这里。
+                var baseInterval = TimeSpan.FromMinutes(Math.Max(1, Settings.RefreshIntervalMinutes));
+                if (LastAttemptDate is DateTime lastAttempt &&
+                    ShouldSkipTimerRefresh(_consecutiveFailedRounds, baseInterval, DateTime.Now - lastAttempt))
+                {
+                    Log.Info("timer",
+                        $"失败退避：连续 {_consecutiveFailedRounds} 轮全失败，距上次尝试 {(DateTime.Now - lastAttempt).TotalSeconds:F0}s 未到退避后的间隔，跳过本轮 tick");
+                    return;
+                }
+
                 await RefreshAllAsync(RefreshTrigger.Timer);
             }
             catch (Exception ex)
             {
                 Log.Error("timer", $"定时刷新回调异常: {ex}");
             }
+        }
+
+        /// <summary>退避倍率：2^n，封顶 8 倍（= 1 &lt;&lt; 3），移位前先钳住 n 防溢出。</summary>
+        private static int BackoffFactor(int consecutiveFailures) =>
+            1 << Math.Min(Math.Max(consecutiveFailures, 0), 3);
+
+        /// <summary>
+        /// 稳态失败退避的纯判定（与 mac 端 RefreshManager.failureBackoff 同形同语义）：
+        /// 连续全失败 n &gt; 0 轮、且距上次尝试不足 baseInterval × min(2^n, 8) 时应跳过本轮定时刷新。
+        /// n == 0（上一轮有收获）或已达退避间隔则不跳过。
+        /// </summary>
+        internal static bool ShouldSkipTimerRefresh(int consecutiveFailures, TimeSpan baseInterval, TimeSpan elapsedSinceLastAttempt)
+        {
+            if (consecutiveFailures <= 0) return false;
+            var backoff = TimeSpan.FromTicks(baseInterval.Ticks * BackoffFactor(consecutiveFailures));
+            return elapsedSinceLastAttempt < backoff;
         }
 
         /// <summary>数据过期时才刷新，用于系统唤醒这类"可能已经错过若干个周期"的补刷场景</summary>
@@ -385,6 +419,13 @@ namespace TokenBar.Services
                 if (advanced)
                 {
                     LastRefreshDate = after;
+                    _consecutiveFailedRounds = 0;
+                }
+                else if (tasks.Count > 0)
+                {
+                    // 稳态失败退避计数（#20，与 mac 同一语义）：任一轮拿到新数据即清零；
+                    // 全失败且有厂商实际参与才累加（零厂商参与时没有发出任何请求，不该推高计数）
+                    _consecutiveFailedRounds++;
                 }
                 LastRoundAdvanced = advanced;
 
@@ -1138,7 +1179,7 @@ namespace TokenBar.Services
             {
                 Settings.GeminiToken = local.Token;
                 SaveSettings();
-                _ = RefreshGeminiAsync();
+                RefreshGeminiAsync().FireAndForget("gemini-import-refresh");
                 return true;
             }
             return false;
@@ -1154,7 +1195,7 @@ namespace TokenBar.Services
                 Protocol = config.Protocol
             };
             SaveSettings();
-            _ = RefreshCustomProviderAsync(config);
+            RefreshCustomProviderAsync(config).FireAndForget("custom-provider-add-refresh");
         }
 
         public void UpdateCustomProvider(CustomProviderConfig config)
@@ -1164,7 +1205,7 @@ namespace TokenBar.Services
             {
                 Settings.CustomProviders[idx] = config;
                 SaveSettings();
-                _ = RefreshCustomProviderAsync(config);
+                RefreshCustomProviderAsync(config).FireAndForget("custom-provider-update-refresh");
             }
         }
 
