@@ -84,7 +84,12 @@ public final class CustomProviderService: @unchecked Sendable {
             // 填了 Cookie 即自动开通两条通道，未填时保持纯 API Key 行为不变。
             let cookie = config.consoleCookie.trimmingCharacters(in: .whitespacesAndNewlines)
             if !cookie.isEmpty {
-                if let plan = await fetchMiMoTokenPlan(cookie: cookie) {
+                // 两个 Cookie 请求并发：串行最坏 10+10+10(/models)=30s，超出 25s 刷新预算
+                // 会整卡误报「刷新超时」（对齐 KimiService.fetchCodingSubscription 的做法）。
+                async let planTask = fetchMiMoTokenPlan(cookie: cookie)
+                async let balanceTask = fetchMiMoBalance(cookie: cookie)
+
+                if let plan = await planTask {
                     planWindow = TokenWindow(
                         title: "Token Plan 额度",
                         usedPercentage: plan.usedPercent,
@@ -100,7 +105,7 @@ public final class CustomProviderService: @unchecked Sendable {
                         : String(format: "Plan used %.1f%%", plan.usedPercent)
                 }
 
-                if let balance = await fetchMiMoBalance(cookie: cookie) {
+                if let balance = await balanceTask {
                     useBalance(
                         title: "账户余额",
                         amount: balance.amount,

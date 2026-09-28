@@ -16,6 +16,9 @@ public enum HTTPClient {
 
     /// 单请求不活动超时的默认上限（秒）
     public static let defaultRequestTimeout: TimeInterval = 12
+    /// Service 有意放宽的请求超时上限（秒）。OAuth token 交换、签名网关等慢接口
+    /// 显式设了 15s——早期版本这里被静默钳回 12s，显式值成了死代码；现按原意尊重。
+    public static let maxExplicitRequestTimeout: TimeInterval = 15
     /// 单请求端到端硬上限（秒）。URLRequest 没有对应字段，只能配在 session 上。
     public static let resourceTimeout: TimeInterval = 30
 
@@ -37,15 +40,16 @@ public enum HTTPClient {
         return URLSession(configuration: config)
     }()
 
+    /// 生效的请求不活动超时：显式设过且在 `maxExplicitRequestTimeout` 内的保留原值；
+    /// 没设过的（URLRequest 默认 60s）和越界的一律压到 `defaultRequestTimeout`。
+    static func effectiveTimeout(_ interval: TimeInterval) -> TimeInterval {
+        (interval > 0 && interval <= maxExplicitRequestTimeout) ? interval : defaultRequestTimeout
+    }
+
     /// 与 `URLSession.data(for:)` 完全同形，调用点可直接替换。
-    ///
-    /// 各 Service 已显式设的 5/10/12s 超时保留原值；没设过的（默认 60s）和
-    /// 超过上限的一律压到 `defaultRequestTimeout`。
     public static func data(for request: URLRequest) async throws -> (Data, URLResponse) {
         var req = request
-        if req.timeoutInterval <= 0 || req.timeoutInterval > defaultRequestTimeout {
-            req.timeoutInterval = defaultRequestTimeout
-        }
+        req.timeoutInterval = effectiveTimeout(req.timeoutInterval)
         req.cachePolicy = .reloadIgnoringLocalCacheData
         return try await session.data(for: req)
     }

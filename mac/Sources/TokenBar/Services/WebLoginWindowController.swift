@@ -185,6 +185,11 @@ public class WebLoginWindowController: NSWindowController, WKNavigationDelegate 
 
 extension WebLoginWindowController: NSWindowDelegate {
     public func windowWillClose(_ notification: Notification) {
+        // finish()/finishCancelled() 内部都走 close()，这里是所有关窗路径的汇合点。
+        // 不置 nil 的话静态引用会长期持有整个 NSWindowController + WKWebView + completion 闭包。
+        if Self.current === self {
+            Self.current = nil
+        }
         finishCancelled()
     }
 }

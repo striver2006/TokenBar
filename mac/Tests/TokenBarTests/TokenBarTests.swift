@@ -1775,6 +1775,29 @@ final class TokenBarTests: XCTestCase {
         XCTAssertEqual(OpenAIService.shared.parseDurationString("garbage"), 1.0)
     }
 
+    func testHTTPClientEffectiveTimeout() {
+        // 显式设置的 5/10/12/15s 保留原值（15s 曾是被静默钳掉的死代码）
+        XCTAssertEqual(HTTPClient.effectiveTimeout(5), 5)
+        XCTAssertEqual(HTTPClient.effectiveTimeout(10), 10)
+        XCTAssertEqual(HTTPClient.effectiveTimeout(12), 12)
+        XCTAssertEqual(HTTPClient.effectiveTimeout(15), 15)
+        // 未设置（URLRequest 默认 60s）、越界、非法值一律压回默认
+        XCTAssertEqual(HTTPClient.effectiveTimeout(60), HTTPClient.defaultRequestTimeout)
+        XCTAssertEqual(HTTPClient.effectiveTimeout(15.5), HTTPClient.defaultRequestTimeout)
+        XCTAssertEqual(HTTPClient.effectiveTimeout(0), HTTPClient.defaultRequestTimeout)
+        XCTAssertEqual(HTTPClient.effectiveTimeout(-1), HTTPClient.defaultRequestTimeout)
+    }
+
+    func testGeminiFormBodyStrictlyEncodesReservedCharacters() {
+        // .urlQueryAllowed 不转义 & = +，refresh_token/client_secret 含这些字符会拆坏表单体
+        let body = GeminiService.formBody([
+            "grant_type": "refresh_token",
+            "refresh_token": "1//0g+a=b&c"
+        ])
+        let bodyString = String(data: body, encoding: .utf8)!
+        XCTAssertEqual(bodyString, "grant_type=refresh_token&refresh_token=1%2F%2F0g%2Ba%3Db%26c")
+    }
+
     func testStatusWindowIsNotAQuotaWindow() {
         let w = TokenWindow.status(title: "API 连接正常")
         XCTAssertTrue(w.isStatus)

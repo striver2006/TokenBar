@@ -486,7 +486,7 @@ public final class AliyunBailianService: @unchecked Sendable {
                 }
 
                 let isZh = LocalizationManager.shared.effectiveLanguage == "zh"
-                let label = isZh ? "百炼 CLI (cn-beijing)" : "Bailian CLI (cn-beijing)"
+                let label = isZh ? "百炼 CLI (\(region))" : "Bailian CLI (\(region))"
                 do {
                     let result = try Self.parseTokenPlanResponse(data, accountLabel: label, channel: .cli)
                     continuation.resume(returning: result)

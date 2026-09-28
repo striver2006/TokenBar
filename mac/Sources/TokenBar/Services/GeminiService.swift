@@ -535,8 +535,7 @@ public actor GeminiService {
             "code": code,
             "redirect_uri": "http://localhost:\(redirectPort)"
         ]
-        let bodyString = params.map { "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")" }.joined(separator: "&")
-        request.httpBody = bodyString.data(using: .utf8)
+        request.httpBody = Self.formBody(params)
 
         let (data, response): (Data, URLResponse)
         do {
@@ -569,6 +568,17 @@ public actor GeminiService {
         }
         let account = ownAccountHint ?? "Google Account"
         return (account, refreshToken)
+    }
+
+    /// `application/x-www-form-urlencoded` 请求体，严格 RFC 3986 编码。
+    /// 不能用 `.urlQueryAllowed`——它不转义 `& = +`，refresh_token / client_secret
+    /// 含这些字符时表单体直接被拆坏（与 AliyunBailianService.formBody 同一坑）。
+    static func formBody(_ params: [String: String]) -> Data {
+        params
+            .sorted { $0.key < $1.key }
+            .map { "\(AliyunSigner.percentEncode($0.key))=\(AliyunSigner.percentEncode($0.value))" }
+            .joined(separator: "&")
+            .data(using: .utf8) ?? Data()
     }
 
     /// 从 Google id_token（JWT）里解出 email。不做签名校验：token 是刚从 Google 的
@@ -679,8 +689,7 @@ public actor GeminiService {
                 "refresh_token": refreshToken
             ]
 
-            let bodyString = params.map { "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")" }.joined(separator: "&")
-            request.httpBody = bodyString.data(using: .utf8)
+            request.httpBody = Self.formBody(params)
 
             do {
                 let (data, response) = try await HTTPClient.data(for: request)
