@@ -960,20 +960,22 @@ public actor GeminiService {
         } else {
             return nil
         }
+        // 上方 else 已 return，这里必然非 nil；用 guard let 绑定替代两处强解包
+        guard let remainingFraction else { return nil }
 
         let span: TimeInterval = isWeekly ? 7 * 86400 : 5 * 3600
         // While idle the API keeps the last reset anchor; roll forward so the countdown stays positive.
         var end = Self.parseServerDate(bucket["resetTime"]) ?? Date().addingTimeInterval(span)
         while end <= Date() { end = end.addingTimeInterval(span) }
 
-        let usedPct = min(max((1.0 - remainingFraction!) * 100.0, 0.0), 100.0)
+        let usedPct = min(max((1.0 - remainingFraction) * 100.0, 0.0), 100.0)
         let window = TokenWindow(
             title: isWeekly ? .weekly : .fiveHour,
             usedPercentage: usedPct,
             startTime: end.addingTimeInterval(-span),
             endTime: end,
             unit: "%",
-            isIdle: remainingFraction! >= 0.999
+            isIdle: remainingFraction >= 0.999
         )
         return (window, isWeekly)
     }

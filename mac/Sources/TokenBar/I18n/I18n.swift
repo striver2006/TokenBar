@@ -21,7 +21,7 @@ public enum AppLanguage: String, CaseIterable, Identifiable, Codable {
     }
 }
 
-public enum I18nKey: String {
+public enum I18nKey: String, CaseIterable {
     // App & Header
     case appName
     case subtitle

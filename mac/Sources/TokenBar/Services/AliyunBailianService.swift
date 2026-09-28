@@ -77,6 +77,14 @@ public final class AliyunBailianService: @unchecked Sendable {
     }
 
     /// 回退方案：通过 AppleScript 驱动终端（首次会弹出「自动化」授权请求）。
+    ///
+    /// #21 评估结论：保持主线程同步执行，不移出。理由：
+    /// 1) NSAppleScript 非线程安全（未做 Sendable 审计），移到后台线程需要额外串行队列/锁，
+    ///    复杂度增加而收益存疑；
+    /// 2) `activate` + `do script` 依赖 Terminal 前台激活时序，主线程执行是 Apple 事件
+    ///    投递最稳妥的路径；
+    /// 3) 触发面极窄 —— 仅在写 .command 脚本失败或 NSWorkspace 打开 Terminal 失败时才走到这里；
+    /// 4) 脚本本体只是「告知 Terminal 执行一条命令」，Apple 事件往返很快，主线程阻塞时间可忽略。
     private static func runLoginViaAppleScript(completion: @escaping (Bool, String?) -> Void) {
         let run = {
             let source = """

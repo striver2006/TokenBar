@@ -130,9 +130,11 @@ mac/
 │   │   ├── TokenSummaryPopoverView.swift  # 额度卡片浮窗
 │   │   ├── ProviderCardView.swift        # 厂商卡片行
 │   │   ├── CustomProviderCardView.swift  # 自定义厂商卡片
-│   │   └── SettingsView.swift            # 偏好设置窗口
+│   │   ├── SettingsView.swift            # 偏好设置窗口外壳（tab 路由）
+│   │   └── Settings/                     # 各设置 tab 子视图（每 tab 一个文件）
 │   ├── Services/                 # 各厂商网络调用实现（平铺）
 │   │   ├── RefreshManager.swift  # 定时刷新与多厂商状态调度器
+│   │   ├── ProviderShared.swift  # 端点归一/错误分类/速率窗构造等共享件
 │   │   ├── OpenAIService.swift / ClaudeService.swift / GeminiService.swift
 │   │   ├── DeepSeekService.swift / VolcengineService.swift / KimiService.swift
 │   │   ├── GLMService.swift / AliyunBailianService.swift

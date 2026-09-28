@@ -247,6 +247,11 @@ public final class RefreshManager: ObservableObject {
     /// 上一次定时器 fire 的时刻，用于在日志里暴露真实间隔（App Nap / 睡眠会拉长它）
     private var lastTimerFire: Date?
 
+    /// 连续「全失败轮次」（本轮无任何厂商拿到新数据）的计数。任一轮拿到新数据即清零。
+    /// 只被定时器 tick 消费：连续失败时按 ×min(2^n, 8) 拉长有效间隔（见 failureBackoff），
+    /// 手动刷新 / 唤醒补刷 / 设置变更刷新不受影响。
+    private var consecutiveAllFailedRounds = 0
+
     /// 闸门抢占阈值。有了单厂商超时隔离后 refreshAll 最多约 35s 返回，
     /// 这里 90s 纯粹是兜底：防住 Process.waitUntilExit 这类不响应 Task 取消的路径。
     private static let gateStaleThreshold: TimeInterval = 90
@@ -259,6 +264,23 @@ public final class RefreshManager: ObservableObject {
     /// 间隔（默认 5 分钟）；两次短退避把「过一阵才恢复」缩短到半分钟内。
     private static let initialRetryDelaysSeconds: [Int] = [15, 45]
 
+    /// 稳态失败退避判定（#20）：**只对定时器触发的轮次生效**，抽成纯函数便于单测。
+    ///
+    /// 与 Windows 端约定同一语义：连续 n 轮全失败（n > 0，本轮无任何厂商拿到新数据）后，
+    /// 定时器 tick 到点时若距上次尝试不足 baseInterval × min(2^n, 8)，跳过本轮；
+    /// 任一轮拿到新数据即 n 归零。手动刷新 / 唤醒补刷 / 设置变更刷新不走这个判定。
+    /// - Returns: true 表示应跳过本次定时器轮次（退避中）
+    nonisolated static func failureBackoff(
+        consecutiveFailures: Int,
+        baseInterval: TimeInterval,
+        elapsedSinceLastAttempt: TimeInterval
+    ) -> Bool {
+        guard consecutiveFailures > 0 else { return false }
+        // min(2^n, 8)：封顶 8 倍（= 1 << 3），移位前先钳住 n 防溢出
+        let multiplier = TimeInterval(1 << min(consecutiveFailures, 3))
+        return elapsedSinceLastAttempt < baseInterval * multiplier
+    }
+
     /// 网络恢复补刷：登录后 Wi-Fi 未就绪导致首刷全败，网络一通立即补刷，不等退避重试或定时器。
     /// refreshIfStale 自带 60 秒去抖、refreshAll 自带闸门，重复事件无害。
     private var pathMonitor: NWPathMonitor?
@@ -268,6 +290,10 @@ public final class RefreshManager: ObservableObject {
     // 余额窗口的展示辅助状态（较上次差值 + 低余额提醒状态机），进程内有效
     private var lastBalanceValues: [String: Double] = [:]
     private var balanceAlertedKeys: Set<String> = []
+    /// 通知授权缓存（#21）：只缓存「已授权」这一种结果。未授权/被拒时不缓存，
+    /// 每次仍走 requestAuthorization —— 系统对已决状态会立即回调（无重复弹窗），
+    /// 这样用户在系统设置里重新打开通知后，下一条低余额提醒能立刻恢复投递。
+    private var notificationAuthorized = false
 
     public init() {
         if let savedData = UserDefaults.standard.data(forKey: userDefaultsKey) {
@@ -524,6 +550,19 @@ public final class RefreshManager: ObservableObject {
                     Log.timer.notice("timer fired（本定时器首次触发）")
                 }
                 self.lastTimerFire = Date()
+                // 稳态失败退避（#20）：连续全失败轮次后按 ×min(2^n, 8) 拉长有效间隔，
+                // 网络持续故障时不再按固定间隔硬打。只拦定时器轮次——手动/唤醒/设置
+                // 变更刷新直接走 refreshAll，不经过这里。
+                let baseInterval = TimeInterval(max(60, self.settings.refreshIntervalMinutes * 60))
+                let elapsed = self.lastAttemptDate.map { Date().timeIntervalSince($0) } ?? .infinity
+                if Self.failureBackoff(
+                    consecutiveFailures: self.consecutiveAllFailedRounds,
+                    baseInterval: baseInterval,
+                    elapsedSinceLastAttempt: elapsed
+                ) {
+                    Log.timer.info("失败退避：连续 \(self.consecutiveAllFailedRounds) 轮全失败，距上次尝试 \(elapsed, format: .fixed(precision: 0))s 未到退避后的间隔，跳过本轮 tick")
+                    return
+                }
                 await self.refreshAll(trigger: .timer)
             }
         }
@@ -676,7 +715,18 @@ public final class RefreshManager: ObservableObject {
             lastRefreshDate = after
         }
 
-        lastRoundOutcome = advanced ? .success : .allFailed(count: max(1, enabledNames.split(separator: ",").count))
+        // count 修正（#21）：以前用 enabledNames.split(",") 反算，custom×N 会被算成 1 个。
+        // 该 count 目前无消费方，但留着就是埋坑，改为按实际参与厂商数计算。
+        let participantCount = enabledProviderCount()
+        lastRoundOutcome = advanced ? .success : .allFailed(count: max(1, participantCount))
+
+        // 稳态失败退避计数（#20）：任一轮拿到新数据即清零；全失败且有厂商实际参与才累加
+        // （零厂商参与时没有发出任何请求，无所谓退避，也不该把计数器推高）
+        if advanced {
+            consecutiveAllFailedRounds = 0
+        } else if participantCount > 0 {
+            consecutiveAllFailedRounds += 1
+        }
 
         let ms = Double(DispatchTime.now().uptimeNanoseconds - roundStart.uptimeNanoseconds) / 1_000_000
         Log.refresh.notice("round end in \(ms, format: .fixed(precision: 0))ms, advanced=\(advanced, privacy: .public)")
@@ -795,6 +845,17 @@ public final class RefreshManager: ObservableObject {
         let customCount = settings.customProviders.filter(\.isEnabled).count
         if customCount > 0 { names.append("custom×\(customCount)") }
         return names.joined(separator: ",")
+    }
+
+    /// 本轮实际参与刷新的厂商数（内置启用数 + 启用的自定义厂商数）。
+    /// 与 enabledProviderNames 的判定字段一一对应；custom×N 在这里按 N 计。
+    private func enabledProviderCount() -> Int {
+        let builtinCount = [
+            settings.openAIEnabled, settings.claudeEnabled, settings.geminiEnabled,
+            settings.deepseekEnabled, settings.volcengineEnabled, settings.kimiEnabled,
+            settings.openRouterEnabled, settings.glmEnabled, settings.aliyunEnabled,
+        ].filter { $0 }.count
+        return builtinCount + settings.customProviders.filter(\.isEnabled).count
     }
 
     /// 所有厂商中最近一次成功更新的时间
@@ -1322,8 +1383,16 @@ public final class RefreshManager: ObservableObject {
             trigger: nil
         )
 
-        center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+        // 已授权过就直接投递，不再每次重调 requestAuthorization（#21）
+        if notificationAuthorized {
+            center.add(request)
+            return
+        }
+
+        center.requestAuthorization(options: [.alert, .sound]) { [weak self] granted, _ in
             guard granted else { return }
+            // 回调在任意队列；标志位归 MainActor 管，切回去再写
+            Task { @MainActor in self?.notificationAuthorized = true }
             center.add(request)
         }
     }
