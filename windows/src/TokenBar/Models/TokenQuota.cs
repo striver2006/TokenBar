@@ -237,6 +237,37 @@ namespace TokenBar.Models
         // 「配置了但本轮刷新失败」（网络未就绪/超时/服务端错误），与「未配置」区分开：
         // UI 据此显示「重试」而非「去配置」，且不清除 IsAuthorized 与旧数据，成功后自动回落。
         public bool HadRefreshError { get; set; }
+        // 本轮展示的是厂商客户端的本地缓存而非实时数据。目前只有 Claude：远端查不到时退回
+        // ~/.claude.json 的 cachedUsageUtilization。卡片据此标注来源与缓存时间，
+        // 免得「更新于」把几小时前的缓存显示成刚拿到的。与 mac 端 isFromLocalCache 同名。
+        public bool IsFromLocalCache { get; set; }
+        // 本地缓存自身的抓取时间（Claude：fetchedAtMs，本地时刻）；缓存里没有时间戳时为 null
+        public DateTime? LocalCacheFetchedAt { get; set; }
+
+        /// <summary>
+        /// 卡片末尾的数据来源小字（「来自 Claude Code 本地缓存 · 12 分钟前」）；实时数据返回 null。
+        /// 与 mac 端 ProviderQuota.localCacheNote 同语义。
+        /// </summary>
+        public string? LocalCacheNote(DateTime now)
+        {
+            if (!IsFromLocalCache) return null;
+            var i18n = LocalizationManager.Instance;
+            if (LocalCacheFetchedAt is not DateTime fetchedAt) return i18n.LocalCacheNoteNoTime;
+            return string.Format(i18n.LocalCacheNote, RelativeAge(fetchedAt, now));
+        }
+
+        /// <summary>
+        /// 「N 分钟前」式的相对时间，跟 App 自己的语言设置走。时钟回拨导致的负间隔按「刚刚」处理。
+        /// </summary>
+        internal static string RelativeAge(DateTime date, DateTime now)
+        {
+            var i18n = LocalizationManager.Instance;
+            var seconds = (long)(now - date).TotalSeconds;
+            if (seconds < 60) return i18n.AgeJustNow;
+            if (seconds < 3600) return string.Format(i18n.AgeMinutesAgo, seconds / 60);
+            if (seconds < 86400) return string.Format(i18n.AgeHoursAgo, seconds / 3600);
+            return string.Format(i18n.AgeDaysAgo, seconds / 86400);
+        }
     }
 
     public class CustomProviderQuota

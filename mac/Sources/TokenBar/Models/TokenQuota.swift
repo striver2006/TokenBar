@@ -461,6 +461,12 @@ public struct ProviderQuota: Identifiable, Codable {
     /// 「配置了但本轮刷新失败」（网络未就绪/超时/服务端错误），与「未配置」区分开：
     /// 卡片据此显示「重试」而非「去配置」，且不清除 isAuthorized 与旧数据，成功后自动回落。
     public var hadRefreshError: Bool
+    /// 本轮展示的是厂商客户端的本地缓存而非实时数据。目前只有 Claude：远端查不到时退回
+    /// `~/.claude.json` 的 cachedUsageUtilization。卡片据此标注来源与缓存时间，
+    /// 免得「更新于」把几小时前的缓存显示成刚拿到的。
+    public var isFromLocalCache: Bool
+    /// 本地缓存自身的抓取时间（Claude：fetchedAtMs）；缓存里没有时间戳时为 nil
+    public var localCacheFetchedAt: Date?
 
     public init(
         provider: ProviderType,
@@ -474,7 +480,9 @@ public struct ProviderQuota: Identifiable, Codable {
         lastUpdated: Date? = nil,
         errorMessage: String? = nil,
         isLoading: Bool = false,
-        hadRefreshError: Bool = false
+        hadRefreshError: Bool = false,
+        isFromLocalCache: Bool = false,
+        localCacheFetchedAt: Date? = nil
     ) {
         self.provider = provider
         self.isEnabled = isEnabled
@@ -488,6 +496,28 @@ public struct ProviderQuota: Identifiable, Codable {
         self.errorMessage = errorMessage
         self.isLoading = isLoading
         self.hadRefreshError = hadRefreshError
+        self.isFromLocalCache = isFromLocalCache
+        self.localCacheFetchedAt = localCacheFetchedAt
+    }
+}
+
+extension ProviderQuota {
+    /// 卡片末尾的数据来源小字（「来自 Claude Code 本地缓存 · 12 分钟前」）；实时数据返回 nil
+    public func localCacheNote(now: Date = Date()) -> String? {
+        guard isFromLocalCache else { return nil }
+        guard let fetchedAt = localCacheFetchedAt else { return I18n(.localCacheNoteNoTime) }
+        return String(format: I18n(.localCacheNote), Self.relativeAge(from: fetchedAt, now: now))
+    }
+
+    /// 「N 分钟前」式的相对时间。不用 RelativeDateTimeFormatter：它跟系统 locale 走，
+    /// 而界面语言由 App 自己的设置决定，混用会出现「来自 Claude Code 本地缓存 · 12 minutes ago」。
+    /// 时钟回拨导致的负间隔按「刚刚」处理。
+    static func relativeAge(from date: Date, now: Date) -> String {
+        let seconds = Int(now.timeIntervalSince(date))
+        if seconds < 60 { return I18n(.ageJustNow) }
+        if seconds < 3600 { return String(format: I18n(.ageMinutesAgo), seconds / 60) }
+        if seconds < 86400 { return String(format: I18n(.ageHoursAgo), seconds / 3600) }
+        return String(format: I18n(.ageDaysAgo), seconds / 86400)
     }
 }
 

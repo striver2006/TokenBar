@@ -328,8 +328,15 @@ Windows 客户端采用轻量现代的 **.NET 8 WPF** 架构，利用 Windows �
 | Anthropic API     | anthropic-ratelimit-tokens-remaining                        |
 |                   | anthropic-ratelimit-tokens-reset (ISO8601 时间戳)           |
 +-------------------+-------------------------------------------------------------+
-| Claude Code       | 本地读取 ~/.claude.json 会话配置与 OAuth 令牌，             |
-|                   | 解析 5 小时滚动滑动窗口百分比与每周额度配额                 |
+| Claude Code       | 实时查询 api.anthropic.com/api/oauth/usage，令牌依次取：    |
+|                   |   1. 设置页手填的 OAuth token；                             |
+|                   |   2. Claude Code 自己的 access token（macOS 钥匙串          |
+|                   |      `Claude Code-credentials`，Windows                     |
+|                   |      `%USERPROFILE%\.claude\.credentials.json`）；           |
+|                   | 都不可用时退回 ~/.claude.json 的 cachedUsageUtilization     |
+|                   | 缓存，卡片标注「来自 Claude Code 本地缓存 · N 分钟前」。    |
+|                   | 该缓存只在 Claude Code 自己查用量时才更新，可能旧几个小时。 |
+|                   | 解析 5 小时滚动窗口、每周额度与模型专属周额度               |
 +-------------------+-------------------------------------------------------------+
 | Google Gemini /   | 1. API Key 模式：直连 Generative Language API 探测配额状态；|
 | Google One /      | 2. 账号授权 / Antigravity 模式（与 Antigravity 官方面板同源）：|
@@ -385,6 +392,11 @@ Windows 客户端采用轻量现代的 **.NET 8 WPF** 架构，利用 Windows �
      App 容器；completion 只触发一次。`GeminiService` 不再写回 Antigravity 的 `~/.gemini/jetski-standalone-oauth-token`。
    - 本机 `~/.bailian/config.json`（百炼 CLI 的配置）只读复用，**绝不写回** —— CLI 用 tmp+rename
      原子替换整个文件，并发写会覆盖掉它的其他字段。
+   - Claude Code 的 OAuth 凭证（macOS 钥匙串 `Claude Code-credentials` / `~/.claude/.credentials.json`）
+     **只读、只用 access token**：refresh token 归 Claude Code 所有且每次使用都会轮换，TokenBar 拿它
+     换新 token 会让 Claude Code 手里那枚作废（它遇到 invalid_grant 会清空本地凭证 = 用户被登出）。
+     access token 过期后等 Claude Code 自行续期，期间退回本地缓存。macOS 刷新链路静默读取钥匙串，
+     只有设置页「读取本地 CLI 授权」按钮允许弹出系统授权框（点一次「始终允许」后永久静默）。
 2. **纯客户端通讯**：
    - 应用直接向模型提供商官方接入端点发起 HTTPS 请求，无任何二次代理服务器。
 3. **开源透明**：

@@ -146,6 +146,18 @@ public struct ProviderCardView: View {
                     WindowQuotaRow(window: scoped, badgeText: I18n(.weeklyWindow))
                 }
 
+                if let cacheNote = quota.localCacheNote() {
+                    // 数据读自厂商客户端的本地缓存：标注来源与缓存时间，与下方刷新失败提示同款小字，灰色
+                    HStack(spacing: 4) {
+                        Image(systemName: "clock.arrow.circlepath")
+                            .font(.system(size: 9))
+                        Text(cacheNote)
+                            .font(.system(size: 10))
+                            .lineLimit(1)
+                    }
+                    .foregroundColor(.secondary)
+                }
+
                 if quota.hadRefreshError {
                     // 本轮刷新失败但旧数据仍可参考：末尾叠一行小字提示，不打断余额展示
                     HStack(spacing: 4) {

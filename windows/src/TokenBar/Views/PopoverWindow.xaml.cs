@@ -205,6 +205,7 @@ namespace TokenBar.Views
             string? ErrorMessage,
             string? SyncingMessage,      // 已授权但无任何窗口数据时的提示；null 表示无此分支（自定义厂商）
             IReadOnlyList<CardRow> Rows,
+            string? CacheNote,           // 数据读自本地缓存时的来源小字（Claude）；null 表示实时数据
             Action OnConfigure);
 
         private UIElement CreateProviderCard(ProviderQuota quota, Action onConfigure)
@@ -239,6 +240,7 @@ namespace TokenBar.Views
                     // 按模型圈定的周额度（如 Fable）
                     new CardRow(quota.ScopedWeeklyWindow, i18n.WeeklyWindow, () => quota.WeeklyWindow != null),
                 },
+                quota.LocalCacheNote(DateTime.Now),
                 onConfigure));
         }
 
@@ -267,6 +269,7 @@ namespace TokenBar.Views
                     new CardRow(quota.PrimaryWindow, i18n.QuotaBadge, null),
                     new CardRow(quota.SecondaryWindow, i18n.RateBadge, () => quota.PrimaryWindow != null),
                 },
+                null,
                 onConfigure));
         }
 
@@ -439,6 +442,11 @@ namespace TokenBar.Views
                     stack.Children.Add(CreateWindowQuotaRow(row.Window, row.Label));
                 }
 
+                if (spec.CacheNote != null)
+                {
+                    AddCacheNote(stack, spec.CacheNote);
+                }
+
                 if (spec.HadRefreshError)
                 {
                     // 本轮刷新失败但旧数据仍可参考：末尾叠一行小字提示，不打断余额展示
@@ -502,6 +510,19 @@ namespace TokenBar.Views
                 Text = message ?? LocalizationManager.Instance.RefreshErrorHint,
                 FontSize = 10,
                 Foreground = new SolidColorBrush(Color.FromRgb(234, 88, 12)),
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                Margin = new Thickness(0, 4, 0, 0)
+            });
+        }
+
+        /// <summary>数据读自厂商客户端本地缓存时，卡片末尾的来源与缓存时间小字（与刷新失败提示同款，灰色）</summary>
+        private void AddCacheNote(StackPanel stack, string note)
+        {
+            stack.Children.Add(new TextBlock
+            {
+                Text = note,
+                FontSize = 10,
+                Foreground = new SolidColorBrush(Color.FromRgb(107, 114, 128)),
                 TextTrimming = TextTrimming.CharacterEllipsis,
                 Margin = new Thickness(0, 4, 0, 0)
             });

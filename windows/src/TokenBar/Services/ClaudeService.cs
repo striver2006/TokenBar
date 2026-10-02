@@ -17,7 +17,7 @@ namespace TokenBar.Services
 
         private ClaudeService() { }
 
-        public (TokenWindow? FiveHour, TokenWindow? Weekly, TokenWindow? ScopedWeekly, string? Account)? ReadLocalClaudeJson()
+        public (TokenWindow? FiveHour, TokenWindow? Weekly, TokenWindow? ScopedWeekly, string? Account, DateTime? FetchedAt)? ReadLocalClaudeJson()
         {
             var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             var claudeJsonPath = Path.Combine(userProfile, ".claude.json");
@@ -42,8 +42,10 @@ namespace TokenBar.Services
         /// <summary>
         /// ~/.claude.json 内容 → 窗口/账号 的纯解析（与 mac 端 ClaudeService.parseLocalClaudeJson 同语义）。
         /// 不读文件、不打日志；now 由调用方注入（生产传 DateTime.Now），JSON 非法时抛 JsonException 由调用方兜底。
+        /// FetchedAt 是 Claude Code 写缓存时记下的 fetchedAtMs（本地时刻）：这份缓存只在 Claude Code 自己
+        /// 查用量（/usage、桌面端 get_usage）时才更新，可能比本轮刷新旧几个小时，展示时必须带上它。
         /// </summary>
-        internal static (TokenWindow? FiveHour, TokenWindow? Weekly, TokenWindow? ScopedWeekly, string? Account)? ParseLocalClaudeJson(string json, DateTime now)
+        internal static (TokenWindow? FiveHour, TokenWindow? Weekly, TokenWindow? ScopedWeekly, string? Account, DateTime? FetchedAt)? ParseLocalClaudeJson(string json, DateTime now)
         {
             using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
@@ -74,7 +76,16 @@ namespace TokenBar.Services
                     Unit = "%",
                     IsIdle = true
                 };
-                return (initialFiveHour, null, null, accountEmail);
+                return (initialFiveHour, null, null, accountEmail, null);
+            }
+
+            DateTime? fetchedAt = null;
+            if (cached.TryGetProperty("fetchedAtMs", out var fetchedProp) &&
+                fetchedProp.ValueKind == JsonValueKind.Number &&
+                fetchedProp.TryGetDouble(out var fetchedMs) &&
+                fetchedMs > 0 && fetchedMs < 253_402_300_799_999) // FromUnixTimeMilliseconds 的上限，越界会抛
+            {
+                fetchedAt = DateTimeOffset.FromUnixTimeMilliseconds((long)fetchedMs).LocalDateTime;
             }
 
             TokenWindow? fiveHourWindow = null;
@@ -240,7 +251,7 @@ namespace TokenBar.Services
             // 仍命中 weekly_all 而非 weekly_scoped，互不干扰
             var scopedWeeklyWindow = ParseScopedWeeklyLimit(utilization, now);
 
-            return (fiveHourWindow, weeklyWindow, scopedWeeklyWindow, accountEmail);
+            return (fiveHourWindow, weeklyWindow, scopedWeeklyWindow, accountEmail, fetchedAt);
         }
 
         /// <summary>
@@ -312,6 +323,71 @@ namespace TokenBar.Services
             }
 
             return null;
+        }
+
+        // MARK: - Claude Code 自己的 OAuth 凭证
+
+        /// <summary>
+        /// 读 Claude Code 的 OAuth 凭证。Windows 上 Claude Code 把它明文存在 %USERPROFILE%\.claude\.credentials.json
+        /// （mac 端在钥匙串 "Claude Code-credentials"）。文件不存在或格式不符返回 null，由调用方退回本地缓存。
+        /// </summary>
+        public ClaudeCodeCredential? ReadClaudeCodeCredential()
+        {
+            var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            var path = Path.Combine(userProfile, ".claude", ".credentials.json");
+            if (!File.Exists(path)) return null;
+
+            try
+            {
+                return ParseClaudeCodeCredential(File.ReadAllText(path));
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("provider", $"读取 Claude Code 凭证失败: {ex.Message}");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// 解析 Claude Code 的凭证 JSON：{"claudeAiOauth": {"accessToken", "refreshToken", "expiresAt"(毫秒), ...}}。
+        /// 与 mac 端 ClaudeService.parseClaudeCodeCredential 同语义。
+        ///
+        /// **只取 accessToken**。refreshToken 归 Claude Code 所有且每次使用都会轮换，TokenBar 拿它换新 token
+        /// 会让 Claude Code 手里那枚作废——它遇到 invalid_grant 会清空本地凭证，等于把用户登出。
+        /// 所以 access token 过期后只能等 Claude Code 自己续期，期间退回本地缓存。
+        /// </summary>
+        internal static ClaudeCodeCredential? ParseClaudeCodeCredential(string json)
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(json);
+                if (doc.RootElement.ValueKind != JsonValueKind.Object ||
+                    !doc.RootElement.TryGetProperty("claudeAiOauth", out var oauth) ||
+                    oauth.ValueKind != JsonValueKind.Object ||
+                    !oauth.TryGetProperty("accessToken", out var tokenProp) ||
+                    tokenProp.ValueKind != JsonValueKind.String)
+                {
+                    return null;
+                }
+
+                var token = tokenProp.GetString()?.Trim();
+                if (string.IsNullOrEmpty(token)) return null;
+
+                DateTime? expiresAt = null;
+                if (oauth.TryGetProperty("expiresAt", out var expProp) &&
+                    expProp.ValueKind == JsonValueKind.Number &&
+                    expProp.TryGetDouble(out var expMs) &&
+                    expMs > 0 && expMs < 253_402_300_799_999) // FromUnixTimeMilliseconds 的上限，越界会抛
+                {
+                    expiresAt = DateTimeOffset.FromUnixTimeMilliseconds((long)expMs).LocalDateTime;
+                }
+
+                return new ClaudeCodeCredential(token, expiresAt);
+            }
+            catch (JsonException)
+            {
+                return null;
+            }
         }
 
         public async Task<(TokenWindow? FiveHour, TokenWindow? Weekly, TokenWindow? ScopedWeekly, string? Account)> FetchRemoteUsageAsync(string token, CancellationToken ct = default)
@@ -465,5 +541,15 @@ namespace TokenBar.Services
 
             return (primaryWindow, secondaryWindow, account);
         }
+    }
+
+    /// <summary>Claude Code 登录凭证里 TokenBar 用得上的部分。与 mac 端 ClaudeCodeCredential 同语义。</summary>
+    /// <param name="AccessToken">OAuth access token</param>
+    /// <param name="ExpiresAt">过期时刻（本地）；null 表示凭证里没有，视为可用（401 时自然退回缓存）</param>
+    public sealed record ClaudeCodeCredential(string AccessToken, DateTime? ExpiresAt)
+    {
+        /// <summary>离过期不足 60 秒就不用了：请求在途中过期只会换来一个 401</summary>
+        public bool IsUsable(DateTime now) =>
+            ExpiresAt is not DateTime expiresAt || (expiresAt - now).TotalSeconds > 60;
     }
 }

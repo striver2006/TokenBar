@@ -214,6 +214,8 @@ namespace TokenBar.Services
                 q.FiveHourWindow = localClaude.Value.FiveHour;
                 q.WeeklyWindow = localClaude.Value.Weekly;
                 q.ScopedWeeklyWindow = localClaude.Value.ScopedWeekly;
+                q.IsFromLocalCache = true;
+                q.LocalCacheFetchedAt = localClaude.Value.FetchedAt;
                 q.LastUpdated = DateTime.Now;
             }
 
@@ -774,49 +776,30 @@ namespace TokenBar.Services
             quota.ErrorMessage = null;
             NotifyQuotasUpdated();
 
-            bool hasClaudeToken = !string.IsNullOrWhiteSpace(Settings.ClaudeToken);
             var localClaude = ClaudeService.Instance.ReadLocalClaudeJson();
             bool hasAnthropicKey = !string.IsNullOrWhiteSpace(Settings.AnthropicApiKey);
 
             bool foundAuth = false;
 
-            // 1. Claude Code token / local credentials
-            if (hasClaudeToken)
+            // 1. 订阅额度：实时查远端优先（手填 token → Claude Code 自己的 access token）；
+            // 都查不到才退回 ~/.claude.json 缓存，并标注缓存时间。以前没手填 token 时只读缓存，
+            // 而缓存只在 Claude Code 自己查用量时才更新，「更新于」却每轮都是新的 —— 这就是「额度刷新不及时」。
+            var (remote, remoteError) = await FetchClaudeRemoteUsageAsync(ct);
+            if (IsStaleGeneration(generation, "claude")) return;
+            if (remote != null)
             {
-                try
-                {
-                    var (fiveHour, weekly, scopedWeekly, account) = await ClaudeService.Instance.FetchRemoteUsageAsync(Settings.ClaudeToken, ct);
-                    if (IsStaleGeneration(generation, "claude")) return;
-                    quota.FiveHourWindow = fiveHour;
-                    quota.WeeklyWindow = weekly;
-                    // 远端若暂未下发 scoped 周额度，回落本地缓存，任一路有数据即可显示
-                    quota.ScopedWeeklyWindow = scopedWeekly ?? localClaude?.ScopedWeekly;
-                    quota.IsAuthorized = true;
-                    quota.HadRefreshError = false;
-                    if (account != null) quota.AccountInfo = account;
-                    foundAuth = true;
-                }
-                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-                catch (Exception ex)
-                {
-                    Log.Warn("provider", $"claude 远程用量读取失败，退回本地缓存: {ex.Message}");
-                    if (IsStaleGeneration(generation, "claude")) return;
-                    if (localClaude != null)
-                    {
-                        quota.FiveHourWindow = localClaude.Value.FiveHour;
-                        quota.WeeklyWindow = localClaude.Value.Weekly;
-                        quota.ScopedWeeklyWindow = localClaude.Value.ScopedWeekly;
-                        quota.IsAuthorized = true;
-                        quota.HadRefreshError = false;
-                        if (localClaude.Value.Account != null) quota.AccountInfo = localClaude.Value.Account;
-                        foundAuth = true;
-                    }
-                    else
-                    {
-                        // 本地也没缓存：这是刷新失败不是未配置，留给末尾统一判定
-                        quota.ErrorMessage = ex.Message;
-                    }
-                }
+                var res = remote.Value;
+                quota.FiveHourWindow = res.FiveHour;
+                quota.WeeklyWindow = res.Weekly;
+                // 远端若暂未下发 scoped 周额度，回落本地缓存，任一路有数据即可显示
+                quota.ScopedWeeklyWindow = res.ScopedWeekly ?? localClaude?.ScopedWeekly;
+                quota.IsAuthorized = true;
+                quota.HadRefreshError = false;
+                var account = res.Account ?? localClaude?.Account;
+                if (account != null) quota.AccountInfo = account;
+                quota.IsFromLocalCache = false;
+                quota.LocalCacheFetchedAt = null;
+                foundAuth = true;
             }
             else if (localClaude != null)
             {
@@ -824,8 +807,16 @@ namespace TokenBar.Services
                 quota.WeeklyWindow = localClaude.Value.Weekly;
                 quota.ScopedWeeklyWindow = localClaude.Value.ScopedWeekly;
                 quota.IsAuthorized = true;
+                quota.HadRefreshError = false;
                 if (localClaude.Value.Account != null) quota.AccountInfo = localClaude.Value.Account;
+                quota.IsFromLocalCache = true;
+                quota.LocalCacheFetchedAt = localClaude.Value.FetchedAt;
                 foundAuth = true;
+            }
+            else if (remoteError != null)
+            {
+                // 本地也没缓存：这是刷新失败不是未配置，留给末尾统一判定
+                quota.ErrorMessage = remoteError.Message;
             }
 
             // 2. Anthropic API Key
@@ -886,6 +877,54 @@ namespace TokenBar.Services
             }
             quota.IsLoading = false;
             NotifyQuotasUpdated();
+        }
+
+        /// <summary>
+        /// 依次用设置里手填的 token、Claude Code 自己的 OAuth access token 查实时用量，第一个成功的为准。
+        /// 都没有或都失败时 Usage 为 null，Error 是最后一次失败的原因（没发出请求则为 null），
+        /// 由调用方退回本地缓存。Claude Code 的 token 只用不续：过期就等它自己续期。与 mac 端 fetchClaudeRemoteUsage 同语义。
+        /// </summary>
+        private async Task<((TokenWindow? FiveHour, TokenWindow? Weekly, TokenWindow? ScopedWeekly, string? Account)? Usage, Exception? Error)> FetchClaudeRemoteUsageAsync(CancellationToken ct)
+        {
+            Exception? lastError = null;
+
+            var manualToken = Settings.ClaudeToken?.Trim();
+            if (!string.IsNullOrEmpty(manualToken))
+            {
+                try
+                {
+                    return (await ClaudeService.Instance.FetchRemoteUsageAsync(manualToken, ct), null);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                catch (Exception ex)
+                {
+                    lastError = ex;
+                    Log.Warn("provider", $"claude 手填 token 查询失败，改用 Claude Code 凭证: {ex.Message}");
+                }
+            }
+
+            var credential = ClaudeService.Instance.ReadClaudeCodeCredential();
+            if (credential == null)
+            {
+                Log.Notice("provider", "claude 未取得 Claude Code 凭证，退回本地缓存");
+                return (null, lastError);
+            }
+            if (!credential.IsUsable(DateTime.Now))
+            {
+                Log.Notice("provider", "claude Claude Code access token 已过期，等它自行续期，退回本地缓存");
+                return (null, lastError);
+            }
+
+            try
+            {
+                return (await ClaudeService.Instance.FetchRemoteUsageAsync(credential.AccessToken, ct), null);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                Log.Warn("provider", $"claude Claude Code 凭证查询失败，退回本地缓存: {ex.Message}");
+                return (null, ex);
+            }
         }
 
         /// <summary>
@@ -1165,6 +1204,8 @@ namespace TokenBar.Services
                 quota.FiveHourWindow = local.Value.FiveHour;
                 quota.WeeklyWindow = local.Value.Weekly;
                 quota.ScopedWeeklyWindow = local.Value.ScopedWeekly;
+                quota.IsFromLocalCache = true;
+                quota.LocalCacheFetchedAt = local.Value.FetchedAt;
                 quota.LastUpdated = DateTime.Now;
                 NotifyQuotasUpdated();
                 return true;

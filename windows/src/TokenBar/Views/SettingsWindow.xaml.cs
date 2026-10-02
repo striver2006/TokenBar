@@ -687,16 +687,24 @@ namespace TokenBar.Views
                 MessageBox.Show(i18n.IsChinese ? $"Anthropic 校验失败: {q.ErrorMessage}" : $"Anthropic verification failed: {q.ErrorMessage}", i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Warning);
         }
 
-        private void BtnImportClaudeLocal_Click(object sender, RoutedEventArgs e)
+        private async void BtnImportClaudeLocal_Click(object sender, RoutedEventArgs e)
         {
             var i18n = LocalizationManager.Instance;
-            if (RefreshManager.Instance.ImportClaudeFromLocal())
+            if (!RefreshManager.Instance.ImportClaudeFromLocal())
             {
-                MessageBox.Show(i18n.IsChinese ? "成功从 ~/.claude.json 读取并同步本地 Claude CLI 配额！" : "Successfully read and synced local Claude CLI quota from ~/.claude.json!", i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Information);
+                MessageBox.Show(i18n.IsChinese ? "未在本地找到 ~/.claude.json 配置文件，请先在终端运行 claude 进行登录。" : "Could not find ~/.claude.json locally. Please run claude login in terminal first.", i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            // 导入的只是缓存；立刻实刷一轮，有 Claude Code 凭证时卡片随即切到实时数据，不必等下一个周期
+            await RefreshManager.Instance.RefreshClaudeAsync();
+            if (!RefreshManager.Instance.Quotas[ProviderType.ClaudeCode].IsFromLocalCache)
+            {
+                MessageBox.Show(i18n.IsChinese ? "已读取 Claude Code 登录凭证，Claude 额度改为实时查询！" : "Claude Code credentials loaded; Claude quota is now fetched live!", i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Information);
             }
             else
             {
-                MessageBox.Show(i18n.IsChinese ? "未在本地找到 ~/.claude.json 配置文件，请先在终端运行 claude 进行登录。" : "Could not find ~/.claude.json locally. Please run claude login in terminal first.", i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Warning);
+                MessageBox.Show(i18n.IsChinese ? "已读取 ~/.claude.json 缓存，但暂时无法实时查询（Claude Code 凭证缺失、已过期，或网络异常）。在终端运行一次 claude 后通常会自动恢复。" : "Loaded the ~/.claude.json cache, but live queries are unavailable (Claude Code credentials missing or expired, or a network issue). Running claude once in a terminal usually fixes it.", i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Information);
             }
         }
 

@@ -35,17 +35,25 @@ public final class ClaudeService: @unchecked Sendable {
         return isoFormatterNoFrac.date(from: dateStr)
     }
 
+    /// `~/.claude.json` 的解析结果。`fetchedAt` 是 Claude Code 写入 `cachedUsageUtilization`
+    /// 时记下的 `fetchedAtMs`：这份缓存只在 Claude Code 自己查用量（`/usage`、桌面端 `get_usage`）
+    /// 时才更新，可能比 TokenBar 的刷新时刻旧几个小时，展示时必须带上它。
+    public typealias LocalClaudeSnapshot = (
+        fiveHour: TokenWindow?, weekly: TokenWindow?, scopedWeekly: TokenWindow?,
+        account: String?, fetchedAt: Date?
+    )
+
     /// Read locally cached usage and account info from ~/.claude.json if present.
     ///
     /// async：重度 Claude Code 用户的 `~/.claude.json` 常有数 MB（history / projects），
     /// 在 MainActor 上同步全量解析是每轮刷新都能感知的卡顿，与 GeminiService.readLocalGeminiFiles
     /// 同样挪到后台线程。
-    public func readLocalClaudeJson() async -> (fiveHour: TokenWindow?, weekly: TokenWindow?, scopedWeekly: TokenWindow?, account: String?)? {
+    public func readLocalClaudeJson() async -> LocalClaudeSnapshot? {
         await Task.detached(priority: .userInitiated) { self.readLocalClaudeJsonSync() }.value
     }
 
     /// 同步实现，只应在后台线程调用
-    func readLocalClaudeJsonSync() -> (fiveHour: TokenWindow?, weekly: TokenWindow?, scopedWeekly: TokenWindow?, account: String?)? {
+    func readLocalClaudeJsonSync() -> LocalClaudeSnapshot? {
         let homeDir = FileManager.default.homeDirectoryForCurrentUser
         let claudeJsonUrl = homeDir.appendingPathComponent(".claude.json")
 
@@ -91,7 +99,7 @@ public final class ClaudeService: @unchecked Sendable {
     }
 
     /// 纯解析 `~/.claude.json` 的内容，不碰文件系统，便于用 fixture 单测
-    public func parseLocalClaudeJson(_ json: [String: Any]) -> (fiveHour: TokenWindow?, weekly: TokenWindow?, scopedWeekly: TokenWindow?, account: String?) {
+    public func parseLocalClaudeJson(_ json: [String: Any]) -> LocalClaudeSnapshot {
             var accountEmail: String? = nil
             if let oauthAccount = json["oauthAccount"] as? [String: Any] {
                 accountEmail = oauthAccount["emailAddress"] as? String ?? oauthAccount["displayName"] as? String
@@ -109,8 +117,11 @@ public final class ClaudeService: @unchecked Sendable {
                     unit: "%",
                     isIdle: true
                 )
-                return (fiveHour, nil, nil, accountEmail)
+                return (fiveHour, nil, nil, accountEmail, nil)
             }
+
+            let fetchedAt = (cached["fetchedAtMs"] as? NSNumber)
+                .map { Date(timeIntervalSince1970: $0.doubleValue / 1000) }
 
             var fiveHourWindow: TokenWindow? = nil
             var weeklyWindow: TokenWindow? = nil
@@ -228,11 +239,68 @@ public final class ClaudeService: @unchecked Sendable {
                 scopedWeeklyWindow = parseScopedWeeklyLimit(limits)
             }
 
-            return (fiveHourWindow, weeklyWindow, scopedWeeklyWindow, accountEmail)
+            return (fiveHourWindow, weeklyWindow, scopedWeeklyWindow, accountEmail, fetchedAt)
+    }
+
+    // MARK: - Claude Code 自己的 OAuth 凭证
+
+    /// Claude Code 在 login.keychain 里的凭证条目（由它调 `security add-generic-password -U` 写入，
+    /// 刷新 token 时原地更新：`cdat` 不变、`mdat` 变，所以「始终允许」不会被冲掉）
+    static let claudeCodeKeychainService = "Claude Code-credentials"
+
+    /// 条目的 account：Claude Code 取 `$USER`，不合 `[A-Za-z0-9._-]+` 时退成 "claude-code-user"
+    static func claudeCodeKeychainAccount(environment: [String: String] = ProcessInfo.processInfo.environment) -> String {
+        let user = environment["USER"] ?? NSUserName()
+        let valid = user.range(of: "^[A-Za-z0-9._-]+$", options: .regularExpression) != nil
+        return valid ? user : "claude-code-user"
+    }
+
+    /// 解析 Claude Code 的凭证 JSON：`{"claudeAiOauth": {"accessToken", "refreshToken", "expiresAt"(毫秒), ...}}`。
+    ///
+    /// **只取 accessToken**。refreshToken 归 Claude Code 所有且每次使用都会轮换，TokenBar 拿它
+    /// 换新 token 会让 Claude Code 手里那枚作废——它遇到 invalid_grant 会清空本地凭证，等于把用户登出。
+    /// 所以 access token 过期后只能等 Claude Code 自己续期，期间退回本地缓存。
+    static func parseClaudeCodeCredential(_ raw: String) -> ClaudeCodeCredential? {
+        guard let data = raw.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let oauth = json["claudeAiOauth"] as? [String: Any],
+              let token = (oauth["accessToken"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !token.isEmpty else {
+            return nil
+        }
+        let expiresAt = (oauth["expiresAt"] as? NSNumber)
+            .map { Date(timeIntervalSince1970: $0.doubleValue / 1000) }
+        return ClaudeCodeCredential(accessToken: token, expiresAt: expiresAt)
+    }
+
+    /// 读 Claude Code 的 OAuth 凭证：钥匙串优先，`~/.claude/.credentials.json` 兜底
+    /// （钥匙串不可用时 Claude Code 会落到这个明文文件）。
+    ///
+    /// 刷新链路传 `allowInteraction: false`：ACL 里还没有 TokenBar 时立刻拿到 `.unavailable`，
+    /// 绝不弹框；设置页「读取本地 CLI 授权」按钮传 true，用户点一次「始终允许」后永久静默。
+    /// `keychainDenied` 只在 OSStatus 是真正的 ACL 拒时为 true，供设置页给出对症的提示。
+    public func readClaudeCodeCredential(allowInteraction: Bool) async -> (credential: ClaudeCodeCredential?, keychainDenied: Bool) {
+        let result = await KeychainSecretStore.shared.readForeignDetailedAsync(
+            service: Self.claudeCodeKeychainService,
+            account: Self.claudeCodeKeychainAccount(),
+            allowInteraction: allowInteraction
+        )
+        if case .found(let raw) = result.lookup, let credential = Self.parseClaudeCodeCredential(raw) {
+            return (credential, false)
+        }
+        let denied = result.lookup == .unavailable && result.isACLDenied
+        let fromFile = await Task.detached(priority: .userInitiated) { () -> ClaudeCodeCredential? in
+            let url = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".claude/.credentials.json")
+            guard let data = try? Data(contentsOf: url),
+                  let raw = String(data: data, encoding: .utf8) else { return nil }
+            return Self.parseClaudeCodeCredential(raw)
+        }.value
+        return (fromFile, denied)
     }
 
     /// Fetch latest usage statistics from Anthropic OAuth usage API
-    public func fetchRemoteUsage(token: String) async throws -> (fiveHour: TokenWindow?, weekly: TokenWindow?, scopedWeekly: TokenWindow?, account: String?) {
+    public func fetchRemoteUsage(token: String) async throws -> ClaudeRemoteUsage {
         guard let url = URL(string: "https://api.anthropic.com/api/oauth/usage") else {
             throw URLError(.badURL)
         }
@@ -401,5 +469,26 @@ public final class ClaudeService: @unchecked Sendable {
         let account = isZh ? "Anthropic API (尾号 \(keySuffix))" : "Anthropic API (... \(keySuffix))"
 
         return (primaryWindow, secondaryWindow, account)
+    }
+}
+
+/// `/api/oauth/usage` 的解析结果（account 目前恒为 nil，账号取自本地 `~/.claude.json`）
+public typealias ClaudeRemoteUsage = (fiveHour: TokenWindow?, weekly: TokenWindow?, scopedWeekly: TokenWindow?, account: String?)
+
+/// Claude Code 登录凭证里 TokenBar 用得上的部分
+public struct ClaudeCodeCredential: Equatable, Sendable {
+    public let accessToken: String
+    /// nil：凭证里没有过期时间，视为可用（401 时自然退回缓存）
+    public let expiresAt: Date?
+
+    public init(accessToken: String, expiresAt: Date?) {
+        self.accessToken = accessToken
+        self.expiresAt = expiresAt
+    }
+
+    /// 离过期不足 60 秒就不用了：请求在途中过期只会换来一个 401
+    public func isUsable(at now: Date) -> Bool {
+        guard let expiresAt else { return true }
+        return expiresAt.timeIntervalSince(now) > 60
     }
 }

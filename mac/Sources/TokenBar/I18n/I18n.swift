@@ -53,6 +53,12 @@ public enum I18nKey: String, CaseIterable {
     case timeDaysHours
     case timeHoursMinutes
     case timeMinutes
+    case localCacheNote
+    case localCacheNoteNoTime
+    case ageJustNow
+    case ageMinutesAgo
+    case ageHoursAgo
+    case ageDaysAgo
 
     // Settings Navigation
     case currentConfigItem
@@ -242,7 +248,9 @@ public enum I18nKey: String, CaseIterable {
     case alertAnthropicSuccess
     case alertAnthropicFailed
     case alertClaudeWebSuccess
-    case alertClaudeLocalSuccess
+    case alertClaudeLocalLive
+    case alertClaudeLocalCacheOnly
+    case alertClaudeLocalCacheDenied
     case alertClaudeLocalNotFound
     case alertClaudeTokenSaved
     case alertGeminiSuccess
@@ -415,6 +423,18 @@ public final class LocalizationManager: ObservableObject {
             return isZh ? "剩余 %d小时 %d分" : "%dh %dm left"
         case .timeMinutes:
             return isZh ? "剩余 %d分钟" : "%dm left"
+        case .localCacheNote:
+            return isZh ? "来自 Claude Code 本地缓存 · %@" : "From Claude Code local cache · %@"
+        case .localCacheNoteNoTime:
+            return isZh ? "来自 Claude Code 本地缓存" : "From Claude Code local cache"
+        case .ageJustNow:
+            return isZh ? "刚刚" : "just now"
+        case .ageMinutesAgo:
+            return isZh ? "%d 分钟前" : "%dm ago"
+        case .ageHoursAgo:
+            return isZh ? "%d 小时前" : "%dh ago"
+        case .ageDaysAgo:
+            return isZh ? "%d 天前" : "%dd ago"
 
         case .currentConfigItem:
             return isZh ? "当前配置项:" : "Current:"
@@ -761,8 +781,12 @@ public final class LocalizationManager: ObservableObject {
             return isZh ? "校验失败: " : "Verification failed: "
         case .alertClaudeWebSuccess:
             return isZh ? "Claude Code 网页登录授权成功！" : "Claude Code web login authorization successful!"
-        case .alertClaudeLocalSuccess:
-            return isZh ? "成功从 ~/.claude.json 读取并同步本地 Claude CLI 配额！" : "Successfully read and synced local Claude CLI quota from ~/.claude.json!"
+        case .alertClaudeLocalLive:
+            return isZh ? "已读取 Claude Code 登录凭证，Claude 额度改为实时查询！" : "Claude Code credentials loaded; Claude quota is now fetched live!"
+        case .alertClaudeLocalCacheOnly:
+            return isZh ? "已读取 ~/.claude.json 缓存，但暂时无法实时查询（Claude Code 凭证缺失、已过期，或网络异常）。在终端运行一次 claude 后通常会自动恢复。" : "Loaded the ~/.claude.json cache, but live queries are unavailable (Claude Code credentials missing or expired, or a network issue). Running claude once in a terminal usually fixes it."
+        case .alertClaudeLocalCacheDenied:
+            return isZh ? "未获得钥匙串授权，暂时只能读取 ~/.claude.json 缓存（可能不是最新）。请重试，并在系统弹窗中点「始终允许」。" : "Keychain access was not granted, so only the ~/.claude.json cache (possibly stale) can be read. Retry and click \"Always Allow\" in the system prompt."
         case .alertClaudeLocalNotFound:
             return isZh ? "未在本地找到 ~/.claude.json 配置文件，请先在终端运行 claude 进行登录，或使用上方网页登录授权。" : "Could not find ~/.claude.json locally. Please run claude login in terminal or use web login above."
         case .alertClaudeTokenSaved:

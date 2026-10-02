@@ -32,6 +32,7 @@ namespace TokenBar.Tests
                 {
                   "oauthAccount": {"emailAddress": "someone@example.com"},
                   "cachedUsageUtilization": {
+                    "fetchedAtMs": 1790937318646,
                     "utilization": {
                       "five_hour": {"utilization": 37.5, "resets_at": "{{resetsAt}}" },
                       "limits": [
@@ -71,6 +72,10 @@ namespace TokenBar.Tests
             Assert.Equal(42, scopedWeekly!.UsedPercentage, 3);
             Assert.Equal(WindowTitleKind.Custom, scopedWeekly.Title.Kind);
             Assert.Equal("Fable", scopedWeekly.Title.Argument);
+
+            // 缓存自身的抓取时间：毫秒时间戳换算成本地时刻，卡片据此标注「N 分钟前」
+            Assert.NotNull(parsed.Value.FetchedAt);
+            Assert.Equal(1790937318646, new DateTimeOffset(parsed.Value.FetchedAt!.Value).ToUnixTimeMilliseconds());
         }
 
         [Fact]
@@ -121,6 +126,20 @@ namespace TokenBar.Tests
             Assert.Equal(Now.AddHours(5), fiveHour.EndTime);
             Assert.Null(parsed.Value.Weekly);
             Assert.Null(parsed.Value.ScopedWeekly);
+            Assert.Null(parsed.Value.FetchedAt);
+        }
+
+        [Fact]
+        public void CacheWithoutFetchedAtMs_ParsesWindowsAndLeavesTimestampNull()
+        {
+            // 与 mac testClaudeCacheWithoutFetchedAtMs 对齐：老版本缓存可能没有 fetchedAtMs
+            var json = """{"cachedUsageUtilization": {"utilization": {"five_hour": {"utilization": 10}}}}""";
+
+            var parsed = ClaudeService.ParseLocalClaudeJson(json, Now);
+
+            Assert.NotNull(parsed);
+            Assert.NotNull(parsed!.Value.FiveHour);
+            Assert.Null(parsed.Value.FetchedAt);
         }
 
         [Fact]

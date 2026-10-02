@@ -597,6 +597,8 @@ public final class RefreshManager: ObservableObject {
             quota.fiveHourWindow = localClaude.fiveHour
             quota.weeklyWindow = localClaude.weekly
             quota.scopedWeeklyWindow = localClaude.scopedWeekly
+            quota.isFromLocalCache = true
+            quota.localCacheFetchedAt = localClaude.fetchedAt
             quota.lastUpdated = Date()
             quotas[.claudeCode] = quota
         }
@@ -932,43 +934,37 @@ public final class RefreshManager: ObservableObject {
         quota.errorMessage = nil
         commit(quota, for: .claudeCode, gen: gen)
 
-        let hasClaudeToken = !settings.claudeToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let localClaude = await ClaudeService.shared.readLocalClaudeJson()
         let hasAnthropicKey = !settings.anthropicApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
 
         var foundAuth = false
 
-        // 1. If Claude Code (OAuth token or local credentials) is present
-        if hasClaudeToken {
-            do {
-                let res = try await ClaudeService.shared.fetchRemoteUsage(token: settings.claudeToken)
-                quota.fiveHourWindow = res.fiveHour
-                quota.weeklyWindow = res.weekly
-                // 远端若暂未下发 scoped 周额度，回落本地缓存，任一路有数据即可显示
-                quota.scopedWeeklyWindow = res.scopedWeekly ?? localClaude?.scopedWeekly
-                quota.isAuthorized = true
-                if let acc = res.account { quota.accountInfo = acc }
-                foundAuth = true
-            } catch {
-                if let local = localClaude {
-                    quota.fiveHourWindow = local.fiveHour
-                    quota.weeklyWindow = local.weekly
-                    quota.scopedWeeklyWindow = local.scopedWeekly
-                    quota.isAuthorized = true
-                    if let acc = local.account { quota.accountInfo = acc }
-                    foundAuth = true
-                } else {
-                    quota.errorMessage = error.localizedDescription
-                    Log.provider.error("provider=claude failed: \(error.localizedDescription)")
-                }
-            }
+        // 1. 订阅额度：实时查远端优先（手填 token → Claude Code 自己的 access token）；
+        // 都查不到才退回 ~/.claude.json 缓存，并标注缓存时间。以前没手填 token 时只读缓存，
+        // 而缓存只在 Claude Code 自己查用量时才更新，「更新于」却每轮都是新的 —— 这就是「额度刷新不及时」。
+        let remote = await fetchClaudeRemoteUsage()
+        if let res = remote.usage {
+            quota.fiveHourWindow = res.fiveHour
+            quota.weeklyWindow = res.weekly
+            // 远端若暂未下发 scoped 周额度，回落本地缓存，任一路有数据即可显示
+            quota.scopedWeeklyWindow = res.scopedWeekly ?? localClaude?.scopedWeekly
+            quota.isAuthorized = true
+            if let acc = res.account ?? localClaude?.account { quota.accountInfo = acc }
+            quota.isFromLocalCache = false
+            quota.localCacheFetchedAt = nil
+            foundAuth = true
         } else if let local = localClaude {
             quota.fiveHourWindow = local.fiveHour
             quota.weeklyWindow = local.weekly
             quota.scopedWeeklyWindow = local.scopedWeekly
             quota.isAuthorized = true
             if let acc = local.account { quota.accountInfo = acc }
+            quota.isFromLocalCache = true
+            quota.localCacheFetchedAt = local.fetchedAt
             foundAuth = true
+        } else if let error = remote.error {
+            quota.errorMessage = error.localizedDescription
+            Log.provider.error("provider=claude failed: \(error.localizedDescription)")
         }
 
         // 2. If Anthropic API Key is present
@@ -1018,6 +1014,39 @@ public final class RefreshManager: ObservableObject {
         }
         quota.isLoading = false
         commit(quota, for: .claudeCode, gen: gen)
+    }
+
+    /// 依次用设置里手填的 token、Claude Code 自己的 OAuth access token 查实时用量，第一个成功的为准。
+    /// 都没有或都失败时 usage 为 nil，error 是最后一次失败的原因（没发出请求则为 nil），
+    /// 由调用方退回本地缓存。Claude Code 的 token 只用不续：过期就等它自己续期。
+    private func fetchClaudeRemoteUsage() async -> (usage: ClaudeRemoteUsage?, error: Error?) {
+        var lastError: Error?
+
+        let manualToken = settings.claudeToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !manualToken.isEmpty {
+            do {
+                return (try await ClaudeService.shared.fetchRemoteUsage(token: manualToken), nil)
+            } catch {
+                lastError = error
+                Log.provider.notice("provider=claude 手填 token 查询失败，改用 Claude Code 凭证: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+
+        let local = await ClaudeService.shared.readClaudeCodeCredential(allowInteraction: false)
+        guard let credential = local.credential else {
+            Log.provider.notice("provider=claude 未取得 Claude Code 凭证（keychainDenied=\(local.keychainDenied, privacy: .public)），退回本地缓存")
+            return (nil, lastError)
+        }
+        guard credential.isUsable(at: Date()) else {
+            Log.provider.notice("provider=claude Claude Code access token 已过期，等它自行续期，退回本地缓存")
+            return (nil, lastError)
+        }
+        do {
+            return (try await ClaudeService.shared.fetchRemoteUsage(token: credential.accessToken), nil)
+        } catch {
+            Log.provider.notice("provider=claude Claude Code 凭证查询失败，退回本地缓存: \(error.localizedDescription, privacy: .public)")
+            return (nil, error)
+        }
     }
 
     public func refreshGemini() async {
@@ -1179,19 +1208,33 @@ public final class RefreshManager: ObservableObject {
         commit(quota, for: .aliyunBailian, gen: gen)
     }
 
-    public func importClaudeFromLocal() async -> Bool {
-        if let local = await ClaudeService.shared.readLocalClaudeJson() {
-            var quota = quotas[.claudeCode] ?? ProviderQuota(provider: .claudeCode)
-            quota.isAuthorized = true
-            quota.accountInfo = local.account
-            quota.fiveHourWindow = local.fiveHour
-            quota.weeklyWindow = local.weekly
-            quota.scopedWeeklyWindow = local.scopedWeekly
-            quota.lastUpdated = Date()
-            quotas[.claudeCode] = quota
-            return true
+    /// 设置页「读取本地 CLI 授权」的结果，决定给用户哪条提示
+    public enum ClaudeLocalImportResult: Equatable {
+        /// 拿到了实时数据
+        case live
+        /// 只读到 ~/.claude.json 缓存；keychainDenied 表示是钥匙串没给「始终允许」
+        case cacheOnly(keychainDenied: Bool)
+        /// 本地什么都没有
+        case notFound
+    }
+
+    /// 设置页按钮的入口，与 importGeminiFromLocal 一样是**允许钥匙串弹授权框**的地方：用户在场，
+    /// 点一次「始终允许」后 TokenBar 进入 Claude Code 条目的 ACL，刷新链路从此静默读取。
+    /// 授权框会让那次钥匙串调用挂到用户点完为止 —— 调用方用 Task 包起来，别占住主线程。
+    public func importClaudeFromLocal() async -> ClaudeLocalImportResult {
+        let credential = await ClaudeService.shared.readClaudeCodeCredential(allowInteraction: true)
+        await refreshClaude()
+        guard let quota = quotas[.claudeCode], quota.isAuthorized else { return .notFound }
+        if quota.isFromLocalCache {
+            // 用户在授权框点的是「允许」而非「始终允许」时，上面那次交互读会成功，但刷新链路的
+            // 静默读仍被拒 —— 以静默读的结果为准，才能提示「去点始终允许」
+            let silent = await ClaudeService.shared.readClaudeCodeCredential(allowInteraction: false)
+            return .cacheOnly(keychainDenied: silent.keychainDenied)
         }
-        return false
+        // 只配了 API Key 时也是「已授权、非缓存」，但那不是订阅额度，不能报成「已实时」
+        let hasSubscriptionToken = credential.credential != nil
+            || !settings.claudeToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return hasSubscriptionToken ? .live : .notFound
     }
 
     /// 设置页按钮的入口，**全 App 唯一允许钥匙串弹授权框的地方**：用户在场，

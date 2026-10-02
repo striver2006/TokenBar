@@ -103,6 +103,12 @@ namespace TokenBar.I18n
         public string TimeDaysHours => IsChinese ? "剩余 {0}天 {1}小时" : "{0}d {1}h left";
         public string TimeHoursMinutes => IsChinese ? "剩余 {0}小时 {1}分" : "{0}h {1}m left";
         public string TimeMinutes => IsChinese ? "剩余 {0}分钟" : "{0}m left";
+        public string LocalCacheNote => IsChinese ? "来自 Claude Code 本地缓存 · {0}" : "From Claude Code local cache · {0}";
+        public string LocalCacheNoteNoTime => IsChinese ? "来自 Claude Code 本地缓存" : "From Claude Code local cache";
+        public string AgeJustNow => IsChinese ? "刚刚" : "just now";
+        public string AgeMinutesAgo => IsChinese ? "{0} 分钟前" : "{0}m ago";
+        public string AgeHoursAgo => IsChinese ? "{0} 小时前" : "{0}h ago";
+        public string AgeDaysAgo => IsChinese ? "{0} 天前" : "{0}d ago";
 
         // Navigation & Titles
         public string CurrentConfigItem => IsChinese ? "当前配置项:" : "Current:";
