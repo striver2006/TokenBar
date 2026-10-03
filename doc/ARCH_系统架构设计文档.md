@@ -395,8 +395,11 @@ Windows 客户端采用轻量现代的 **.NET 8 WPF** 架构，利用 Windows �
    - Claude Code 的 OAuth 凭证（macOS 钥匙串 `Claude Code-credentials` / `~/.claude/.credentials.json`）
      **只读、只用 access token**：refresh token 归 Claude Code 所有且每次使用都会轮换，TokenBar 拿它
      换新 token 会让 Claude Code 手里那枚作废（它遇到 invalid_grant 会清空本地凭证 = 用户被登出）。
-     access token 过期后等 Claude Code 自行续期，期间退回本地缓存。macOS 刷新链路静默读取钥匙串，
-     只有设置页「读取本地 CLI 授权」按钮允许弹出系统授权框（点一次「始终允许」后永久静默）。
+     access token 过期后等 Claude Code 自行续期，期间退回本地缓存。macOS 经 `/usr/bin/security
+     find-generic-password -w` 子进程读取（后台线程 + 超时看门狗），与 Claude Code 自己读凭证的方式一致：
+     该条目由 `security` 创建和更新，`security` 恒在其信任列表里，无需授权框。**不要改回 SecItem 直读 +
+     「始终允许」**——实测授权撑不过一天：属主 App 续期 token 重写条目后，TokenBar 的访问权随之失效，
+     此后每轮静默读都被拒（-25293）、额度悄悄退回陈旧缓存（Antigravity 的 Gemini 条目同样如此）。
 2. **纯客户端通讯**：
    - 应用直接向模型提供商官方接入端点发起 HTTPS 请求，无任何二次代理服务器。
 3. **开源透明**：

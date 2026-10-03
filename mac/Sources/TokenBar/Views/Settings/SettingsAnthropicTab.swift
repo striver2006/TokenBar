@@ -166,13 +166,12 @@ struct SettingsAnthropicTab: View {
                     .buttonStyle(.borderedProminent)
 
                     Button {
-                        // 读 Claude Code 凭证会碰钥匙串（首次弹授权框），必须异步，否则会占住主线程
                         Task {
                             switch await refreshManager.importClaudeFromLocal() {
                             case .live:
                                 statusAlertMessage = I18n(.alertClaudeLocalLive)
-                            case .cacheOnly(let keychainDenied):
-                                statusAlertMessage = I18n(keychainDenied ? .alertClaudeLocalCacheDenied : .alertClaudeLocalCacheOnly)
+                            case .cacheOnly:
+                                statusAlertMessage = I18n(.alertClaudeLocalCacheOnly)
                             case .notFound:
                                 statusAlertMessage = I18n(.alertClaudeLocalNotFound)
                             }

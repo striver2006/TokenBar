@@ -943,6 +943,7 @@ public final class RefreshManager: ObservableObject {
         // 都查不到才退回 ~/.claude.json 缓存，并标注缓存时间。以前没手填 token 时只读缓存，
         // 而缓存只在 Claude Code 自己查用量时才更新，「更新于」却每轮都是新的 —— 这就是「额度刷新不及时」。
         let remote = await fetchClaudeRemoteUsage()
+        claudeSubscriptionIsLive = remote.usage != nil
         if let res = remote.usage {
             quota.fiveHourWindow = res.fiveHour
             quota.weeklyWindow = res.weekly
@@ -1016,6 +1017,9 @@ public final class RefreshManager: ObservableObject {
         commit(quota, for: .claudeCode, gen: gen)
     }
 
+    /// 最近一轮 Claude 订阅额度是否来自实时查询（而非本地缓存 / API Key），供设置页按钮给出对症提示
+    private var claudeSubscriptionIsLive = false
+
     /// 依次用设置里手填的 token、Claude Code 自己的 OAuth access token 查实时用量，第一个成功的为准。
     /// 都没有或都失败时 usage 为 nil，error 是最后一次失败的原因（没发出请求则为 nil），
     /// 由调用方退回本地缓存。Claude Code 的 token 只用不续：过期就等它自己续期。
@@ -1032,9 +1036,8 @@ public final class RefreshManager: ObservableObject {
             }
         }
 
-        let local = await ClaudeService.shared.readClaudeCodeCredential(allowInteraction: false)
-        guard let credential = local.credential else {
-            Log.provider.notice("provider=claude 未取得 Claude Code 凭证（keychainDenied=\(local.keychainDenied, privacy: .public)），退回本地缓存")
+        guard let credential = await ClaudeService.shared.readClaudeCodeCredential() else {
+            Log.provider.notice("provider=claude 未取得 Claude Code 凭证，退回本地缓存")
             return (nil, lastError)
         }
         guard credential.isUsable(at: Date()) else {
@@ -1212,29 +1215,20 @@ public final class RefreshManager: ObservableObject {
     public enum ClaudeLocalImportResult: Equatable {
         /// 拿到了实时数据
         case live
-        /// 只读到 ~/.claude.json 缓存；keychainDenied 表示是钥匙串没给「始终允许」
-        case cacheOnly(keychainDenied: Bool)
+        /// 只读到 ~/.claude.json 缓存（Claude Code 凭证缺失、已过期或网络异常）
+        case cacheOnly
         /// 本地什么都没有
         case notFound
     }
 
-    /// 设置页按钮的入口，与 importGeminiFromLocal 一样是**允许钥匙串弹授权框**的地方：用户在场，
-    /// 点一次「始终允许」后 TokenBar 进入 Claude Code 条目的 ACL，刷新链路从此静默读取。
-    /// 授权框会让那次钥匙串调用挂到用户点完为止 —— 调用方用 Task 包起来，别占住主线程。
+    /// 设置页「读取本地 CLI 授权」：立刻刷一轮 Claude，并按结果告诉用户是否已在实时查询。
+    /// 读 Claude Code 凭证走 `/usr/bin/security`，无需授权框，所以这里不再有交互读取。
     public func importClaudeFromLocal() async -> ClaudeLocalImportResult {
-        let credential = await ClaudeService.shared.readClaudeCodeCredential(allowInteraction: true)
         await refreshClaude()
-        guard let quota = quotas[.claudeCode], quota.isAuthorized else { return .notFound }
-        if quota.isFromLocalCache {
-            // 用户在授权框点的是「允许」而非「始终允许」时，上面那次交互读会成功，但刷新链路的
-            // 静默读仍被拒 —— 以静默读的结果为准，才能提示「去点始终允许」
-            let silent = await ClaudeService.shared.readClaudeCodeCredential(allowInteraction: false)
-            return .cacheOnly(keychainDenied: silent.keychainDenied)
-        }
+        if claudeSubscriptionIsLive { return .live }
         // 只配了 API Key 时也是「已授权、非缓存」，但那不是订阅额度，不能报成「已实时」
-        let hasSubscriptionToken = credential.credential != nil
-            || !settings.claudeToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        return hasSubscriptionToken ? .live : .notFound
+        guard let quota = quotas[.claudeCode], quota.isAuthorized, quota.isFromLocalCache else { return .notFound }
+        return .cacheOnly
     }
 
     /// 设置页按钮的入口，**全 App 唯一允许钥匙串弹授权框的地方**：用户在场，

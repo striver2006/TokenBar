@@ -250,7 +250,6 @@ public enum I18nKey: String, CaseIterable {
     case alertClaudeWebSuccess
     case alertClaudeLocalLive
     case alertClaudeLocalCacheOnly
-    case alertClaudeLocalCacheDenied
     case alertClaudeLocalNotFound
     case alertClaudeTokenSaved
     case alertGeminiSuccess
@@ -785,8 +784,6 @@ public final class LocalizationManager: ObservableObject {
             return isZh ? "已读取 Claude Code 登录凭证，Claude 额度改为实时查询！" : "Claude Code credentials loaded; Claude quota is now fetched live!"
         case .alertClaudeLocalCacheOnly:
             return isZh ? "已读取 ~/.claude.json 缓存，但暂时无法实时查询（Claude Code 凭证缺失、已过期，或网络异常）。在终端运行一次 claude 后通常会自动恢复。" : "Loaded the ~/.claude.json cache, but live queries are unavailable (Claude Code credentials missing or expired, or a network issue). Running claude once in a terminal usually fixes it."
-        case .alertClaudeLocalCacheDenied:
-            return isZh ? "未获得钥匙串授权，暂时只能读取 ~/.claude.json 缓存（可能不是最新）。请重试，并在系统弹窗中点「始终允许」。" : "Keychain access was not granted, so only the ~/.claude.json cache (possibly stale) can be read. Retry and click \"Always Allow\" in the system prompt."
         case .alertClaudeLocalNotFound:
             return isZh ? "未在本地找到 ~/.claude.json 配置文件，请先在终端运行 claude 进行登录，或使用上方网页登录授权。" : "Could not find ~/.claude.json locally. Please run claude login in terminal or use web login above."
         case .alertClaudeTokenSaved:

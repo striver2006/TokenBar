@@ -244,8 +244,8 @@ public final class ClaudeService: @unchecked Sendable {
 
     // MARK: - Claude Code 自己的 OAuth 凭证
 
-    /// Claude Code 在 login.keychain 里的凭证条目（由它调 `security add-generic-password -U` 写入，
-    /// 刷新 token 时原地更新：`cdat` 不变、`mdat` 变，所以「始终允许」不会被冲掉）
+    /// Claude Code 在 login.keychain 里的凭证条目。它自己只通过 `/usr/bin/security` 读写
+    /// （`security -i` + `add-generic-password -U`），所以 `security` 永远在条目的信任列表里。
     static let claudeCodeKeychainService = "Claude Code-credentials"
 
     /// 条目的 account：Claude Code 取 `$USER`，不合 `[A-Za-z0-9._-]+` 时退成 "claude-code-user"
@@ -276,27 +276,89 @@ public final class ClaudeService: @unchecked Sendable {
     /// 读 Claude Code 的 OAuth 凭证：钥匙串优先，`~/.claude/.credentials.json` 兜底
     /// （钥匙串不可用时 Claude Code 会落到这个明文文件）。
     ///
-    /// 刷新链路传 `allowInteraction: false`：ACL 里还没有 TokenBar 时立刻拿到 `.unavailable`，
-    /// 绝不弹框；设置页「读取本地 CLI 授权」按钮传 true，用户点一次「始终允许」后永久静默。
-    /// `keychainDenied` 只在 OSStatus 是真正的 ACL 拒时为 true，供设置页给出对症的提示。
-    public func readClaudeCodeCredential(allowInteraction: Bool) async -> (credential: ClaudeCodeCredential?, keychainDenied: Bool) {
-        let result = await KeychainSecretStore.shared.readForeignDetailedAsync(
-            service: Self.claudeCodeKeychainService,
-            account: Self.claudeCodeKeychainAccount(),
-            allowInteraction: allowInteraction
-        )
-        if case .found(let raw) = result.lookup, let credential = Self.parseClaudeCodeCredential(raw) {
-            return (credential, false)
+    /// 钥匙串经 `/usr/bin/security find-generic-password -w` 读，与 Claude Code 自己读凭证的方式一致，
+    /// 无需任何授权框。曾经用 SecItem 直读 +「始终允许」：实测授权撑不过一天 —— Claude Code 每次续期
+    /// token 都会重写这个条目，TokenBar 随之失去访问权，此后每轮静默读都被拒（-25293），额度悄悄退回陈旧缓存。
+    public func readClaudeCodeCredential() async -> ClaudeCodeCredential? {
+        let account = Self.claudeCodeKeychainAccount()
+        if let raw = await Self.runSecurityFindPassword(service: Self.claudeCodeKeychainService, account: account),
+           let credential = Self.parseClaudeCodeCredential(Self.decodeSecurityPasswordOutput(raw)) {
+            return credential
         }
-        let denied = result.lookup == .unavailable && result.isACLDenied
-        let fromFile = await Task.detached(priority: .userInitiated) { () -> ClaudeCodeCredential? in
+        return await Task.detached(priority: .userInitiated) { () -> ClaudeCodeCredential? in
             let url = FileManager.default.homeDirectoryForCurrentUser
                 .appendingPathComponent(".claude/.credentials.json")
             guard let data = try? Data(contentsOf: url),
                   let raw = String(data: data, encoding: .utf8) else { return nil }
             return Self.parseClaudeCodeCredential(raw)
         }.value
-        return (fromFile, denied)
+    }
+
+    /// `security find-generic-password -w` 的输出还原成密码原文：内容可打印时它直接输出原文，
+    /// 含不可打印字节时改输出十六进制。Claude Code 用 `-X <hex>` 写入，读回来两种形态都可能出现。
+    static func decodeSecurityPasswordOutput(_ output: String) -> String {
+        let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.hasPrefix("{"),
+              trimmed.count.isMultiple(of: 2),
+              trimmed.range(of: "^[0-9A-Fa-f]+$", options: .regularExpression) != nil else {
+            return trimmed
+        }
+        var bytes = [UInt8]()
+        bytes.reserveCapacity(trimmed.count / 2)
+        var index = trimmed.startIndex
+        while index < trimmed.endIndex {
+            let next = trimmed.index(index, offsetBy: 2)
+            guard let byte = UInt8(trimmed[index..<next], radix: 16) else { return trimmed }
+            bytes.append(byte)
+            index = next
+        }
+        return String(bytes: bytes, encoding: .utf8) ?? trimmed
+    }
+
+    /// 在后台跑 `/usr/bin/security find-generic-password -s <service> -a <account> -w`，返回 stdout；
+    /// 条目不存在（退出码 44）、失败或超时返回 nil。Process 是同步阻塞调用，绝不能放在 MainActor 上
+    /// （见 ARCH 2.2.1）；看门狗与「先读到 EOF 再 waitUntilExit」的顺序沿用 AliyunBailianService.fetchViaCLI。
+    private static func runSecurityFindPassword(service: String, account: String, timeout: TimeInterval = 5) async -> String? {
+        await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+                process.arguments = ["find-generic-password", "-s", service, "-a", account, "-w"]
+                let stdout = Pipe()
+                process.standardOutput = stdout
+                process.standardError = FileHandle.nullDevice
+                process.standardInput = FileHandle.nullDevice
+
+                do {
+                    try process.run()
+                } catch {
+                    Log.provider.error("provider=claude 启动 security 失败: \(error.localizedDescription, privacy: .public)")
+                    continuation.resume(returning: nil)
+                    return
+                }
+
+                // 看门狗只负责杀进程，resume 路径始终唯一
+                let watchdog = DispatchWorkItem {
+                    guard process.isRunning else { return }
+                    Log.provider.error("provider=claude security 读凭证超时 \(timeout, format: .fixed(precision: 0))s，terminate")
+                    process.terminate()
+                }
+                DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: watchdog)
+
+                let data = stdout.fileHandleForReading.readDataToEndOfFile()
+                process.waitUntilExit()
+                watchdog.cancel()
+
+                guard process.terminationReason == .exit, process.terminationStatus == 0 else {
+                    if process.terminationStatus != 44 {
+                        Log.provider.notice("provider=claude security 读凭证失败 status=\(process.terminationStatus, privacy: .public)")
+                    }
+                    continuation.resume(returning: nil)
+                    return
+                }
+                continuation.resume(returning: String(data: data, encoding: .utf8))
+            }
+        }
     }
 
     /// Fetch latest usage statistics from Anthropic OAuth usage API

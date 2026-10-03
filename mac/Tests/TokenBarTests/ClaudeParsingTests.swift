@@ -150,4 +150,18 @@ final class ClaudeParsingTests: XCTestCase {
         XCTAssertEqual(ClaudeService.claudeCodeKeychainAccount(environment: ["USER": "张 三"]), "claude-code-user")
         XCTAssertEqual(ClaudeService.claudeCodeKeychainAccount(environment: ["USER": ""]), "claude-code-user")
     }
+
+    func testDecodeSecurityPasswordOutput() throws {
+        // 可打印内容：security -w 原样输出（带换行）
+        let json = #"{"claudeAiOauth":{"accessToken":"t","expiresAt":1790966400000}}"#
+        XCTAssertEqual(ClaudeService.decodeSecurityPasswordOutput(json + "\n"), json)
+        // 含不可打印字节时 security -w 改输出十六进制：要还原成原文再解析
+        let hex = json.utf8.map { String(format: "%02x", $0) }.joined()
+        XCTAssertEqual(ClaudeService.decodeSecurityPasswordOutput(hex + "\n"), json)
+        let credential = try XCTUnwrap(ClaudeService.parseClaudeCodeCredential(ClaudeService.decodeSecurityPasswordOutput(hex)))
+        XCTAssertEqual(credential.accessToken, "t")
+        // 不是合法十六进制（奇数长度 / 非 hex 字符）：原样返回，交给 JSON 解析去判失败
+        XCTAssertEqual(ClaudeService.decodeSecurityPasswordOutput("abc"), "abc")
+        XCTAssertEqual(ClaudeService.decodeSecurityPasswordOutput("not-hex!"), "not-hex!")
+    }
 }

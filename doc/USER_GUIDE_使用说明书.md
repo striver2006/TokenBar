@@ -92,8 +92,8 @@ TokenBar 独家支持双重模式：
 - **方式一：Anthropic API Key**：
   - 在 [Anthropic Console](https://console.anthropic.com) 生成 `sk-ant-...` 密钥，粘贴后点击保存。
 - **方式二：Claude Code 订阅授权 (推荐)**：
-  - **自动读取本地**：若您在终端中已登录过 Claude Code CLI，TokenBar 会用 Claude Code 自己的登录凭证**实时查询**额度。macOS 上首次需在设置页点击「读取本地 CLI 授权」，并在系统弹窗中点「**始终允许**」（允许 TokenBar 读取钥匙串里的 Claude Code 凭证），之后自动静默刷新；Windows 无需授权，自动生效。TokenBar 只使用凭证里的 access token，不会影响 Claude Code 本身的登录状态。
-  - **本地缓存兜底**：凭证暂时不可用（未授权、已过期、网络异常）时，TokenBar 退回读取 `~/.claude.json` 中 Claude Code 留下的用量缓存，卡片底部会注明「来自 Claude Code 本地缓存 · N 分钟前」。这份缓存只在 Claude Code 自己查询用量时更新，可能不是最新数据；在终端运行一次 `claude` 后通常会恢复实时查询。
+  - **自动读取本地**：若您在终端中已登录过 Claude Code CLI，TokenBar 会用 Claude Code 自己的登录凭证**实时查询**额度，macOS 与 Windows 均自动生效、无需任何授权操作；点击「读取本地 CLI 授权」可立即刷新一次并查看当前是否为实时数据。TokenBar 只使用凭证里的 access token，不会影响 Claude Code 本身的登录状态。
+  - **本地缓存兜底**：凭证暂时不可用（已过期、网络异常）时，TokenBar 退回读取 `~/.claude.json` 中 Claude Code 留下的用量缓存，卡片底部会注明「来自 Claude Code 本地缓存 · N 分钟前」。这份缓存只在 Claude Code 自己查询用量时更新，可能不是最新数据；在终端运行一次 `claude` 后通常会恢复实时查询。
   - **网页登录授权**：点击「网站登录授权」，在弹出窗口完成登录即可完成绑定。
   - **模型专属周额度**：若您的套餐包含某模型的独立周额度（如 Fable），Claude 卡片会在 5 小时 / 每周额度之外单独一行显示该模型的剩余比例与重置时间。
 
