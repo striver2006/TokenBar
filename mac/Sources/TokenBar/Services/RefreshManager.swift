@@ -144,6 +144,9 @@ extension ProviderRefreshDescriptor {
         secretKey: .openAIApiKey, missingKeyMessage: .errMissingOpenAIKey,
         apiKey: { $0.openAIApiKey },
         fetch: { settings in
+            if settings.openAIUseCodexSubscription {
+                return try await CodexService.shared.fetchQuota(executablePath: settings.codexExecutablePath)
+            }
             let res = try await OpenAIService.shared.fetchQuota(
                 apiKey: settings.openAIApiKey, endpoint: settings.openAIEndpoint,
                 organizationId: settings.openAIOrgId)
@@ -879,11 +882,24 @@ public final class RefreshManager: ObservableObject {
     /// 由 `commit(_:for:gen:)` 统一保证，不在描述符里。
     private func runSimpleRefresh(_ spec: ProviderRefreshDescriptor) async {
         let gen = refreshGeneration
+        let subscriptionMode = settings.openAIUseCodexSubscription
+        let codexPath = settings.codexExecutablePath
+        let fetchSettings = settings
+        func isCurrentOpenAIConfiguration() -> Bool {
+            spec.type != .openAI || (settings.openAIUseCodexSubscription == subscriptionMode
+                && settings.codexExecutablePath == codexPath)
+        }
         var quota = quotas[spec.type] ?? ProviderQuota(provider: spec.type)
+        // A failed query in a newly selected mode must not display the previous mode's quota.
+        if spec.type == .openAI && quota.isAuthorized
+            && subscriptionMode != (quota.accountInfo?.hasPrefix("Codex · ") == true) {
+            quota = ProviderQuota(provider: spec.type)
+        }
         quota = SimpleQuotaTransition.beginLoading(quota)
         commit(quota, for: spec.type, gen: gen)
 
-        guard !spec.apiKey(settings).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        guard (spec.type == .openAI && subscriptionMode)
+            || !spec.apiKey(settings).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             let message = I18n(missingKeyMessage(key: spec.secretKey, missing: spec.missingKeyMessage))
             quota = SimpleQuotaTransition.missingKey(quota, message: message)
             quota = SimpleQuotaTransition.finishLoading(quota)
@@ -892,7 +908,8 @@ public final class RefreshManager: ObservableObject {
         }
 
         do {
-            let res = try await spec.fetch(settings)
+            let res = try await spec.fetch(fetchSettings)
+            guard isCurrentOpenAIConfiguration() else { return }
             quota = SimpleQuotaTransition.success(
                 quota,
                 fiveHour: res.fiveHour,
@@ -918,6 +935,7 @@ public final class RefreshManager: ObservableObject {
                 }
             }
         } catch {
+            guard isCurrentOpenAIConfiguration() else { return }
             // Key 已配置的失败按「刷新失败」处理（可能是网络未就绪），不算未配置
             quota = SimpleQuotaTransition.failure(quota, message: error.localizedDescription)
             Log.provider.error("provider=\(spec.logName, privacy: .public) failed: \(error.localizedDescription)")

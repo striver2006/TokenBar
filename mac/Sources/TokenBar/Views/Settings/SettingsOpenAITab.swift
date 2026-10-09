@@ -18,6 +18,7 @@ struct SettingsOpenAITab: View {
     @State private var openAIKeyInput: String
     @State private var openAIEndpointInput: String
     @State private var openAIOrgInput: String
+    @State private var codexPathInput: String
     @State private var isOpenAIKeyVisible: Bool = false
 
     init(refreshManager: RefreshManager,
@@ -31,6 +32,7 @@ struct SettingsOpenAITab: View {
         _openAIKeyInput = State(initialValue: refreshManager.settings.openAIApiKey)
         _openAIEndpointInput = State(initialValue: refreshManager.settings.openAIEndpoint)
         _openAIOrgInput = State(initialValue: refreshManager.settings.openAIOrgId)
+        _codexPathInput = State(initialValue: refreshManager.settings.codexExecutablePath)
     }
 
     var body: some View {
@@ -40,9 +42,9 @@ struct SettingsOpenAITab: View {
                     .font(.system(size: 24))
                     .foregroundColor(ProviderType.openAI.themeColor)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(I18n(.openAITitle))
+                    Text("OpenAI / Codex")
                         .font(.system(size: 15, weight: .bold))
-                    Text(I18n(.openAISubtitle))
+                    Text(isZh ? "查询 API 速率限制或 Codex 订阅额度" : "Monitor API rate limits or Codex subscription quotas")
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
                 }
@@ -76,56 +78,78 @@ struct SettingsOpenAITab: View {
             .background(Color.primary.opacity(0.04))
             .cornerRadius(8)
 
-            // OpenAI API Key
-            VStack(alignment: .leading, spacing: 6) {
-                Text(I18n(.apiKeyLabel))
-                    .font(.system(size: 12, weight: .medium))
+            Picker(isZh ? "查询模式" : "Quota mode", selection: $refreshManager.settings.openAIUseCodexSubscription) {
+                Text("API").tag(false)
+                Text(isZh ? "Codex 订阅" : "Codex subscription").tag(true)
+            }
+            .pickerStyle(.segmented)
+            .onChange(of: refreshManager.settings.openAIUseCodexSubscription) { _ in
+                refreshManager.saveSettings()
+                Task { await refreshManager.refreshOpenAI() }
+            }
 
-                HStack {
-                    if isOpenAIKeyVisible {
-                        TextField(I18n(.placeholderApiKeyOpenAI), text: $openAIKeyInput)
-                            .textFieldStyle(.roundedBorder)
-                    } else {
-                        SecureField(I18n(.placeholderApiKeyOpenAI), text: $openAIKeyInput)
-                            .textFieldStyle(.roundedBorder)
+            if refreshManager.settings.openAIUseCodexSubscription {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(isZh ? "复用本机 Codex 的 ChatGPT 登录，查询订阅额度与重置时间。请先在 Codex 中登录订阅账号，或运行 codex login。" : "Uses your local Codex ChatGPT login to read subscription quotas and reset times. Sign in to Codex or run codex login first.")
+                        .font(.system(size: 11)).foregroundColor(.secondary)
+                    Text(isZh ? "Codex 可执行文件路径（可选）" : "Codex executable path (optional)")
+                        .font(.system(size: 12, weight: .medium))
+                    TextField(isZh ? "留空自动检测" : "Leave empty to auto-detect", text: $codexPathInput)
+                        .textFieldStyle(.roundedBorder)
+                }
+            } else {
+                // OpenAI API Key
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(I18n(.apiKeyLabel))
+                        .font(.system(size: 12, weight: .medium))
+
+                    HStack {
+                        if isOpenAIKeyVisible {
+                            TextField(I18n(.placeholderApiKeyOpenAI), text: $openAIKeyInput)
+                                .textFieldStyle(.roundedBorder)
+                        } else {
+                            SecureField(I18n(.placeholderApiKeyOpenAI), text: $openAIKeyInput)
+                                .textFieldStyle(.roundedBorder)
+                        }
+
+                        Button {
+                            isOpenAIKeyVisible.toggle()
+                        } label: {
+                            Image(systemName: isOpenAIKeyVisible ? "eye.slash" : "eye")
+                        }
+                        .buttonStyle(.borderless)
                     }
 
-                    Button {
-                        isOpenAIKeyVisible.toggle()
-                    } label: {
-                        Image(systemName: isOpenAIKeyVisible ? "eye.slash" : "eye")
-                    }
-                    .buttonStyle(.borderless)
+                    Text(I18n(.hintOpenAIKey))
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
                 }
 
-                Text(I18n(.hintOpenAIKey))
-                    .font(.system(size: 10))
-                    .foregroundColor(.secondary)
-            }
+                // Endpoint
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(I18n(.apiEndpointLabel))
+                        .font(.system(size: 12, weight: .medium))
 
-            // Endpoint
-            VStack(alignment: .leading, spacing: 6) {
-                Text(I18n(.apiEndpointLabel))
-                    .font(.system(size: 12, weight: .medium))
+                    TextField("https://api.openai.com/v1", text: $openAIEndpointInput)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 11))
 
-                TextField("https://api.openai.com/v1", text: $openAIEndpointInput)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 11))
+                    Text(I18n(.hintOpenAIEndpoint))
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                }
 
-                Text(I18n(.hintOpenAIEndpoint))
-                    .font(.system(size: 10))
-                    .foregroundColor(.secondary)
-            }
+                // Organization ID (Optional)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(I18n(.orgIdLabel))
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
 
-            // Organization ID (Optional)
-            VStack(alignment: .leading, spacing: 6) {
-                Text(I18n(.orgIdLabel))
-                    .font(.system(size: 11))
-                    .foregroundColor(.secondary)
+                    TextField(I18n(.placeholderOrgId), text: $openAIOrgInput)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 11))
+                }
 
-                TextField(I18n(.placeholderOrgId), text: $openAIOrgInput)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 11))
             }
 
             // Save & Test
@@ -134,12 +158,16 @@ struct SettingsOpenAITab: View {
                     refreshManager.settings.openAIApiKey = openAIKeyInput
                     refreshManager.settings.openAIEndpoint = openAIEndpointInput
                     refreshManager.settings.openAIOrgId = openAIOrgInput
+                    refreshManager.settings.codexExecutablePath = codexPathInput.trimmingCharacters(in: .whitespacesAndNewlines)
                     refreshManager.saveSettings()
 
                     Task {
                         await refreshManager.refreshOpenAI()
-                        if refreshManager.quotas[.openAI]?.isAuthorized == true {
-                            statusAlertMessage = I18n(.alertOpenAISuccess)
+                        if refreshManager.quotas[.openAI]?.isAuthorized == true
+                            && refreshManager.quotas[.openAI]?.hadRefreshError == false {
+                            statusAlertMessage = refreshManager.settings.openAIUseCodexSubscription
+                                ? (isZh ? "Codex 订阅额度查询成功" : "Codex subscription quotas loaded")
+                                : I18n(.alertOpenAISuccess)
                         } else {
                             statusAlertMessage = "\(I18n(.alertOpenAIFailed))\(refreshManager.quotas[.openAI]?.errorMessage ?? I18n(.alertUnknownError))"
                         }
@@ -161,10 +189,14 @@ struct SettingsOpenAITab: View {
         .onChange(of: refreshManager.settings.openAIApiKey) { openAIKeyInput = $0 }
         .onChange(of: refreshManager.settings.openAIEndpoint) { openAIEndpointInput = $0 }
         .onChange(of: refreshManager.settings.openAIOrgId) { openAIOrgInput = $0 }
+        .onChange(of: refreshManager.settings.codexExecutablePath) { codexPathInput = $0 }
         .onChange(of: openCount) { _ in syncFromSettings() }
     }
 
+    private var isZh: Bool { i18n.effectiveLanguage == "zh" }
+
     private func syncFromSettings() {
+        codexPathInput = refreshManager.settings.codexExecutablePath
         openAIKeyInput = refreshManager.settings.openAIApiKey
         openAIEndpointInput = refreshManager.settings.openAIEndpoint
         openAIOrgInput = refreshManager.settings.openAIOrgId

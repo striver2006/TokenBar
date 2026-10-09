@@ -80,7 +80,16 @@
 
 在状态看板底部点击齿轮图标，或通过右键菜单进入「偏好设置」。
 
-### 3.1 OpenAI 配置
+### 3.1 OpenAI / Codex 配置
+
+**Codex 订阅模式**（ChatGPT 订阅账号）：
+1. 在本机 Codex 中登录订阅账号，或安装 Codex CLI 后运行 `codex login`，选择 ChatGPT 登录。
+2. 在 TokenBar 的 OpenAI 设置页启用监控，选择「Codex 订阅」。无需填写 API Key。
+3. 可执行文件路径留空时，macOS 自动查找 PATH、常见 CLI 安装位置、Codex.app 和 VS Code 的 Codex 扩展；Windows 从 PATH 查找 `codex.exe`。找不到时填写可执行文件的绝对路径。
+4. 点击「保存并测试连接」，额度卡片显示服务端返回的使用比例和重置时间。窗口可能只有一个，也可能包含短周期和每周额度；不会补造服务端未返回的额度。
+5. TokenBar 使用官方 `account/read` 和 `account/rateLimits/read` 接口；登录凭证及刷新由 Codex 管理，查询不发起模型对话。未登录、API Key 登录、网络失败、旧版 Codex 不支持接口时会显示错误提示。可重新运行 `codex login` 或更新 Codex 后重试。
+
+**API 模式**（独立 API Key）：
 1. 登录 [OpenAI Platform](https://platform.openai.com) -> 进入 **API Keys**。
 2. 创建新的 Secret Key（格式如 `sk-...` 或 `sk-proj-...`）。
 3. 在 TokenBar 的 OpenAI 设置页粘贴 Key。

@@ -630,7 +630,9 @@ namespace TokenBar.Services
             ApiKey = s => s.OpenAIApiKey,
             MissingKeyZh = "请在配置中输入 OpenAI API Key",
             MissingKeyEn = "Please configure OpenAI API Key",
-            Fetch = (m, ct) => OpenAIService.Instance.FetchQuotaAsync(
+            Fetch = (m, ct) => m.Settings.OpenAIUseCodexSubscription
+                ? CodexService.FetchQuotaAsync(m.Settings.CodexExecutablePath, ct)
+                : OpenAIService.Instance.FetchQuotaAsync(
                 m.Settings.OpenAIApiKey,
                 m.Settings.OpenAIEndpoint,
                 m.Settings.OpenAIOrgId,
@@ -718,11 +720,26 @@ namespace TokenBar.Services
         private async Task RefreshSimpleProviderCoreAsync(SimpleProviderSpec spec, CancellationToken ct, long? generation)
         {
             var quota = Quotas[spec.Provider];
+            var subscriptionMode = Settings.OpenAIUseCodexSubscription;
+            var codexPath = Settings.CodexExecutablePath;
+            bool IsCurrentOpenAIConfiguration() => spec.Provider != ProviderType.OpenAI
+                || (Settings.OpenAIUseCodexSubscription == subscriptionMode && Settings.CodexExecutablePath == codexPath);
+            if (spec.Provider == ProviderType.OpenAI && quota.IsAuthorized
+                && subscriptionMode != (quota.AccountInfo?.StartsWith("Codex · ", StringComparison.Ordinal) == true))
+            {
+                quota.FiveHourWindow = null;
+                quota.WeeklyWindow = null;
+                quota.AccountInfo = null;
+                quota.IsAuthorized = false;
+                quota.HadRefreshError = false;
+                quota.LastUpdated = null;
+            }
             quota.IsLoading = true;
             quota.ErrorMessage = null;
             NotifyQuotasUpdated();
 
-            if (string.IsNullOrWhiteSpace(spec.ApiKey(Settings)))
+            if (!(spec.Provider == ProviderType.OpenAI && subscriptionMode)
+                && string.IsNullOrWhiteSpace(spec.ApiKey(Settings)))
             {
                 quota.IsAuthorized = false;
                 quota.ErrorMessage = LocalizationManager.Instance.IsChinese ? spec.MissingKeyZh : spec.MissingKeyEn;
@@ -735,7 +752,7 @@ namespace TokenBar.Services
             {
                 var (primary, secondary, account) = await spec.Fetch(this, ct);
 
-                if (IsStaleGeneration(generation, spec.Name)) return;
+                if (IsStaleGeneration(generation, spec.Name) || !IsCurrentOpenAIConfiguration()) return;
 
                 quota.FiveHourWindow = primary;
                 quota.WeeklyWindow = secondary;
@@ -749,7 +766,7 @@ namespace TokenBar.Services
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex)
             {
-                if (IsStaleGeneration(generation, spec.Name)) return;
+                if (IsStaleGeneration(generation, spec.Name) || !IsCurrentOpenAIConfiguration()) return;
                 // Key 已配置的失败按「刷新失败」处理：可能是开机网络未就绪等瞬时故障，
                 // 打回未授权会让卡片显示「去配置」误导用户。授权态与旧数据保留，成功后回落。
                 quota.HadRefreshError = true;

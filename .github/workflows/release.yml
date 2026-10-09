@@ -32,6 +32,10 @@ jobs:
         with:
           dotnet-version: 8.0.x
 
+      - name: Test Windows
+        if: matrix.rid == 'win-x64'
+        run: dotnet test windows/tests/TokenBar.Tests/TokenBar.Tests.csproj -c Release
+
       # 注意：必须 IncludeNativeLibrariesForSelfExtract=false，让 wpfgfx_cor3.dll 等原生库
       # 随 exe 同目录分发。若打进单文件，运行时会解压到 %TEMP%，被系统清理工具删掉后
       # 会触发 "System.DllNotFoundException: Dll was not found"（WPF 渲染崩溃）。
@@ -69,6 +73,9 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
+
+      - name: Test macOS
+        run: swift test --package-path mac
 
       - name: Build TokenBar.app (arm64 + x86_64)
         run: bash mac/Scripts/build_app.sh

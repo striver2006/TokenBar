@@ -228,8 +228,11 @@ namespace TokenBar.Views
             TxtNavGeneral.Text = i18n.GeneralSettings;
 
             // Tab 0: OpenAI
-            TxtOpenAITitle.Text = i18n.OpenAITitle;
-            TxtOpenAISubtitle.Text = i18n.OpenAISubtitle;
+            TxtOpenAITitle.Text = "OpenAI / Codex";
+            ItemCodexSubscription.Content = i18n.IsChinese ? "Codex 订阅" : "Codex subscription";
+            TxtCodexHint.Text = i18n.IsChinese ? "复用本机 Codex 的 ChatGPT 登录，查询订阅额度与重置时间。请先运行 codex login。路径留空时从 PATH 查找 codex.exe。" : "Uses your local Codex ChatGPT login to read subscription quotas and reset times. Run codex login first. An empty path looks for codex.exe on PATH.";
+            TxtCodexPathLabel.Text = i18n.IsChinese ? "Codex 可执行文件路径（可选）" : "Codex executable path (optional)";
+            TxtOpenAISubtitle.Text = i18n.IsChinese ? "查询 API 速率限制或 Codex 订阅额度" : "Monitor API rate limits or Codex subscription quotas";
             ChkOpenAIEnabled.Content = i18n.EnableMonitoring;
             TxtOpenAIKeyLabel.Text = i18n.ApiKeyLabel;
             TxtOpenAIKeyHint.Text = i18n.HintOpenAIKey;
@@ -449,6 +452,9 @@ namespace TokenBar.Views
             TxtOpenAIKey.Text = s.OpenAIApiKey;
             TxtOpenAIEndpoint.Text = s.OpenAIEndpoint;
             TxtOpenAIOrgId.Text = s.OpenAIOrgId;
+            CmbOpenAIMode.SelectedIndex = s.OpenAIUseCodexSubscription ? 1 : 0;
+            TxtCodexPath.Text = s.CodexExecutablePath;
+            UpdateOpenAIMode();
 
             // Anthropic
             ChkClaudeEnabled.IsChecked = s.ClaudeEnabled;
@@ -536,6 +542,8 @@ namespace TokenBar.Views
             s.OpenAIApiKey = TxtOpenAIKey.Text.Trim();
             s.OpenAIEndpoint = TxtOpenAIEndpoint.Text.Trim();
             s.OpenAIOrgId = TxtOpenAIOrgId.Text.Trim();
+            s.OpenAIUseCodexSubscription = CmbOpenAIMode.SelectedIndex == 1;
+            s.CodexExecutablePath = TxtCodexPath.Text.Trim();
 
             s.ClaudeEnabled = ChkClaudeEnabled.IsChecked == true;
             s.AnthropicApiKey = TxtAnthropicKey.Text.Trim();
@@ -663,14 +671,26 @@ namespace TokenBar.Views
 
         // ==================== Actions ====================
 
+        private void CmbOpenAIMode_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e) => UpdateOpenAIMode();
+
+        private void UpdateOpenAIMode()
+        {
+            if (PnlCodexSubscription == null || PnlOpenAIApi == null) return;
+            bool subscription = CmbOpenAIMode.SelectedIndex == 1;
+            PnlCodexSubscription.Visibility = subscription ? Visibility.Visible : Visibility.Collapsed;
+            PnlOpenAIApi.Visibility = subscription ? Visibility.Collapsed : Visibility.Visible;
+        }
+
         private async void BtnTestOpenAI_Click(object sender, RoutedEventArgs e)
         {
             SyncToSettings();
             await RefreshManager.Instance.RefreshOpenAIAsync();
             var q = RefreshManager.Instance.Quotas[ProviderType.OpenAI];
             var i18n = LocalizationManager.Instance;
-            if (q.IsAuthorized)
-                MessageBox.Show(i18n.IsChinese ? "OpenAI 授权连接成功！已检测到接口状态与可用模型。" : "OpenAI connection successful! API status and models detected.", i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Information);
+            if (q.IsAuthorized && !q.HadRefreshError)
+                MessageBox.Show(RefreshManager.Instance.Settings.OpenAIUseCodexSubscription
+                    ? (i18n.IsChinese ? "Codex 订阅额度查询成功" : "Codex subscription quotas loaded")
+                    : (i18n.IsChinese ? "OpenAI 授权连接成功！已检测到接口状态与可用模型。" : "OpenAI connection successful! API status and models detected."), i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Information);
             else
                 MessageBox.Show(i18n.IsChinese ? $"OpenAI 连接失败: {q.ErrorMessage}" : $"OpenAI connection failed: {q.ErrorMessage}", i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Warning);
         }

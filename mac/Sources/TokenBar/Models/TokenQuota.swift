@@ -811,6 +811,8 @@ public struct AppSettings: Codable {
 
     public var openAIApiKey: String
     public var openAIEndpoint: String
+    public var openAIUseCodexSubscription: Bool
+    public var codexExecutablePath: String
     public var openAIOrgId: String
 
     public var anthropicApiKey: String
@@ -889,6 +891,8 @@ public struct AppSettings: Codable {
 
         case openAIApiKey
         case openAIEndpoint
+        case openAIUseCodexSubscription
+        case codexExecutablePath
         case openAIOrgId
 
         case anthropicApiKey
@@ -952,6 +956,8 @@ public struct AppSettings: Codable {
         aliyunBalanceAlertThreshold: Double = 10,
         openAIApiKey: String = "",
         openAIEndpoint: String = "https://api.openai.com/v1",
+        openAIUseCodexSubscription: Bool = false,
+        codexExecutablePath: String = "",
         openAIOrgId: String = "",
         anthropicApiKey: String = "",
         anthropicEndpoint: String = "https://api.anthropic.com/v1",
@@ -1007,6 +1013,8 @@ public struct AppSettings: Codable {
         self.aliyunBalanceAlertThreshold = aliyunBalanceAlertThreshold
         self.openAIApiKey = openAIApiKey
         self.openAIEndpoint = openAIEndpoint
+        self.openAIUseCodexSubscription = openAIUseCodexSubscription
+        self.codexExecutablePath = codexExecutablePath
         self.openAIOrgId = openAIOrgId
         self.anthropicApiKey = anthropicApiKey
         self.anthropicEndpoint = anthropicEndpoint
@@ -1067,6 +1075,8 @@ public struct AppSettings: Codable {
 
         self.openAIApiKey = try container.decodeIfPresent(String.self, forKey: .openAIApiKey) ?? ""
         self.openAIEndpoint = try container.decodeIfPresent(String.self, forKey: .openAIEndpoint) ?? "https://api.openai.com/v1"
+        self.openAIUseCodexSubscription = try container.decodeIfPresent(Bool.self, forKey: .openAIUseCodexSubscription) ?? false
+        self.codexExecutablePath = try container.decodeIfPresent(String.self, forKey: .codexExecutablePath) ?? ""
         self.openAIOrgId = try container.decodeIfPresent(String.self, forKey: .openAIOrgId) ?? ""
 
         self.anthropicApiKey = try container.decodeIfPresent(String.self, forKey: .anthropicApiKey) ?? ""
@@ -1128,6 +1138,8 @@ public struct AppSettings: Codable {
         try c.encode(aliyunReuseCLIConfig, forKey: .aliyunReuseCLIConfig)
         try c.encode(aliyunBalanceAlertThreshold, forKey: .aliyunBalanceAlertThreshold)
         try c.encode(openAIEndpoint, forKey: .openAIEndpoint)
+        try c.encode(openAIUseCodexSubscription, forKey: .openAIUseCodexSubscription)
+        try c.encode(codexExecutablePath, forKey: .codexExecutablePath)
         try c.encode(openAIOrgId, forKey: .openAIOrgId)
         try c.encode(anthropicEndpoint, forKey: .anthropicEndpoint)
         try c.encode(geminiEndpoint, forKey: .geminiEndpoint)

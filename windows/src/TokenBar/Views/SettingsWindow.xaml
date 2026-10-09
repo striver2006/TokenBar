@@ -175,6 +175,16 @@
                             </DockPanel>
                         </Border>
 
+                        <ComboBox x:Name="CmbOpenAIMode" SelectedIndex="0" Margin="0,0,0,14" SelectionChanged="CmbOpenAIMode_SelectionChanged">
+                            <ComboBoxItem Content="API"/>
+                            <ComboBoxItem x:Name="ItemCodexSubscription" Content="Codex 订阅"/>
+                        </ComboBox>
+                        <StackPanel x:Name="PnlCodexSubscription" Visibility="Collapsed">
+                            <TextBlock x:Name="TxtCodexHint" TextWrapping="Wrap" FontSize="11" Foreground="#6B7280" Margin="0,0,0,10"/>
+                            <TextBlock x:Name="TxtCodexPathLabel" FontSize="12" Margin="0,0,0,6"/>
+                            <TextBox x:Name="TxtCodexPath" Padding="6" Margin="0,0,0,18"/>
+                        </StackPanel>
+                        <StackPanel x:Name="PnlOpenAIApi">
                         <TextBlock x:Name="TxtOpenAIKeyLabel" TextWrapping="Wrap" Text="OpenAI API KEY" FontWeight="Medium" FontSize="12" Margin="0,0,0,6"/>
                         <TextBox x:Name="TxtOpenAIKey" Margin="0,0,0,4" Padding="6"/>
                         <TextBlock x:Name="TxtOpenAIKeyHint" TextWrapping="Wrap" Text="可在 OpenAI Platform (platform.openai.com) -> API Keys 中生成。" FontSize="10" Foreground="#6B7280" Margin="0,0,0,14"/>
@@ -186,6 +196,7 @@
                         <TextBlock x:Name="TxtOpenAIOrgIdLabel" TextWrapping="Wrap" Text="组织 ID (OpenAI-Organization, 可选)" FontWeight="Medium" FontSize="12" Margin="0,0,0,6"/>
                         <TextBox x:Name="TxtOpenAIOrgId" Margin="0,0,0,18" Padding="6"/>
 
+                        </StackPanel>
                         <Button x:Name="BtnTestOpenAI" Content="保存并测试连接" Width="140" Height="32" HorizontalAlignment="Left"
                                 Background="#2563EB" Foreground="White" BorderThickness="0" Cursor="Hand" Click="BtnTestOpenAI_Click"/>
                     </StackPanel>

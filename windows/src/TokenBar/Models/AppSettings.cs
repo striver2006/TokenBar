@@ -54,6 +54,8 @@ namespace TokenBar.Models
         public bool OpenAIEnabled { get; set; } = false;
         public string OpenAIApiKey { get; set; } = string.Empty;
         public string OpenAIEndpoint { get; set; } = "https://api.openai.com/v1";
+        public bool OpenAIUseCodexSubscription { get; set; } = false;
+        public string CodexExecutablePath { get; set; } = string.Empty;
         public string OpenAIOrgId { get; set; } = string.Empty;
 
         public bool ClaudeEnabled { get; set; } = true;
