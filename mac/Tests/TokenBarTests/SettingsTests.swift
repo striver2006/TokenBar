@@ -196,6 +196,15 @@ final class SettingsTests: XCTestCase {
         XCTAssertEqual(legacyDecoded.menuBarMetric, .auto)
     }
 
+    func testGeminiOwnAccountRoundTrip() throws {
+        // 自有 Google 登录的账号以前只解码不编码：每次保存都被丢掉，重启后设置页显示未登录
+        var settings = AppSettings()
+        settings.geminiOwnAccount = "someone@example.com"
+        settings.secretsInKeychain = true
+        let decoded = try JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(settings))
+        XCTAssertEqual(decoded.geminiOwnAccount, "someone@example.com", "账号是邮箱不是凭证，凭证进钥匙串后也要落盘")
+    }
+
     // MARK: - AppSettings 的阿里云 AK/SK 字段
 
     func testAliyunAccessKeyFieldsRoundTrip() throws {

@@ -553,6 +553,11 @@ public actor GeminiService {
 
         pendingLoginClient = nil
         await persistWorkingClient(client)
+        // 落自有钥匙串条目：以前只放内存，App 一重启自有登录就丢，又退回 Antigravity 链路。
+        // 写失败也保留内存值（本次运行照常可用），只记 error，别为此让整个登录失败。
+        if await KeychainSecretStore.shared.setAsync(refreshToken, for: Self.ownRefreshTokenKey) == false {
+            Log.provider.error("provider=gemini 自有登录 refresh_token 写入钥匙串失败，重启后需重新登录")
+        }
         ownRefreshTokenCache = refreshToken
         ownRefreshTokenLoaded = true
         let accessToken = json["access_token"] as? String
@@ -797,6 +802,9 @@ public actor GeminiService {
     }
 
     /// 自有登录凭证的完整路径：刷新 → 配额 → 账号，任何一环失败都按阶段抛 `CredentialError`。
+    ///
+    /// 返回值里的 refreshToken 恒为 nil：它供调用方快照进 `geminiRefreshToken`（Antigravity 链路的兜底槽），
+    /// 自有 token 已在自己的钥匙串条目里，交出去只会覆盖掉 Antigravity 的快照。
     private func fetchQuotaWithOwnCredential(_ refreshToken: String) async throws -> (fiveHour: TokenWindow?, weekly: TokenWindow?, account: String?, refreshToken: String?) {
         let accessToken: String
         if let cached = cachedAccessToken, Date() < cachedAccessTokenExpiry {
@@ -818,7 +826,7 @@ public actor GeminiService {
                 ownAccountHint = fetched
             }
             let account = ownAccountHint ?? (isZh ? "Google 账号" : "Google Account")
-            return (fiveHour, weekly, account, refreshToken)
+            return (fiveHour, weekly, account, nil)
         } catch is QuotaAuthError {
             // 缓存的 token 刚好跨过过期线：强制刷新一次再试；仍被拒才判 quotaRejected。
             cachedAccessToken = nil
@@ -831,7 +839,7 @@ public actor GeminiService {
                         ownAccountHint = fetched
                     }
                     let account = ownAccountHint ?? (isZh ? "Google 账号" : "Google Account")
-                    return (fiveHour, weekly, account, refreshToken)
+                    return (fiveHour, weekly, account, nil)
                 } catch is QuotaAuthError {
                     throw CredentialError(.quotaRejected)
                 }

@@ -107,6 +107,9 @@ TokenBar 独家支持双重模式：
   - **模型专属周额度**：若您的套餐包含某模型的独立周额度（如 Fable），Claude 卡片会在 5 小时 / 每周额度之外单独一行显示该模型的剩余比例与重置时间。
 
 ### 3.3 Google Gemini / Google One 配置
+
+macOS v1.7.1 修复了自有 Google 登录的凭证和账号保存：登录成功后，凭证进入专用钥匙串条目，账号信息随设置保存；重启时优先复用该登录，不会覆盖 Antigravity 的备用凭证。如果此前重启后丢失了登录，请升级后重新登录一次。
+
 - **方式一：Google AI Studio API Key (永久有效，推荐)**：
   - 前往 [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey) 获取免费密钥并填入，支持监控 Gemini 模型的 RPM 速率配额与连接状态。
 - **方式二：Google 账号登录 / 本地凭证 (Google One / Antigravity)**：

@@ -1143,6 +1143,8 @@ public struct AppSettings: Codable {
         try c.encode(openAIOrgId, forKey: .openAIOrgId)
         try c.encode(anthropicEndpoint, forKey: .anthropicEndpoint)
         try c.encode(geminiEndpoint, forKey: .geminiEndpoint)
+        // 自有 Google 登录的账号（邮箱，非凭证）。以前漏编码，重启后设置页的登录状态就丢了
+        try c.encode(geminiOwnAccount, forKey: .geminiOwnAccount)
         try c.encode(deepseekEndpoint, forKey: .deepseekEndpoint)
         try c.encode(deepseekModel, forKey: .deepseekModel)
         try c.encode(deepseekBalanceAlertThreshold, forKey: .deepseekBalanceAlertThreshold)

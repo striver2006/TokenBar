@@ -606,13 +606,21 @@ public final class RefreshManager: ObservableObject {
             quotas[.claudeCode] = quota
         }
 
-        // Auto-detect local Gemini if available
-        let localGemini = await GeminiService.shared.readLocalGeminiConfig(storedRefreshToken: settings.geminiRefreshToken)
-        if localGemini.token != nil || localGemini.account != nil {
+        // Auto-detect local Gemini if available。已有自有 Google 登录时不碰 Antigravity 的链路：
+        // 刷新本就不走它，启动时读一次只会多一条注定被拒的钥匙串日志
+        if await GeminiService.shared.hasOwnLogin() {
             var quota = quotas[.gemini] ?? ProviderQuota(provider: .gemini)
             quota.isAuthorized = true
-            quota.accountInfo = localGemini.account
+            if !settings.geminiOwnAccount.isEmpty { quota.accountInfo = settings.geminiOwnAccount }
             quotas[.gemini] = quota
+        } else {
+            let localGemini = await GeminiService.shared.readLocalGeminiConfig(storedRefreshToken: settings.geminiRefreshToken)
+            if localGemini.token != nil || localGemini.account != nil {
+                var quota = quotas[.gemini] ?? ProviderQuota(provider: .gemini)
+                quota.isAuthorized = true
+                quota.accountInfo = localGemini.account
+                quotas[.gemini] = quota
+            }
         }
 
         // Trigger first background refresh
