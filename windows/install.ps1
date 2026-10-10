@@ -123,14 +123,6 @@ Set-ItemProperty -Path $uninstallKey -Name "UninstallString" -Value "powershell.
 Set-ItemProperty -Path $uninstallKey -Name "NoModify" -Value 1 -Type DWord
 Set-ItemProperty -Path $uninstallKey -Name "NoRepair" -Value 1 -Type DWord
 
-# 9. Promote icon in Windows 11 NotifyIconSettings if entry exists
-Get-ChildItem "HKCU:\Control Panel\NotifyIconSettings" -ErrorAction SilentlyContinue | ForEach-Object {
-    $p = Get-ItemProperty $_.PsPath
-    if ($p.ExecutablePath -like "*TokenBar.exe*") {
-        Set-ItemProperty -Path $_.PsPath -Name "IsPromoted" -Value 1 -Type DWord -ErrorAction SilentlyContinue
-    }
-}
-
 Write-Host "`nInstallation completed successfully!" -ForegroundColor Green
 Write-Host "You can launch TokenBar from:"
 Write-Host "  - Windows Start Menu: Search 'TokenBar'"
