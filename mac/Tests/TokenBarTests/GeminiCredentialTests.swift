@@ -167,4 +167,95 @@ final class GeminiCredentialTests: XCTestCase {
         let bodyString = String(data: body, encoding: .utf8)!
         XCTAssertEqual(bodyString, "grant_type=refresh_token&refresh_token=1%2F%2F0g%2Ba%3Db%26c")
     }
+
+    // MARK: - Gemini 配额组解析（retrieveUserQuotaSummary）
+
+    /// 守的是「两个配额端点分组集不同」那次线上事故：daily 端点只回
+    /// "Claude and GPT models" 组，Gemini 组只在 cloudcode-pa 上。旧逻辑首个 2xx
+    /// 即返回，Gemini 组匹配不上就静默退化到只产 5h 窗口的按模型回退——
+    /// 「只有 5 小时额度、没有每周额度」的根因。
+    private func quotaSummaryJSON(groups: [[String: Any]]) -> [String: Any] {
+        var summary: [String: Any] = ["groups": groups]
+        summary["description"] = "Within each group, models share a weekly limit and a 5-hour limit."
+        return summary
+    }
+
+    private func bucket(_ fields: [String: Any]) -> [String: Any] { fields }
+
+    func testParseGeminiGroupWindowsFromCloudCodeStyleResponse() {
+        // cloudcode-pa 实测形状：Gemini Models 与 Claude and GPT models 两组并存，只取前者的桶
+        let summary = quotaSummaryJSON(groups: [
+            [
+                "displayName": "Gemini Models",
+                "description": "Models within this group: Gemini Flash, Gemini Pro",
+                "buckets": [
+                    bucket(["window": "weekly", "remainingFraction": 0.9555, "resetTime": "2030-01-01T00:00:00Z"]),
+                    bucket(["window": "5h", "remainingFraction": 0.5, "resetTime": "2030-01-01T00:00:00Z"])
+                ]
+            ],
+            [
+                "displayName": "Claude and GPT models",
+                "buckets": [
+                    bucket(["window": "weekly", "remainingFraction": 1, "resetTime": "2030-01-01T00:00:00Z"]),
+                    bucket(["window": "5h", "remainingFraction": 1, "resetTime": "2030-01-01T00:00:00Z"])
+                ]
+            ]
+        ])
+
+        let (fiveHour, weekly) = GeminiService.parseGeminiGroupWindows(summary)
+        XCTAssertEqual(weekly?.titleKind, .weekly)
+        XCTAssertEqual(weekly?.usedPercentage ?? 0, 4.45, accuracy: 0.01, "取 Gemini 组的 weekly（4.45% 已用），不是 Claude 组的 0%")
+        XCTAssertEqual(fiveHour?.titleKind, .fiveHour)
+        XCTAssertEqual(fiveHour?.usedPercentage ?? 0, 50.0, accuracy: 0.001)
+    }
+
+    func testParseGeminiGroupWindowsDailyStyleResponseHasNoGeminiGroup() {
+        // daily-cloudcode-pa 实测形状：只有 Claude/GPT 组 → (nil, nil)，
+        // 让 fetchAntigravityQuota 继续试下一个端点而不是错拿别组的额度
+        let summary = quotaSummaryJSON(groups: [
+            [
+                "displayName": "Claude and GPT models",
+                "buckets": [
+                    bucket(["window": "weekly", "remainingFraction": 1, "resetTime": "2030-01-01T00:00:00Z"]),
+                    bucket(["window": "5h", "remainingFraction": 1, "resetTime": "2030-01-01T00:00:00Z"])
+                ]
+            ]
+        ])
+
+        let (fiveHour, weekly) = GeminiService.parseGeminiGroupWindows(summary)
+        XCTAssertNil(fiveHour)
+        XCTAssertNil(weekly)
+    }
+
+    func testParseGeminiGroupWindowsPrefersCanonicalGeminiModelsGroup() {
+        // 变体组（如 IDE 面板里的 "Gemini 4 Argon"）排在前面也不能抢走正主的桶
+        let summary = quotaSummaryJSON(groups: [
+            [
+                "displayName": "Gemini 4 Argon",
+                "buckets": [bucket(["window": "weekly", "remainingFraction": 0.07, "resetTime": "2030-01-01T00:00:00Z"])]
+            ],
+            [
+                "displayName": "Gemini Models",
+                "buckets": [bucket(["window": "weekly", "remainingFraction": 0.9, "resetTime": "2030-01-01T00:00:00Z"])]
+            ]
+        ])
+
+        let (fiveHour, weekly) = GeminiService.parseGeminiGroupWindows(summary)
+        XCTAssertNil(fiveHour)
+        XCTAssertEqual(weekly?.usedPercentage ?? 0, 10.0, accuracy: 0.001, "正主 Gemini Models（90% 剩余）优先，Argon（93% 已用）不抢")
+    }
+
+    func testParseQuotaBucketWeeklyAndFiveHour() {
+        let weekly = GeminiService.parseQuotaBucket(["bucketId": "gemini-weekly", "remainingFraction": 0.25, "resetTime": "2030-01-01T00:00:00Z"])
+        XCTAssertTrue(weekly?.isWeekly ?? false)
+        XCTAssertEqual(weekly?.window.titleKind, .weekly)
+        XCTAssertEqual(weekly?.window.usedPercentage ?? 0, 75.0, accuracy: 0.001)
+
+        let fiveHour = GeminiService.parseQuotaBucket(["window": "5h", "remainingFraction": 0.8])
+        XCTAssertEqual(fiveHour?.window.titleKind, .fiveHour)
+        XCTAssertEqual(fiveHour?.window.usedPercentage ?? 0, 20.0, accuracy: 0.001)
+
+        XCTAssertNil(GeminiService.parseQuotaBucket(["window": "daily", "remainingFraction": 0.5]), "未知窗口类型不产窗口")
+        XCTAssertNil(GeminiService.parseQuotaBucket(["window": "5h"]), "缺 remainingFraction 不产窗口")
+    }
 }

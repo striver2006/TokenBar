@@ -18,12 +18,14 @@ namespace TokenBar.Services
         private GeminiService() { }
 
         // Antigravity (Google Code Assist) quota backend endpoints.
-        // Antigravity uses daily-cloudcode-pa.googleapis.com for actual user quota tracking;
-        // cloudcode-pa.googleapis.com is kept as fallback.
+        // 两个端点对 retrieveUserQuotaSummary 的分组返回集不同（2026-10 实测）：
+        // cloudcode-pa 返回 "Gemini Models" + "Claude and GPT models" 两组，
+        // daily-cloudcode-pa 只返回 "Claude and GPT models" 一组——Gemini 组只在
+        // cloudcode-pa 上，所以它排前；daily 保留兜底（fetchAvailableModels 两边都通）。
         private static readonly string[] CloudCodeQuotaBases = new[]
         {
-            "https://daily-cloudcode-pa.googleapis.com",
-            "https://cloudcode-pa.googleapis.com"
+            "https://cloudcode-pa.googleapis.com",
+            "https://daily-cloudcode-pa.googleapis.com"
         };
 
         // The OAuth client pair used for token refresh is the public "installed app" client that
@@ -540,61 +542,118 @@ namespace TokenBar.Services
         /// Fetches the real Antigravity quota (same source as the IDE's usage panel) and maps the
         /// "Gemini Models" group's weekly / 5-hour buckets to TokenWindows.
         /// Throws QuotaAuthException on 401/403 so the caller can refresh and retry.
+        ///
+        /// 两个配额端点返回的分组集不同（实测 daily 端点只回 "Claude and GPT models" 组，
+        /// Gemini 组只在 cloudcode-pa 上），所以不能「第一个 2xx 就用」：逐个端点解析，
+        /// 直到某个响应里解析出 Gemini 组；全部没有再走按模型聚合的回退。此前 daily 排
+        /// 第一且首个 2xx 即返回，Gemini 组永远匹配不上，静默退化到只产 5h 窗口的回退——
+        /// 这正是「只有 5 小时额度、没有每周额度」那次线上问题的根因。
         /// </summary>
         private async Task<(TokenWindow? FiveHour, TokenWindow? Weekly)> FetchAntigravityQuotaCoreAsync(string accessToken, CancellationToken ct)
         {
-            TokenWindow? fiveHour = null;
-            TokenWindow? weekly = null;
-
-            var summaryBody = await PostCloudCodeAsync(accessToken, "/v1internal:retrieveUserQuotaSummary", ct);
-
-            using (var doc = JsonDocument.Parse(summaryBody))
+            Exception? lastError = null;
+            var sawSuccessfulSummary = false;
+            foreach (var baseUrl in CloudCodeQuotaBases)
             {
-                if (doc.RootElement.TryGetProperty("groups", out var groups) && groups.ValueKind == JsonValueKind.Array)
+                try
                 {
-                    foreach (var group in groups.EnumerateArray())
-                    {
-                        if (!group.TryGetProperty("displayName", out var gName) || gName.ValueKind != JsonValueKind.String)
-                            continue;
-                        var name = gName.GetString() ?? "";
-                        // "Gemini Models" group (skip "Claude and GPT models")
-                        if (name.Contains("gemini", StringComparison.OrdinalIgnoreCase))
-                        {
-                            if (group.TryGetProperty("buckets", out var buckets) && buckets.ValueKind == JsonValueKind.Array)
-                            {
-                                foreach (var bucket in buckets.EnumerateArray())
-                                {
-                                    var window = ParseQuotaBucket(bucket, out var isWeekly);
-                                    if (window == null)
-                                        continue;
-                                    if (isWeekly)
-                                        weekly = window;
-                                    else
-                                        fiveHour = window;
-                                }
-                            }
-                            break;
-                        }
-                    }
+                    var summaryBody = await PostCloudCodeOnceAsync(accessToken, "/v1internal:retrieveUserQuotaSummary", baseUrl, ct);
+                    sawSuccessfulSummary = true;
+                    var (fiveHour, weekly) = ParseGeminiGroupWindows(summaryBody);
+                    if (fiveHour != null || weekly != null)
+                        return (fiveHour, weekly);
+                }
+                catch (QuotaAuthException)
+                {
+                    // 401/403 是令牌级问题，换端点无意义——抛给上层走刷新重试
+                    throw;
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    lastError = ex;
                 }
             }
+            if (!sawSuccessfulSummary)
+                throw lastError ?? new Exception("Antigravity request failed");
 
-            if (fiveHour == null && weekly == null)
-            {
-                // Older/alternative response shape: fall back to per-model quota and aggregate the gemini family.
-                (fiveHour, weekly) = await FetchAntigravityModelsFallbackAsync(accessToken, ct);
-            }
-
-            if (fiveHour == null && weekly == null)
+            // Older/alternative response shape: fall back to per-model quota and aggregate the gemini family.
+            var (fbFiveHour, fbWeekly) = await FetchAntigravityModelsFallbackAsync(accessToken, ct);
+            if (fbFiveHour == null && fbWeekly == null)
             {
                 throw new Exception(LocalizationManager.Instance.IsChinese
                     ? "Antigravity 额度响应中未找到 Gemini 配额数据"
                     : "No Gemini quota data found in the Antigravity response");
             }
+            return (fbFiveHour, fbWeekly);
+        }
 
+        /// <summary>
+        /// 从 retrieveUserQuotaSummary 响应里挑 Gemini 组并映射成 weekly/5h 窗口。
+        /// 组选择：优先名字含 "gemini models" 的正主组；没有时才退第一个名字含 gemini
+        /// 的组（防将来出现 "Gemini 4 Argon" 之类变体时乱序抢先）。返回 (null, null)
+        /// 表示该响应里没有可用的 Gemini 组（daily 端点就只回 Claude/GPT 组）。
+        /// 必须在 doc 存活期间调用；TokenWindow 当场物化，返回后 doc 可释放。
+        /// </summary>
+        internal static (TokenWindow? FiveHour, TokenWindow? Weekly) ParseGeminiGroupWindows(string summaryBody)
+        {
+            using var doc = JsonDocument.Parse(summaryBody);
+            if (!doc.RootElement.TryGetProperty("groups", out var groups) || groups.ValueKind != JsonValueKind.Array)
+                return (null, null);
+
+            JsonElement targetGroup = default;
+            JsonElement firstGeminiGroup = default;
+            var haveTarget = false;
+            var haveFirstGemini = false;
+            foreach (var group in groups.EnumerateArray())
+            {
+                if (!group.TryGetProperty("displayName", out var gName) || gName.ValueKind != JsonValueKind.String)
+                    continue;
+                var name = (gName.GetString() ?? "").ToLowerInvariant();
+                if (!name.Contains("gemini"))
+                    continue;
+                if (name.Contains("gemini models"))
+                {
+                    targetGroup = group;
+                    haveTarget = true;
+                    break;
+                }
+                if (!haveFirstGemini)
+                {
+                    firstGeminiGroup = group;
+                    haveFirstGemini = true;
+                }
+            }
+            if (!haveTarget && !haveFirstGemini)
+                return (null, null);
+
+            var chosen = haveTarget ? targetGroup : firstGeminiGroup;
+            if (!chosen.TryGetProperty("buckets", out var buckets) || buckets.ValueKind != JsonValueKind.Array)
+                return (null, null);
+
+            TokenWindow? fiveHour = null;
+            TokenWindow? weekly = null;
+            foreach (var bucket in buckets.EnumerateArray())
+            {
+                var window = ParseQuotaBucket(bucket, out var isWeekly);
+                if (window == null)
+                    continue;
+                if (isWeekly)
+                    weekly = window;
+                else
+                    fiveHour = window;
+            }
             return (fiveHour, weekly);
         }
 
+        /// <summary>
+        /// Loops the quota endpoints, first successful response wins. 供响应形状与端点无关的
+        /// 调用（fetchAvailableModels）使用；分组集依赖端点的 retrieveUserQuotaSummary
+        /// 必须走 FetchAntigravityQuotaCoreAsync 的逐端点解析。
+        /// </summary>
         private async Task<string> PostCloudCodeAsync(string accessToken, string path, CancellationToken ct)
         {
             Exception? lastEx = null;
@@ -602,27 +661,7 @@ namespace TokenBar.Services
             {
                 try
                 {
-                    using var req = new HttpRequestMessage(HttpMethod.Post, baseUrl + path);
-                    req.Headers.TryAddWithoutValidation("Authorization", $"Bearer {accessToken}");
-                    req.Headers.TryAddWithoutValidation("User-Agent", "antigravity");
-                    req.Content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
-
-                    using var resp = await Http.Shared.SendAsync(req, ct);
-                    var body = await resp.Content.ReadAsStringAsync(ct);
-
-                    if ((int)resp.StatusCode == 401 || (int)resp.StatusCode == 403)
-                    {
-                        throw new QuotaAuthException();
-                    }
-                    if (!resp.IsSuccessStatusCode)
-                    {
-                        var trimmed = body.Length > 300 ? body[..300] : body;
-                        lastEx = new Exception(LocalizationManager.Instance.IsChinese
-                            ? $"Antigravity 额度接口响应异常 ({(int)resp.StatusCode}): {trimmed}"
-                            : $"Antigravity quota API error ({(int)resp.StatusCode}): {trimmed}");
-                        continue;
-                    }
-                    return body;
+                    return await PostCloudCodeOnceAsync(accessToken, path, baseUrl, ct);
                 }
                 catch (QuotaAuthException)
                 {
@@ -630,15 +669,10 @@ namespace TokenBar.Services
                 }
                 // 只有调用方预算取消才需要立即中止（此时 ct.IsCancellationRequested 为真）。
                 // 连接/请求超时同样以 OperationCanceledException 形态抛出但与预算无关——
-                // 本机实测 12s ConnectTimeout 即如此——那只说明当前 base URL 连不上，
-                // 应当继续试下一个，而不是把整轮刷新判死。
+                // 那只说明当前 base URL 连不上，应当继续试下一个，而不是把整轮刷新判死。
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
                     throw;
-                }
-                catch (OperationCanceledException ex)
-                {
-                    lastEx = ex;
                 }
                 catch (Exception ex)
                 {
@@ -648,6 +682,35 @@ namespace TokenBar.Services
 
             if (lastEx != null) throw lastEx;
             throw new Exception("Antigravity request failed");
+        }
+
+        /// <summary>
+        /// Single-base POST to a Cloud Code quota endpoint.
+        /// 401/403 抛 QuotaAuthException（令牌级问题，换端点救不了）；非 2xx 与解析失败抛
+        /// 普通错误，由调用方决定是否换下一个端点。
+        /// </summary>
+        private static async Task<string> PostCloudCodeOnceAsync(string accessToken, string path, string baseUrl, CancellationToken ct)
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Post, baseUrl + path);
+            req.Headers.TryAddWithoutValidation("Authorization", $"Bearer {accessToken}");
+            req.Headers.TryAddWithoutValidation("User-Agent", "antigravity");
+            req.Content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
+
+            using var resp = await Http.Shared.SendAsync(req, ct);
+            var body = await resp.Content.ReadAsStringAsync(ct);
+
+            if ((int)resp.StatusCode == 401 || (int)resp.StatusCode == 403)
+            {
+                throw new QuotaAuthException();
+            }
+            if (!resp.IsSuccessStatusCode)
+            {
+                var trimmed = body.Length > 300 ? body[..300] : body;
+                throw new Exception(LocalizationManager.Instance.IsChinese
+                    ? $"Antigravity 额度接口响应异常 ({(int)resp.StatusCode}): {trimmed}"
+                    : $"Antigravity quota API error ({(int)resp.StatusCode}): {trimmed}");
+            }
+            return body;
         }
 
         /// <summary>Maps one quota bucket ({window/bucketId, remainingFraction, resetTime}) to a TokenWindow.</summary>

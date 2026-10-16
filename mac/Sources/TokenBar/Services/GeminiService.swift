@@ -18,11 +18,13 @@ public actor GeminiService {
     }
 
     // Antigravity (Google Code Assist) quota backend endpoints.
-    // Antigravity uses daily-cloudcode-pa.googleapis.com for actual user quota tracking;
-    // cloudcode-pa.googleapis.com is kept as fallback.
+    // 两个端点对 retrieveUserQuotaSummary 的分组返回集不同（2026-10 实测）：
+    // cloudcode-pa 返回 "Gemini Models" + "Claude and GPT models" 两组，
+    // daily-cloudcode-pa 只返回 "Claude and GPT models" 一组——Gemini 组只在
+    // cloudcode-pa 上，所以它排前；daily 保留兜底（fetchAvailableModels 两边都通）。
     private static let cloudCodeEndpoints = [
-        "https://daily-cloudcode-pa.googleapis.com",
-        "https://cloudcode-pa.googleapis.com"
+        "https://cloudcode-pa.googleapis.com",
+        "https://daily-cloudcode-pa.googleapis.com"
     ]
 
     // The OAuth client pair used for token refresh is the public "installed app" client that
@@ -875,66 +877,82 @@ public actor GeminiService {
     }
 
     /// Maps the "Gemini Models" group's weekly / 5-hour buckets of retrieveUserQuotaSummary to TokenWindows.
+    ///
+    /// 两个配额端点返回的分组集不同（实测 daily 端点只回 "Claude and GPT models" 组，
+    /// Gemini 组只在 cloudcode-pa 上），所以不能「第一个 2xx 就用」：逐个端点解析，
+    /// 直到某个响应里解析出 Gemini 组；全部没有再走按模型聚合的回退。此前 daily 排
+    /// 第一且首个 2xx 即返回，Gemini 组永远匹配不上，静默退化到只产 5h 窗口的回退——
+    /// 这正是「只有 5 小时额度、没有每周额度」那次线上问题的根因。
     private func fetchAntigravityQuota(accessToken: String) async throws -> (TokenWindow?, TokenWindow?) {
-        let summary = try await postCloudCode(accessToken: accessToken, path: "/v1internal:retrieveUserQuotaSummary")
-
-        var fiveHour: TokenWindow? = nil
-        var weekly: TokenWindow? = nil
-
-        if let groups = summary["groups"] as? [[String: Any]] {
-            for group in groups {
-                guard let groupName = group["displayName"] as? String,
-                      groupName.lowercased().contains("gemini") else { continue }
-                if let buckets = group["buckets"] as? [[String: Any]] {
-                    for bucket in buckets {
-                        if let (window, isWeekly) = parseQuotaBucket(bucket) {
-                            if isWeekly { weekly = window } else { fiveHour = window }
-                        }
-                    }
+        var lastError: Error?
+        var sawSuccessfulSummary = false
+        for base in Self.cloudCodeEndpoints {
+            do {
+                let summary = try await postCloudCodeOnce(accessToken: accessToken, path: "/v1internal:retrieveUserQuotaSummary", base: base)
+                sawSuccessfulSummary = true
+                let (fiveHour, weekly) = Self.parseGeminiGroupWindows(summary)
+                if fiveHour != nil || weekly != nil {
+                    return (fiveHour, weekly)
                 }
-                break
+            } catch is QuotaAuthError {
+                // 401/403 是令牌级问题，换端点无意义——抛给上层走刷新重试
+                throw QuotaAuthError()
+            } catch {
+                lastError = error
             }
         }
-
-        if fiveHour == nil && weekly == nil {
-            // Older/alternative response shape: fall back to per-model quota and aggregate the gemini family.
-            (fiveHour, weekly) = try await fetchAntigravityModelsFallback(accessToken: accessToken)
+        guard sawSuccessfulSummary else {
+            throw lastError ?? URLError(.badServerResponse)
         }
 
+        // Older/alternative response shape: fall back to per-model quota and aggregate the gemini family.
+        let (fiveHour, weekly) = try await fetchAntigravityModelsFallback(accessToken: accessToken)
         guard fiveHour != nil || weekly != nil else {
             throw NSError(domain: "GeminiService", code: 0, userInfo: [NSLocalizedDescriptionKey: isZh ? "Antigravity 额度响应中未找到 Gemini 配额数据" : "No Gemini quota data found in the Antigravity response"])
         }
         return (fiveHour, weekly)
     }
 
+    /// 从 retrieveUserQuotaSummary 响应里挑 Gemini 组并映射成 weekly/5h 窗口。
+    /// 组选择：优先名字含 "gemini models" 的正主组；没有时才退第一个名字含 gemini
+    /// 的组（防将来出现 "Gemini 4 Argon" 之类变体时乱序抢先）。返回 (nil, nil)
+    /// 表示该响应里没有可用的 Gemini 组（daily 端点就只回 Claude/GPT 组）。
+    static func parseGeminiGroupWindows(_ summary: [String: Any]) -> (fiveHour: TokenWindow?, weekly: TokenWindow?) {
+        guard let groups = summary["groups"] as? [[String: Any]] else { return (nil, nil) }
+
+        var target: [String: Any]?
+        var firstGemini: [String: Any]?
+        for group in groups {
+            guard let groupName = group["displayName"] as? String else { continue }
+            let lower = groupName.lowercased()
+            guard lower.contains("gemini") else { continue }
+            if lower.contains("gemini models") {
+                target = group
+                break
+            }
+            if firstGemini == nil { firstGemini = group }
+        }
+        guard let group = target ?? firstGemini,
+              let buckets = group["buckets"] as? [[String: Any]] else { return (nil, nil) }
+
+        var fiveHour: TokenWindow? = nil
+        var weekly: TokenWindow? = nil
+        for bucket in buckets {
+            if let (window, isWeekly) = parseQuotaBucket(bucket) {
+                if isWeekly { weekly = window } else { fiveHour = window }
+            }
+        }
+        return (fiveHour, weekly)
+    }
+
+    /// Loops the quota endpoints, first successful response wins. 供响应形状与端点无关的
+    /// 调用（fetchAvailableModels）使用；分组集依赖端点的 retrieveUserQuotaSummary
+    /// 必须走 fetchAntigravityQuota 的逐端点解析。
     private func postCloudCode(accessToken: String, path: String) async throws -> [String: Any] {
         var lastError: Error?
         for base in Self.cloudCodeEndpoints {
-            guard let url = URL(string: base + path) else { continue }
-            var req = URLRequest(url: url)
-            req.httpMethod = "POST"
-            req.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-            req.setValue("antigravity", forHTTPHeaderField: "User-Agent")
-            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            req.httpBody = Data("{}".utf8)
-            req.timeoutInterval = 15
-
             do {
-                let (data, resp) = try await HTTPClient.data(for: req)
-                guard let http = resp as? HTTPURLResponse else { continue }
-                if http.statusCode == 401 || http.statusCode == 403 {
-                    throw QuotaAuthError()
-                }
-                guard (200..<300).contains(http.statusCode) else {
-                    let raw = String(data: data.prefix(300), encoding: .utf8) ?? ""
-                    lastError = NSError(domain: "GeminiService", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: isZh ? "Antigravity 额度接口响应异常 (\(http.statusCode)): \(raw)" : "Antigravity quota API error (\(http.statusCode)): \(raw)"])
-                    continue
-                }
-                guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                    lastError = NSError(domain: "GeminiService", code: 0, userInfo: [NSLocalizedDescriptionKey: isZh ? "Antigravity 额度响应解析失败" : "Failed to parse the Antigravity quota response"])
-                    continue
-                }
-                return json
+                return try await postCloudCodeOnce(accessToken: accessToken, path: path, base: base)
             } catch is QuotaAuthError {
                 throw QuotaAuthError()
             } catch {
@@ -948,8 +966,36 @@ public actor GeminiService {
         throw URLError(.badServerResponse)
     }
 
+    /// Single-base POST to a Cloud Code quota endpoint.
+    /// 401/403 抛 QuotaAuthError（令牌级问题，换端点救不了）；非 2xx 与解析失败抛
+    /// 普通错误，由调用方决定是否换下一个端点。
+    private func postCloudCodeOnce(accessToken: String, path: String, base: String) async throws -> [String: Any] {
+        guard let url = URL(string: base + path) else { throw URLError(.badURL) }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        req.setValue("antigravity", forHTTPHeaderField: "User-Agent")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = Data("{}".utf8)
+        req.timeoutInterval = 15
+
+        let (data, resp) = try await HTTPClient.data(for: req)
+        guard let http = resp as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        if http.statusCode == 401 || http.statusCode == 403 {
+            throw QuotaAuthError()
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            let raw = String(data: data.prefix(300), encoding: .utf8) ?? ""
+            throw NSError(domain: "GeminiService", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: isZh ? "Antigravity 额度接口响应异常 (\(http.statusCode)): \(raw)" : "Antigravity quota API error (\(http.statusCode)): \(raw)"])
+        }
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw NSError(domain: "GeminiService", code: 0, userInfo: [NSLocalizedDescriptionKey: isZh ? "Antigravity 额度响应解析失败" : "Failed to parse the Antigravity quota response"])
+        }
+        return json
+    }
+
     /// Maps one quota bucket ({window/bucketId, remainingFraction, resetTime}) to a TokenWindow.
-    private func parseQuotaBucket(_ bucket: [String: Any]) -> (window: TokenWindow, isWeekly: Bool)? {
+    static func parseQuotaBucket(_ bucket: [String: Any]) -> (window: TokenWindow, isWeekly: Bool)? {
         var kind = (bucket["window"] as? String) ?? ""
         if kind.isEmpty { kind = (bucket["bucketId"] as? String) ?? "" }
         if kind.isEmpty { kind = (bucket["displayName"] as? String) ?? "" }

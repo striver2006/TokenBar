@@ -115,5 +115,71 @@ namespace TokenBar.Tests
             Assert.NotNull(window);
             Assert.Equal(100.0, window!.UsedPercentage, 3);
         }
+
+        // 组级解析（GeminiService.ParseGeminiGroupWindows）。守的是「两个配额端点分组集
+        // 不同」那次线上事故：daily 端点只回 "Claude and GPT models" 组，Gemini 组只在
+        // cloudcode-pa 上。旧逻辑首个 2xx 即返回，Gemini 组匹配不上就静默退化到只产 5h
+        // 窗口的按模型回退——「只有 5 小时额度、没有每周额度」的根因。
+
+        private static string Summary(params string[] groups) =>
+            $$"""{"groups": [{{string.Join(",", groups)}}]}""";
+
+        [Fact]
+        public void GroupParsing_TakesGeminiModelsBuckets_FromCloudCodeStyleResponse()
+        {
+            var (fiveHour, weekly) = GeminiService.ParseGeminiGroupWindows(Summary(
+                """
+                {"displayName": "Gemini Models", "buckets": [
+                    {"window": "weekly", "remainingFraction": 0.9555, "resetTime": "2030-01-01T00:00:00Z"},
+                    {"window": "5h", "remainingFraction": 0.5, "resetTime": "2030-01-01T00:00:00Z"}]}
+                """,
+                """
+                {"displayName": "Claude and GPT models", "buckets": [
+                    {"window": "weekly", "remainingFraction": 1},
+                    {"window": "5h", "remainingFraction": 1}]}
+                """));
+
+            Assert.NotNull(weekly);
+            Assert.Equal(WindowTitleKind.Weekly, weekly!.Title.Kind);
+            Assert.Equal(4.45, weekly.UsedPercentage, 1); // 取 Gemini 组的 weekly，不是 Claude 组的 0%
+            Assert.NotNull(fiveHour);
+            Assert.Equal(WindowTitleKind.FiveHour, fiveHour!.Title.Kind);
+            Assert.Equal(50.0, fiveHour.UsedPercentage, 3);
+        }
+
+        [Fact]
+        public void GroupParsing_DailyStyleResponseWithoutGeminiGroup_ReturnsBothNull()
+        {
+            // daily-cloudcode-pa 实测形状：只有 Claude/GPT 组 → (null, null)，
+            // 让 FetchAntigravityQuotaCoreAsync 继续试下一个端点而不是错拿别组的额度
+            var (fiveHour, weekly) = GeminiService.ParseGeminiGroupWindows(Summary(
+                """
+                {"displayName": "Claude and GPT models", "buckets": [
+                    {"window": "weekly", "remainingFraction": 1},
+                    {"window": "5h", "remainingFraction": 1}]}
+                """));
+
+            Assert.Null(fiveHour);
+            Assert.Null(weekly);
+        }
+
+        [Fact]
+        public void GroupParsing_PrefersCanonicalGeminiModelsOverVariants()
+        {
+            // 变体组（如 IDE 面板里的 "Gemini 4 Argon"）排在前面也不能抢走正主的桶
+            var (fiveHour, weekly) = GeminiService.ParseGeminiGroupWindows(Summary(
+                """
+                {"displayName": "Gemini 4 Argon", "buckets": [
+                    {"window": "weekly", "remainingFraction": 0.07}]}
+                """,
+                """
+                {"displayName": "Gemini Models", "buckets": [
+                    {"window": "weekly", "remainingFraction": 0.9}]}
+                """));
+
+            Assert.Null(fiveHour);
+            Assert.NotNull(weekly);
+            Assert.Equal(10.0, weekly!.UsedPercentage, 3); // 正主 Gemini Models（90% 剩余）优先
+        }
     }
 }
