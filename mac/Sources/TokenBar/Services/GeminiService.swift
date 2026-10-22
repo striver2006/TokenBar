@@ -169,10 +169,36 @@ public actor GeminiService {
     private var cachedAccessToken: String?
     private var cachedAccessTokenExpiry = Date.distantPast
 
-    /// 上一次令牌刷新整体失败的时刻。候选逐个试是个昂贵操作（最坏 3 次网络往返），
+    /// 上一次令牌刷新整体失败的原因和截止时间。候选逐个试是个昂贵操作，
     /// 凭证真的失效时每轮刷新都重试一遍纯属浪费，冷却期内直接放弃。
     /// 与 AliyunBailianService.TokenCoordinator 的 failureCooldown 是同一套思路。
-    private var lastTokenRefreshFailure: Date?
+    private struct RefreshFailure {
+        let credential: String
+        let outcome: TokenRefreshOutcome
+        let retryAt: Date
+    }
+    private var lastTokenRefreshFailure: RefreshFailure?
+
+    // 测试仅替换令牌刷新边界，不访问真实账号、钥匙串或已安装二进制。
+    struct TokenRefreshEnvironment: Sendable {
+        var candidates: @Sendable () async -> [(id: String, secret: String)]
+        var send: @Sendable (URLRequest) async throws -> (Data, URLResponse)
+        var now: @Sendable () -> Date = { Date() }
+    }
+    private let tokenRefreshEnvironment: TokenRefreshEnvironment?
+
+    init(tokenRefreshEnvironment: TokenRefreshEnvironment? = nil) {
+        self.tokenRefreshEnvironment = tokenRefreshEnvironment
+    }
+
+    private var refreshNow: Date { tokenRefreshEnvironment?.now() ?? Date() }
+
+    /// 登录来源切换时，旧 access token 和失败状态都不能继承给新凭证。
+    func resetTokenRefreshState() {
+        lastTokenRefreshFailure = nil
+        cachedAccessToken = nil
+        cachedAccessTokenExpiry = .distantPast
+    }
     private static let tokenRefreshCooldown: TimeInterval = 120
     /// 单个候选的请求超时；候选循环的总预算见 refreshGoogleAccessToken
     private static let tokenRequestTimeout: TimeInterval = 8
@@ -218,11 +244,26 @@ public actor GeminiService {
     /// 带阶段的凭证错误。`errorDescription` 直接产出用户文案。
     public struct CredentialError: LocalizedError, Sendable {
         public let stage: CredentialStage
-        public init(_ stage: CredentialStage) { self.stage = stage }
+        public let retryAt: Date?
+        public init(_ stage: CredentialStage, retryAt: Date? = nil) {
+            self.stage = stage
+            self.retryAt = retryAt
+        }
 
         public var errorDescription: String? {
             let isZh = LocalizationManager.shared.effectiveLanguage == "zh"
-            return GeminiService.credentialFailureMessage(stage, isZh: isZh)
+            return message(isZh: isZh)
+        }
+
+        func message(isZh: Bool) -> String {
+            let reason = GeminiService.credentialFailureMessage(stage, isZh: isZh)
+            guard retryAt != nil else { return reason }
+            if stage == .tokenRefreshUnreachable {
+                return isZh
+                    ? "无法连接 Google 账号服务，请检查网络；冷却结束后自动重试"
+                    : "Cannot reach Google's account service; check the network. Will retry automatically after cooldown"
+            }
+            return reason
         }
     }
 
@@ -276,8 +317,10 @@ public actor GeminiService {
         case success(accessToken: String, expiresIn: TimeInterval)
         /// Google 判 invalid_grant：refresh_token 已被轮换/吊销，重试无用
         case invalidGrant
-        /// 上一轮刚失败，冷却期内直接放弃
-        case cooldown
+        /// 上一轮刚失败，冷却期内保留原始原因和固定截止时间。
+        case cooldown(reason: CredentialStage, retryAt: Date)
+        /// 取消不属于网络故障，也不应写入冷却状态。
+        case cancelled
         /// token 端点网络不可达 / 全部候选超时
         case unreachable
         /// 候选都被判 invalid_client / unauthorized_client——本地扫描出的 id/secret
@@ -464,6 +507,7 @@ public actor GeminiService {
     private func clearOwnRefreshToken() {
         ownRefreshTokenCache = nil
         ownRefreshTokenLoaded = true
+        resetTokenRefreshState()
         Task { await KeychainSecretStore.shared.deleteAsync(Self.ownRefreshTokenKey) }
     }
 
@@ -562,6 +606,7 @@ public actor GeminiService {
         if await KeychainSecretStore.shared.setAsync(refreshToken, for: Self.ownRefreshTokenKey) == false {
             Log.provider.error("provider=gemini 自有登录 refresh_token 写入钥匙串失败，重启后需重新登录")
         }
+        resetTokenRefreshState()
         ownRefreshTokenCache = refreshToken
         ownRefreshTokenLoaded = true
         let accessToken = json["access_token"] as? String
@@ -665,23 +710,32 @@ public actor GeminiService {
     public func refreshGoogleAccessToken(refreshToken: String) async -> TokenRefreshOutcome {
         guard let tokenUrl = URL(string: "https://oauth2.googleapis.com/token") else { return .unreachable }
 
+        guard !Task.isCancelled else { return .cancelled }
         if let last = lastTokenRefreshFailure,
-           Date().timeIntervalSince(last) < Self.tokenRefreshCooldown {
-            Log.provider.info("gemini token 刷新处于冷却期，跳过本轮")
-            return .cooldown
+           last.credential == refreshToken, refreshNow < last.retryAt {
+            Log.provider.info("gemini token 刷新处于冷却期，跳过本轮并保留原始原因")
+            return .cooldown(reason: Self.failureStage(last.outcome), retryAt: last.retryAt)
         }
 
-        let candidates = await getAntigravityClientCandidates().prefix(Self.tokenClientCandidateLimit)
+        let discovered: [(id: String, secret: String)]
+        if let environment = tokenRefreshEnvironment {
+            discovered = await environment.candidates()
+        } else {
+            discovered = await getAntigravityClientCandidates()
+        }
+        guard !Task.isCancelled else { return .cancelled }
+        let candidates = discovered.prefix(Self.tokenClientCandidateLimit)
         if candidates.isEmpty { return .noCandidates }
 
         // 整个候选循环的硬预算：任何一个候选慢下来都不能让整轮刷新失控。
-        let deadline = Date().addingTimeInterval(Self.tokenRefreshBudget)
+        let deadline = refreshNow.addingTimeInterval(Self.tokenRefreshBudget)
         var sawInvalidGrant = false
         var sawClientRejection = false
         var sawTransportError = false
 
         for client in candidates {
-            if Date() >= deadline {
+            guard !Task.isCancelled else { return .cancelled }
+            if refreshNow >= deadline {
                 Log.provider.error("gemini token 刷新超出 \(Self.tokenRefreshBudget, format: .fixed(precision: 0))s 预算，放弃剩余候选")
                 break
             }
@@ -701,7 +755,13 @@ public actor GeminiService {
             request.httpBody = Self.formBody(params)
 
             do {
-                let (data, response) = try await HTTPClient.data(for: request)
+                let (data, response): (Data, URLResponse)
+                if let environment = tokenRefreshEnvironment {
+                    (data, response) = try await environment.send(request)
+                } else {
+                    (data, response) = try await HTTPClient.data(for: request)
+                }
+                guard !Task.isCancelled else { return .cancelled }
                 guard let http = response as? HTTPURLResponse else { continue }
                 if http.statusCode == 200,
                    let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -710,7 +770,8 @@ public actor GeminiService {
                     // Cache the working pair first so later refreshes skip the trial-and-error.
                     antigravityClientCandidates?.removeAll { $0.id == client.id && $0.secret == client.secret }
                     antigravityClientCandidates?.insert(client, at: 0)
-                    await persistWorkingClient(client)
+                    if tokenRefreshEnvironment == nil { await persistWorkingClient(client) }
+                    guard !Task.isCancelled else { return .cancelled }
                     cachedAccessToken = newAccessToken
                     cachedAccessTokenExpiry = Date().addingTimeInterval(max(60, expiresIn - 120))
                     lastTokenRefreshFailure = nil
@@ -731,21 +792,56 @@ public actor GeminiService {
                     Log.provider.error("gemini token 刷新候选被拒 code=\(code, privacy: .public) status=\(http.statusCode, privacy: .public)")
                 }
             } catch {
+                if Self.isCancellation(error) {
+                    return .cancelled
+                }
                 sawTransportError = true
                 continue
             }
         }
-        lastTokenRefreshFailure = Date()
+        guard !Task.isCancelled else { return .cancelled }
+        let outcome: TokenRefreshOutcome
         if sawInvalidGrant {
             Log.provider.error("gemini token 刷新失败：refresh_token 已被判 invalid_grant（被轮换或吊销）")
-            return .invalidGrant
-        }
-        if sawClientRejection && !sawTransportError {
+            outcome = .invalidGrant
+        } else if sawClientRejection && !sawTransportError {
             Log.provider.error("gemini token 刷新失败：全部候选的 id/secret 配不上（Antigravity 组件更新过）")
-            return .clientMismatch
+            outcome = .clientMismatch
+        } else {
+            Log.provider.error("gemini token 刷新失败：所有候选都没能换到 access token")
+            outcome = .unreachable
         }
-        Log.provider.error("gemini token 刷新失败：所有候选都没能换到 access token")
-        return .unreachable
+        lastTokenRefreshFailure = RefreshFailure(
+            credential: refreshToken, outcome: outcome,
+            retryAt: refreshNow.addingTimeInterval(Self.tokenRefreshCooldown)
+        )
+        return outcome
+    }
+
+    nonisolated static func isCancellation(_ error: Error) -> Bool {
+        Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled
+    }
+
+    private static func failureStage(_ outcome: TokenRefreshOutcome) -> CredentialStage {
+        switch outcome {
+        case .invalidGrant: return .refreshTokenDead
+        case .clientMismatch: return .clientMismatch
+        default: return .tokenRefreshUnreachable
+        }
+    }
+
+    /// 首次失败与冷却命中走同一错误映射；只有临时故障安排自动重试。
+    func credentialError(for outcome: TokenRefreshOutcome, ownLogin: Bool = false) -> CredentialError {
+        let stage: CredentialStage
+        let retryAt: Date?
+        if case .cooldown(let reason, let deadline) = outcome {
+            stage = reason
+            retryAt = reason == .tokenRefreshUnreachable ? deadline : nil
+        } else {
+            stage = Self.failureStage(outcome)
+            retryAt = stage == .tokenRefreshUnreachable ? lastTokenRefreshFailure?.retryAt : nil
+        }
+        return CredentialError(ownLogin && stage == .refreshTokenDead ? .ownLoginRevoked : stage, retryAt: retryAt)
     }
 
     /// Fetch Gemini usage quota and window limits from the Antigravity (Google Code Assist)
@@ -757,6 +853,7 @@ public actor GeminiService {
     /// 钥匙串——ACL 授权丢失、Antigravity 重登轮换 token 都与它无关，这是「一劳永逸」
     /// 的那条路；自有凭证被判 invalid_grant 时清掉并当场落到旧链路，额度尽量不失联。
     public func fetchQuota(token: String?, storedRefreshToken: String? = nil) async throws -> (fiveHour: TokenWindow?, weekly: TokenWindow?, account: String?, refreshToken: String?) {
+        try Task.checkCancellation()
         if let own = await loadOwnRefreshToken(), !own.isEmpty {
             do {
                 return try await fetchQuotaWithOwnCredential(own)
@@ -767,6 +864,7 @@ public actor GeminiService {
         }
 
         let local = await readLocalGeminiConfig(storedRefreshToken: storedRefreshToken)
+        try Task.checkCancellation()
         let refreshToken = local.refreshToken
         var detectedAccount = local.account
 
@@ -782,8 +880,10 @@ public actor GeminiService {
             switch await refreshGoogleAccessToken(refreshToken: refreshToken) {
             case .success(let refreshed, _): accessToken = refreshed
             case .invalidGrant: throw CredentialError(.refreshTokenDead)
-            case .cooldown: throw CredentialError(.refreshTokenCooldown)
-            case .unreachable: throw CredentialError(.tokenRefreshUnreachable)
+            case .cooldown(let reason, let deadline):
+                throw credentialError(for: .cooldown(reason: reason, retryAt: deadline))
+            case .cancelled: throw CancellationError()
+            case .unreachable: throw credentialError(for: .unreachable)
             case .clientMismatch: throw CredentialError(.clientMismatch)
             case .noCandidates: throw CredentialError(.noCredentials)
             }
@@ -817,8 +917,10 @@ public actor GeminiService {
             switch await refreshGoogleAccessToken(refreshToken: refreshToken) {
             case .success(let refreshed, _): accessToken = refreshed
             case .invalidGrant: throw CredentialError(.ownLoginRevoked)
-            case .cooldown: throw CredentialError(.refreshTokenCooldown)
-            case .unreachable: throw CredentialError(.tokenRefreshUnreachable)
+            case .cooldown(let reason, let deadline):
+                throw credentialError(for: .cooldown(reason: reason, retryAt: deadline), ownLogin: true)
+            case .cancelled: throw CancellationError()
+            case .unreachable: throw credentialError(for: .unreachable)
             case .clientMismatch: throw CredentialError(.clientMismatch)
             case .noCandidates: throw CredentialError(.noCredentials)
             }
@@ -848,8 +950,10 @@ public actor GeminiService {
                     throw CredentialError(.quotaRejected)
                 }
             case .invalidGrant: throw CredentialError(.ownLoginRevoked)
-            case .cooldown: throw CredentialError(.refreshTokenCooldown)
-            case .unreachable: throw CredentialError(.tokenRefreshUnreachable)
+            case .cooldown(let reason, let deadline):
+                throw credentialError(for: .cooldown(reason: reason, retryAt: deadline), ownLogin: true)
+            case .cancelled: throw CancellationError()
+            case .unreachable: throw credentialError(for: .unreachable)
             case .clientMismatch: throw CredentialError(.clientMismatch)
             case .noCandidates: throw CredentialError(.noCredentials)
             }
@@ -870,8 +974,10 @@ public actor GeminiService {
                     throw CredentialError(.quotaRejected)
                 }
             case .invalidGrant: throw CredentialError(.refreshTokenDead)
-            case .cooldown: throw CredentialError(.refreshTokenCooldown)
-            case .unreachable: throw CredentialError(.tokenRefreshUnreachable)
+            case .cooldown(let reason, let deadline):
+                throw credentialError(for: .cooldown(reason: reason, retryAt: deadline))
+            case .cancelled: throw CancellationError()
+            case .unreachable: throw credentialError(for: .unreachable)
             case .clientMismatch: throw CredentialError(.clientMismatch)
             case .noCandidates: throw CredentialError(.noCredentials)
             }
@@ -888,6 +994,7 @@ public actor GeminiService {
         var lastError: Error?
         var sawSuccessfulSummary = false
         for base in Self.cloudCodeEndpoints {
+            try Task.checkCancellation()
             do {
                 let summary = try await postCloudCodeOnce(accessToken: accessToken, path: "/v1internal:retrieveUserQuotaSummary", base: base)
                 sawSuccessfulSummary = true
@@ -899,6 +1006,7 @@ public actor GeminiService {
                 // 401/403 是令牌级问题，换端点无意义——抛给上层走刷新重试
                 throw QuotaAuthError()
             } catch {
+                if Self.isCancellation(error) { throw CancellationError() }
                 lastError = error
             }
         }
@@ -952,11 +1060,13 @@ public actor GeminiService {
     private func postCloudCode(accessToken: String, path: String) async throws -> [String: Any] {
         var lastError: Error?
         for base in Self.cloudCodeEndpoints {
+            try Task.checkCancellation()
             do {
                 return try await postCloudCodeOnce(accessToken: accessToken, path: path, base: base)
             } catch is QuotaAuthError {
                 throw QuotaAuthError()
             } catch {
+                if Self.isCancellation(error) { throw CancellationError() }
                 lastError = error
                 continue
             }
@@ -971,6 +1081,7 @@ public actor GeminiService {
     /// 401/403 抛 QuotaAuthError（令牌级问题，换端点救不了）；非 2xx 与解析失败抛
     /// 普通错误，由调用方决定是否换下一个端点。
     private func postCloudCodeOnce(accessToken: String, path: String, base: String) async throws -> [String: Any] {
+        try Task.checkCancellation()
         guard let url = URL(string: base + path) else { throw URLError(.badURL) }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
@@ -981,6 +1092,7 @@ public actor GeminiService {
         req.timeoutInterval = 15
 
         let (data, resp) = try await HTTPClient.data(for: req)
+        try Task.checkCancellation()
         guard let http = resp as? HTTPURLResponse else { throw URLError(.badServerResponse) }
         if http.statusCode == 401 || http.statusCode == 403 {
             throw QuotaAuthError()

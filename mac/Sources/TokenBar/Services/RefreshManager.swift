@@ -14,6 +14,7 @@ public enum RefreshTrigger: String {
     case manual    // 菜单项 / 弹窗刷新按钮
     case wake      // 系统或显示器唤醒补刷
     case settings  // 设置变更后立即刷新
+    case geminiRetry // Gemini 冷却到期补刷，复用全局闸门，仅刷新该厂商
 }
 
 /// 一轮刷新的结果，用于让"刷新了但全失败"这个状态对用户可见
@@ -239,6 +240,23 @@ public final class RefreshManager: ObservableObject {
     private var secretsLoaded = false
 
     private var refreshTimer: Timer?
+    private let geminiRetry = GeminiRetryScheduler()
+    private struct GeminiRetryCredentials: Equatable {
+        let token: String
+        let refreshToken: String
+        let ownAccount: String
+        let apiKey: String
+        let endpoint: String
+        init(_ settings: AppSettings) {
+            token = settings.geminiToken
+            refreshToken = settings.geminiRefreshToken
+            ownAccount = settings.geminiOwnAccount
+            apiKey = settings.geminiApiKey
+            endpoint = settings.geminiEndpoint
+        }
+    }
+    private var geminiRetryCredentials: GeminiRetryCredentials?
+    private var geminiRefreshInProgress = false
     /// 当前定时器生效的间隔，用于判断设置变更是否真的需要重建定时器
     private var activeIntervalMinutes: Int?
     private let userDefaultsKey = "TokenBar_AppSettings"
@@ -527,6 +545,9 @@ public final class RefreshManager: ObservableObject {
     }
 
     public func saveSettings() {
+        if !settings.geminiEnabled || (geminiRetryCredentials != nil && geminiRetryCredentials != GeminiRetryCredentials(settings)) {
+            cancelGeminiRetry()
+        }
         LocalizationManager.shared.setLanguage(settings.appLanguage)
         persistSettingsToDefaults()
         syncSecretsToKeychain()
@@ -660,13 +681,21 @@ public final class RefreshManager: ObservableObject {
             }
         }
 
-        let enabledNames = enabledProviderNames()
+        let enabledNames = trigger == .geminiRetry ? "gemini" : enabledProviderNames()
         Log.refresh.notice("round begin trigger=\(trigger.rawValue, privacy: .public) providers=\(enabledNames, privacy: .public)")
 
         // 各刷新方法只在成功拿到数据时才推进自己的 lastUpdated，据此判断本轮是否有实际收获
         let updatedBefore = latestQuotaUpdate()
 
         await withTaskGroup(of: Void.self) { group in
+            if trigger == .geminiRetry {
+                if settings.geminiEnabled {
+                    group.addTask { @MainActor in
+                        await self.runProvider("gemini", key: .builtin(.gemini)) { await self.refreshGemini() }
+                    }
+                }
+                return
+            }
             if settings.openAIEnabled {
                 group.addTask { @MainActor in
                     await self.runProvider("openai", key: .builtin(.openAI)) { await self.refreshOpenAI() }
@@ -730,15 +759,17 @@ public final class RefreshManager: ObservableObject {
 
         // count 修正（#21）：以前用 enabledNames.split(",") 反算，custom×N 会被算成 1 个。
         // 该 count 目前无消费方，但留着就是埋坑，改为按实际参与厂商数计算。
-        let participantCount = enabledProviderCount()
+        let participantCount = trigger == .geminiRetry ? (settings.geminiEnabled ? 1 : 0) : enabledProviderCount()
         lastRoundOutcome = advanced ? .success : .allFailed(count: max(1, participantCount))
 
         // 稳态失败退避计数（#20）：任一轮拿到新数据即清零；全失败且有厂商实际参与才累加
         // （零厂商参与时没有发出任何请求，无所谓退避，也不该把计数器推高）
-        if advanced {
-            consecutiveAllFailedRounds = 0
-        } else if participantCount > 0 {
-            consecutiveAllFailedRounds += 1
+        if trigger != .geminiRetry {
+            if advanced {
+                consecutiveAllFailedRounds = 0
+            } else if participantCount > 0 {
+                consecutiveAllFailedRounds += 1
+            }
         }
 
         let ms = Double(DispatchTime.now().uptimeNanoseconds - roundStart.uptimeNanoseconds) / 1_000_000
@@ -818,6 +849,10 @@ public final class RefreshManager: ObservableObject {
         Log.provider.error("provider=\(name, privacy: .public) TIMEOUT after \(ms, format: .fixed(precision: 0))ms，已放弃本轮")
         // 被放弃的厂商，其 isLoading 会停在 true（卡片一直转圈），这里补一次收尾。
         finishTimedOutProvider(key: key, name: name)
+        if name == "gemini" {
+            // 预算取消不是一次新的令牌网络失败，短退避后补刷，避免等完整定时周期。
+            scheduleGeminiRetry(at: Date().addingTimeInterval(15))
+        }
     }
 
     private func finishTimedOutProvider(key: ProviderKey?, name: String) {
@@ -1078,8 +1113,46 @@ public final class RefreshManager: ObservableObject {
         }
     }
 
+    private func cancelGeminiRetry() {
+        geminiRetry.cancel()
+        geminiRetryCredentials = nil
+    }
+
+    private func scheduleGeminiRetry(at deadline: Date) {
+        guard settings.geminiEnabled else { return }
+        let credentials = GeminiRetryCredentials(settings)
+        if geminiRetryCredentials != credentials {
+            cancelGeminiRetry()
+            geminiRetryCredentials = credentials
+        }
+        geminiRetry.schedule(at: deadline, ready: { [weak self] in
+            guard let self else { return true }
+            return !self.isRefreshing && !self.geminiRefreshInProgress
+        }) { [weak self] in
+            guard let self else { return }
+            guard !Task.isCancelled, self.settings.geminiEnabled,
+                  GeminiRetryCredentials(self.settings) == credentials,
+                  self.quotas[.gemini]?.hadRefreshError == true else { return }
+            Log.provider.notice("provider=gemini 冷却/退避结束，自动补刷")
+            await self.refreshAll(trigger: .geminiRetry)
+        }
+    }
+
     public func refreshGemini() async {
+        // 设置页可直接调用此方法；等待它结束，避免全局轮次静默跳过 Gemini。
+        while geminiRefreshInProgress {
+            do { try await Task.sleep(nanoseconds: 100_000_000) } catch { return }
+        }
+        guard !Task.isCancelled else { return }
+        geminiRefreshInProgress = true
         let gen = refreshGeneration
+        defer {
+            geminiRefreshInProgress = false
+            if gen == refreshGeneration, var current = quotas[.gemini] {
+                current.isLoading = false
+                quotas[.gemini] = current
+            }
+        }
         var quota = quotas[.gemini] ?? ProviderQuota(provider: .gemini)
         quota.isLoading = true
         quota.errorMessage = nil
@@ -1094,6 +1167,8 @@ public final class RefreshManager: ObservableObject {
                     apiKey: settings.geminiApiKey,
                     endpoint: settings.geminiEndpoint
                 )
+                guard !Task.isCancelled, gen == refreshGeneration else { return }
+                cancelGeminiRetry()
                 quota.fiveHourWindow = res.fiveHour
                 quota.weeklyWindow = res.weekly
                 quota.isAuthorized = true
@@ -1104,10 +1179,13 @@ public final class RefreshManager: ObservableObject {
                 commit(quota, for: .gemini, gen: gen)
                 return
             } catch {
+                guard !Task.isCancelled, !GeminiService.isCancellation(error) else { return }
                 // If API Key failed, only fall back to OAuth/local if available
                 let local = await GeminiService.shared.readLocalGeminiConfig(storedRefreshToken: settings.geminiRefreshToken)
                 let hasOAuth = !settings.geminiToken.isEmpty || local.account != nil || local.token != nil || local.refreshToken != nil
+                guard !Task.isCancelled, gen == refreshGeneration else { return }
                 if !hasOAuth {
+                    cancelGeminiRetry()
                     // Key 已配置：失败按「刷新失败」处理（可能是网络未就绪），不算未配置
                     quota.hadRefreshError = true
                     quota.errorMessage = error.localizedDescription
@@ -1125,6 +1203,8 @@ public final class RefreshManager: ObservableObject {
                 token: settings.geminiToken,
                 storedRefreshToken: settings.geminiRefreshToken
             )
+            guard !Task.isCancelled, gen == refreshGeneration else { return }
+            cancelGeminiRetry()
             quota.fiveHourWindow = res.fiveHour
             quota.weeklyWindow = res.weekly
             quota.isAuthorized = true
@@ -1139,6 +1219,12 @@ public final class RefreshManager: ObservableObject {
                 saveSettings()
             }
         } catch {
+            guard !Task.isCancelled, !GeminiService.isCancellation(error), gen == refreshGeneration else { return }
+            if let credentialError = error as? GeminiService.CredentialError, let retryAt = credentialError.retryAt {
+                scheduleGeminiRetry(at: retryAt)
+            } else {
+                cancelGeminiRetry()
+            }
             // 授权来源存在但失败（多为网络未就绪）：不算未配置，保留授权态与旧数据
             quota.hadRefreshError = true
             quota.errorMessage = error.localizedDescription
@@ -1150,6 +1236,7 @@ public final class RefreshManager: ObservableObject {
             }
         }
 
+        guard !Task.isCancelled else { return }
         quota.isLoading = false
         commit(quota, for: .gemini, gen: gen)
     }
@@ -1262,6 +1349,8 @@ public final class RefreshManager: ObservableObject {
     /// async 是因为授权框会让那次钥匙串调用挂到用户点完为止 —— 调用方 SettingsView 用
     /// Task 包起来，别让按钮点击把主线程占住。
     public func importGeminiFromLocal() async -> Bool {
+        cancelGeminiRetry()
+        await GeminiService.shared.resetTokenRefreshState()
         let local = await GeminiService.shared.readLocalGeminiConfig(
             storedRefreshToken: settings.geminiRefreshToken,
             allowKeychainInteraction: true
@@ -1294,6 +1383,7 @@ public final class RefreshManager: ObservableObject {
     /// 登录窗口拿到授权码后的第二步：换 token、落钥匙串、立刻刷一轮。
     /// 返回 false 时额度仍不可用，具体原因看 quotas[.gemini].errorMessage。
     public func completeGeminiGoogleLogin(code: String, redirectPort: Int) async -> Bool {
+        cancelGeminiRetry()
         do {
             let res = try await GeminiService.shared.exchangeGoogleLoginCode(code: code, redirectPort: redirectPort)
             settings.geminiOwnAccount = res.account
@@ -1309,6 +1399,7 @@ public final class RefreshManager: ObservableObject {
 
     /// 「退出登录」：清自有凭证，回到本地 Antigravity 凭证链路。
     public func logoutGeminiOwnLogin() async {
+        cancelGeminiRetry()
         await GeminiService.shared.clearOwnLogin()
         settings.geminiOwnAccount = ""
         saveSettings()
