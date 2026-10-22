@@ -18,14 +18,16 @@ public actor GeminiService {
     }
 
     // Antigravity (Google Code Assist) quota backend endpoints.
-    // 两个端点对 retrieveUserQuotaSummary 的分组返回集不同（2026-10 实测）：
-    // cloudcode-pa 返回 "Gemini Models" + "Claude and GPT models" 两组，
-    // daily-cloudcode-pa 只返回 "Claude and GPT models" 一组——Gemini 组只在
-    // cloudcode-pa 上，所以它排前；daily 保留兜底（fetchAvailableModels 两边都通）。
+    // 分组返回集可能随端点和客户端版本变化，逐端点解析后再决定是否回退。
     private static let cloudCodeEndpoints = [
         "https://cloudcode-pa.googleapis.com",
         "https://daily-cloudcode-pa.googleapis.com"
     ]
+
+    // 配额后端按 User-Agent 中的客户端版本选择返回分组。2026-10-22 对照实测：
+    // 裸 "antigravity" 和 1.0.0 仅返回 Claude/GPT 组；官方 2.25.0 协议版本
+    // 能返回 Gemini 的 weekly/5h。此处是接口兼容版本，不是 TokenBar 的应用版本。
+    private static let cloudCodeUserAgent = "antigravity/2.25.0"
 
     // The OAuth client pair used for token refresh is the public "installed app" client that
     // Google ships inside the agy CLI / Antigravity IDE binaries. Nothing is embedded here:
@@ -878,8 +880,7 @@ public actor GeminiService {
 
     /// Maps the "Gemini Models" group's weekly / 5-hour buckets of retrieveUserQuotaSummary to TokenWindows.
     ///
-    /// 两个配额端点返回的分组集不同（实测 daily 端点只回 "Claude and GPT models" 组，
-    /// Gemini 组只在 cloudcode-pa 上），所以不能「第一个 2xx 就用」：逐个端点解析，
+    /// 两个配额端点返回的分组集可能不同，所以不能「第一个 2xx 就用」：逐个端点解析，
     /// 直到某个响应里解析出 Gemini 组；全部没有再走按模型聚合的回退。此前 daily 排
     /// 第一且首个 2xx 即返回，Gemini 组永远匹配不上，静默退化到只产 5h 窗口的回退——
     /// 这正是「只有 5 小时额度、没有每周额度」那次线上问题的根因。
@@ -974,7 +975,7 @@ public actor GeminiService {
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-        req.setValue("antigravity", forHTTPHeaderField: "User-Agent")
+        req.setValue(Self.cloudCodeUserAgent, forHTTPHeaderField: "User-Agent")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = Data("{}".utf8)
         req.timeoutInterval = 15
