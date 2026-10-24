@@ -146,9 +146,123 @@ namespace TokenBar.Services
         private static readonly TimeSpan TokenRefreshBudget = TimeSpan.FromSeconds(20);
         private const int TokenClientCandidateLimit = 3;
 
+        // ---------- 自有 Google 登录（loopback OAuth）----------
+        // 与 mac 端 geminiOwnRefreshToken 钥匙串条目同义：TokenBar 自己登录换来的
+        // refresh_token 存在自己的凭据管理器条目里，Antigravity 重登轮换 token 影响不到它。
+        private static readonly SecretKey OwnRefreshTokenKey = SecretKey.GeminiOwnRefreshToken;
+        private static readonly TimeSpan LoginCallbackBudget = TimeSpan.FromMinutes(5);
+        private static readonly Random LoginPortRandom = new();
+        private readonly object _ownStateLock = new();
+        private string? _ownRefreshTokenCache;
+        private bool _ownRefreshTokenLoaded;
+        /// <summary>登录成功时记下的账号（来自 id_token / userinfo），自有路径显示用</summary>
+        private string? _ownAccountHint;
+        /// <summary>一次登录流程中「授权 URL 用的 client」必须和「换 code 的 client」完全一致，否则 Google 拒收 code。</summary>
+        private (string Id, string Secret)? _pendingLoginClient;
+
         private sealed class QuotaAuthException : Exception
         {
             public QuotaAuthException() : base("quota auth rejected") { }
+        }
+
+        /// <summary>
+        /// Gemini 凭证链的失败阶段，每个阶段对应一个确实有用的恢复动作。
+        /// 与 mac 端 CredentialStage 同构（去掉 keychainACL：Windows 凭据管理器没有 ACL 授权框这回事）。
+        /// </summary>
+        internal enum GeminiCredentialStage
+        {
+            /// <summary>哪里都没有凭证（未登录、未安装 Antigravity）</summary>
+            NoCredentials,
+            /// <summary>refresh_token 存在但 Google 判 invalid_grant——已被 Antigravity 重新登录轮换</summary>
+            RefreshTokenDead,
+            /// <summary>刷新刚失败过、处于冷却期（瞬态，下轮自动重试）</summary>
+            RefreshTokenCooldown,
+            /// <summary>token 端点网络不可达</summary>
+            TokenRefreshUnreachable,
+            /// <summary>扫描出的 client id/secret 全部配不上（Antigravity 组件更新过）</summary>
+            ClientMismatch,
+            /// <summary>换到了 access token，但配额接口 401/403</summary>
+            QuotaRejected,
+            /// <summary>TokenBar 自己的 Google 登录凭证被判无效（被重新授权吊销）</summary>
+            OwnLoginRevoked
+        }
+
+        internal sealed class GeminiCredentialException : Exception
+        {
+            public GeminiCredentialStage Stage { get; }
+
+            public GeminiCredentialException(GeminiCredentialStage stage)
+                : base(CredentialFailureMessage(stage))
+            {
+                Stage = stage;
+            }
+
+            internal static string CredentialFailureMessage(GeminiCredentialStage stage)
+            {
+                var zh = LocalizationManager.Instance.IsChinese;
+                return stage switch
+                {
+                    GeminiCredentialStage.NoCredentials => zh
+                        ? "未找到 Gemini 凭证：请在 设置 → Gemini 用 Google 账号登录，或先在 Antigravity 中登录（也可设置 ANTIGRAVITY_CLIENT_ID / ANTIGRAVITY_CLIENT_SECRET 环境变量）"
+                        : "No Gemini credentials found. Sign in with your Google account in Settings → Gemini, or log in via Antigravity first (you can also set ANTIGRAVITY_CLIENT_ID / ANTIGRAVITY_CLIENT_SECRET)"
+                    ,
+                    GeminiCredentialStage.RefreshTokenDead => zh
+                        ? "Gemini 凭证已失效（Antigravity 重新登录会轮换 refresh_token）。推荐在 设置 → Gemini 直接用 Google 账号登录，一次登录不再依赖本地文件"
+                        : "Gemini credentials are no longer valid (Antigravity re-logins rotate the refresh_token). Sign in with your Google account in Settings → Gemini for a login that no longer depends on local files"
+                    ,
+                    GeminiCredentialStage.RefreshTokenCooldown => zh
+                        ? "Gemini 令牌刷新冷却中，稍后自动重试"
+                        : "Gemini token refresh is cooling down; it will retry automatically"
+                    ,
+                    GeminiCredentialStage.TokenRefreshUnreachable => zh
+                        ? "无法连接 Google 账号服务，请检查网络后稍候重试"
+                        : "Cannot reach Google's account service; check the network and retry later"
+                    ,
+                    GeminiCredentialStage.ClientMismatch => zh
+                        ? "本地 OAuth 客户端配对失效（Antigravity 组件更新过）：请重启 TokenBar 重新扫描，或在 设置 → Gemini 用 Google 账号登录"
+                        : "Local OAuth client pairing is broken (Antigravity components updated). Restart TokenBar to rescan, or sign in with your Google account in Settings → Gemini"
+                    ,
+                    GeminiCredentialStage.QuotaRejected => zh
+                        ? "额度接口拒绝了访问令牌（权限不足或接口协议变更），请尝试重新登录"
+                        : "The quota API rejected the access token (insufficient scopes or a protocol change). Try signing in again"
+                    ,
+                    GeminiCredentialStage.OwnLoginRevoked => zh
+                        ? "TokenBar 的 Google 登录已失效（可能被重新授权吊销），请到 设置 → Gemini 重新登录"
+                        : "TokenBar's Google sign-in was revoked (possibly by a re-consent). Please sign in again in Settings → Gemini"
+                    ,
+                    _ => zh ? "Gemini 凭证获取失败" : "Failed to obtain Gemini credentials"
+                };
+            }
+        }
+
+        /// <summary>
+        /// 一次 refresh_token 刷新的结构化结果。旧的 string 返回值时代调用方只知道「没成」，
+        /// 分不清「凭证死了（重试无用）」「网络不通（重试有用）」「冷却中（本轮跳过）」。
+        /// </summary>
+        internal enum TokenRefreshOutcomeKind
+        {
+            Success,
+            /// <summary>Google 判 invalid_grant：refresh_token 已被轮换/吊销，重试无用</summary>
+            InvalidGrant,
+            /// <summary>全部候选的 id/secret 配不上（Antigravity 组件更新过）</summary>
+            ClientMismatch,
+            /// <summary>网络/传输层失败，或响应形状不认识</summary>
+            Unreachable,
+            /// <summary>上一轮刷新刚失败过，冷却期内跳过本轮</summary>
+            Cooldown,
+            /// <summary>本机找不到任何 OAuth client 配对</summary>
+            NoCandidates
+        }
+
+        private readonly struct TokenRefreshResult
+        {
+            public TokenRefreshOutcomeKind Kind { get; }
+            public string? AccessToken { get; }
+            public TokenRefreshResult(TokenRefreshOutcomeKind kind, string? accessToken = null)
+            {
+                Kind = kind;
+                AccessToken = accessToken;
+            }
         }
 
         private static string? ReadCredential(string target)
@@ -166,7 +280,11 @@ namespace TokenBar.Services
             return null;
         }
 
-        public (string? Token, string? RefreshToken, string? Account, DateTime? Expiry) ReadLocalGeminiConfig()
+        /// <summary>
+        /// 读取本地 Gemini 凭证：凭据管理器 `gemini:antigravity` > jetski 文件 > oauth_creds.json。
+        /// 三层都没有 refresh_token 时用设置里的快照兜底，避免 Antigravity 卸载/轮换后额度失联。
+        /// </summary>
+        public (string? Token, string? RefreshToken, string? Account, DateTime? Expiry) ReadLocalGeminiConfig(string? storedRefreshToken = null)
         {
             var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             var geminiDir = Path.Combine(userProfile, ".gemini");
@@ -265,6 +383,9 @@ namespace TokenBar.Services
                 }
             }
 
+            if (string.IsNullOrWhiteSpace(refreshToken) && !string.IsNullOrWhiteSpace(storedRefreshToken))
+                refreshToken = storedRefreshToken;
+
             return (token, refreshToken, account, expiry);
         }
 
@@ -362,9 +483,31 @@ namespace TokenBar.Services
             return (fiveHour, weekly, accountDisplay);
         }
 
-        public async Task<(TokenWindow? FiveHour, TokenWindow? Weekly, string? Account)> FetchQuotaAsync(string? token, CancellationToken ct = default)
+        /// <summary>
+        /// 凭证优先级：**TokenBar 自己的 Google 登录**（`geminiOwnRefreshToken`）> 凭据管理器
+        /// `gemini:antigravity` 条目 > `~/.gemini` 文件 > 设置里的快照 refresh_token。
+        /// 自有登录走通时完全不碰外来凭证——Antigravity 重登轮换 token 与它无关。
+        /// 返回值带上本轮用到的 refresh_token，调用方据此落快照；自有路径恒为 null
+        /// （自有 token 已在自己的凭据条目里，交出去只会覆盖掉 Antigravity 的快照）。
+        /// </summary>
+        public async Task<(TokenWindow? FiveHour, TokenWindow? Weekly, string? Account, string? RefreshToken)> FetchQuotaAsync(
+            string? token, string? storedRefreshToken = null, CancellationToken ct = default)
         {
-            var local = ReadLocalGeminiConfig();
+            var own = await LoadOwnRefreshTokenAsync();
+            if (!string.IsNullOrEmpty(own))
+            {
+                try
+                {
+                    return await FetchQuotaWithOwnCredentialAsync(own!, ct);
+                }
+                catch (GeminiCredentialException ex) when (ex.Stage == GeminiCredentialStage.OwnLoginRevoked)
+                {
+                    ClearOwnRefreshToken();
+                    // 落到下面的本地链路；若本地链路也失败，最终错误按它的阶段报
+                }
+            }
+
+            var local = ReadLocalGeminiConfig(storedRefreshToken);
             var refreshToken = local.RefreshToken;
             var detectedAccount = local.Account;
 
@@ -390,7 +533,7 @@ namespace TokenBar.Services
             }
             else if (!string.IsNullOrWhiteSpace(refreshToken))
             {
-                accessToken = await RefreshAntigravityTokenAsync(refreshToken!, ct);
+                accessToken = await RequireRefreshedTokenAsync(refreshToken!, GeminiCredentialStage.RefreshTokenDead, ct);
             }
             else if (!string.IsNullOrWhiteSpace(token ?? local.Token))
             {
@@ -399,7 +542,7 @@ namespace TokenBar.Services
             }
             else
             {
-                throw new Exception(LocalizationManager.Instance.IsChinese ? "请在设置中配置 Google AI Studio Key 或检测 Google 本地登录凭证" : "Please configure a Google AI Studio Key in Settings, or detect local Google credentials");
+                throw new GeminiCredentialException(GeminiCredentialStage.NoCredentials);
             }
 
             var (fiveHour, weekly) = await FetchQuotaWithAuthRetryAsync(accessToken, refreshToken, ct);
@@ -409,7 +552,59 @@ namespace TokenBar.Services
                 detectedAccount = await FetchUserInfoAsync(accessToken, ct);
             }
 
-            return (fiveHour, weekly, detectedAccount ?? (LocalizationManager.Instance.IsChinese ? "Google 账号" : "Google Account"));
+            return (fiveHour, weekly, detectedAccount ?? (LocalizationManager.Instance.IsChinese ? "Google 账号" : "Google Account"), refreshToken);
+        }
+
+        /// <summary>
+        /// 自有登录凭证的完整路径：刷新 → 配额 → 账号。invalid_grant 抛 OwnLoginRevoked，
+        /// 由 FetchQuotaAsync 捕获后清掉自有凭证并当场落到旧链路。
+        /// </summary>
+        private async Task<(TokenWindow? FiveHour, TokenWindow? Weekly, string? Account, string? RefreshToken)> FetchQuotaWithOwnCredentialAsync(string refreshToken, CancellationToken ct)
+        {
+            string accessToken;
+            string? cached;
+            lock (_staticStateLock)
+            {
+                cached = (_cachedAccessToken != null && DateTime.UtcNow < _cachedAccessTokenExpiryUtc) ? _cachedAccessToken : null;
+            }
+            accessToken = cached ?? await RequireRefreshedTokenAsync(refreshToken, GeminiCredentialStage.OwnLoginRevoked, ct);
+
+            try
+            {
+                var (fiveHour, weekly) = await FetchAntigravityQuotaCoreAsync(accessToken, ct);
+                return (fiveHour, weekly, await OwnAccountDisplayAsync(accessToken, ct), null);
+            }
+            catch (QuotaAuthException)
+            {
+                // 缓存的 token 刚好跨过过期线：强制刷新一次再试；仍被拒才判 quotaRejected。
+                lock (_staticStateLock)
+                {
+                    _cachedAccessToken = null;
+                    _cachedAccessTokenExpiryUtc = DateTime.MinValue;
+                }
+                var refreshed = await RequireRefreshedTokenAsync(refreshToken, GeminiCredentialStage.OwnLoginRevoked, ct);
+                try
+                {
+                    var (fiveHour, weekly) = await FetchAntigravityQuotaCoreAsync(refreshed, ct);
+                    return (fiveHour, weekly, await OwnAccountDisplayAsync(refreshed, ct), null);
+                }
+                catch (QuotaAuthException)
+                {
+                    throw new GeminiCredentialException(GeminiCredentialStage.QuotaRejected);
+                }
+            }
+        }
+
+        private async Task<string> OwnAccountDisplayAsync(string accessToken, CancellationToken ct)
+        {
+            if (string.IsNullOrEmpty(_ownAccountHint))
+            {
+                var fetched = await FetchUserInfoAsync(accessToken, ct);
+                if (!string.IsNullOrEmpty(fetched)) _ownAccountHint = fetched;
+            }
+            return !string.IsNullOrEmpty(_ownAccountHint)
+                ? _ownAccountHint!
+                : (LocalizationManager.Instance.IsChinese ? "Google 账号" : "Google Account");
         }
 
         /// <summary>Fetches quota; on auth rejection refreshes the token (when possible) and retries once.</summary>
@@ -422,13 +617,16 @@ namespace TokenBar.Services
             catch (QuotaAuthException)
             {
                 if (string.IsNullOrWhiteSpace(refreshToken))
+                    throw new GeminiCredentialException(GeminiCredentialStage.QuotaRejected);
+                var refreshed = await RequireRefreshedTokenAsync(refreshToken!, GeminiCredentialStage.RefreshTokenDead, ct);
+                try
                 {
-                    throw new Exception(LocalizationManager.Instance.IsChinese
-                        ? "Antigravity 凭证无效或已过期，请重新运行 agy 登录或在设置中更新凭证"
-                        : "Antigravity credentials are invalid or expired. Please log in again via agy or update credentials in Settings");
+                    return await FetchAntigravityQuotaCoreAsync(refreshed, ct);
                 }
-                var refreshed = await RefreshAntigravityTokenAsync(refreshToken!, ct);
-                return await FetchAntigravityQuotaCoreAsync(refreshed, ct);
+                catch (QuotaAuthException)
+                {
+                    throw new GeminiCredentialException(GeminiCredentialStage.QuotaRejected);
+                }
             }
         }
 
@@ -437,7 +635,7 @@ namespace TokenBar.Services
         /// OAuth client pair until one is accepted (the binaries contain more than one client),
         /// then caches the working pair for the session.
         /// </summary>
-        private async Task<string> RefreshAntigravityTokenAsync(string refreshToken, CancellationToken ct)
+        private async Task<TokenRefreshResult> RefreshAntigravityTokenResultAsync(string refreshToken, CancellationToken ct)
         {
             // 设置页「测试连接」与定时轮次可能并发进入（前者绕过刷新闸门），
             // 串行化整个刷新流程，防止两个线程同时跑候选循环、互相踩踏静态缓存。
@@ -448,28 +646,32 @@ namespace TokenBar.Services
                 {
                     // 双重检查：等锁期间另一个线程可能刚刚刷新成功
                     if (_cachedAccessToken != null && DateTime.UtcNow < _cachedAccessTokenExpiryUtc)
-                        return _cachedAccessToken;
+                        return new TokenRefreshResult(TokenRefreshOutcomeKind.Success, _cachedAccessToken);
 
                     if (_lastTokenRefreshFailureUtc is DateTime lastFailure
                         && DateTime.UtcNow - lastFailure < TokenRefreshCooldown)
                     {
                         Log.Info("provider", "gemini token 刷新处于冷却期，跳过本轮");
-                        throw new Exception(LocalizationManager.Instance.IsChinese
-                            ? "Google 凭证刷新处于冷却期，请稍后重试或重新运行 agy 登录"
-                            : "Google credential refresh is cooling down; retry later or log in again via agy");
+                        return new TokenRefreshResult(TokenRefreshOutcomeKind.Cooldown);
                     }
                 }
 
                 var candidates = GetAntigravityClientCandidates();
+                // ToList 物化成快照：循环体内成功时会 Remove/Insert 修改 _antigravityClientCandidates
+                // （candidates 就是它的同一个引用），而 Take 是延迟求值、包装原 List 的迭代器。
+                var trialList = candidates.Take(TokenClientCandidateLimit).ToList();
+                if (trialList.Count == 0)
+                    return new TokenRefreshResult(TokenRefreshOutcomeKind.NoCandidates);
+
+                var sawInvalidGrant = false;
+                var sawClientRejection = false;
+                var sawTransportError = false;
                 string? lastDetail = null;
 
                 // 整个候选循环的硬预算：任何一个候选慢下来都不能让整轮刷新失控
                 var budget = System.Diagnostics.Stopwatch.StartNew();
 
-                // ToList 物化成快照：循环体内成功时会 Remove/Insert 修改 _antigravityClientCandidates
-                // （candidates 就是它的同一个引用），而 Take 是延迟求值、包装原 List 的迭代器。
-                // 当前靠"改完立即 return"侥幸不触发迭代器校验，快照能彻底消除这个隐患。
-                foreach (var client in candidates.Take(TokenClientCandidateLimit).ToList())
+                foreach (var client in trialList)
                 {
                     if (budget.Elapsed > TokenRefreshBudget)
                     {
@@ -477,64 +679,419 @@ namespace TokenBar.Services
                         break;
                     }
 
-                    using var resp = await Http.Shared.PostAsync("https://oauth2.googleapis.com/token",
-                        new FormUrlEncodedContent(new[]
-                        {
-                            new System.Collections.Generic.KeyValuePair<string, string>("client_id", client.Id),
-                            new System.Collections.Generic.KeyValuePair<string, string>("client_secret", client.Secret),
-                            new System.Collections.Generic.KeyValuePair<string, string>("grant_type", "refresh_token"),
-                            new System.Collections.Generic.KeyValuePair<string, string>("refresh_token", refreshToken)
-                        }), ct).ConfigureAwait(false);
-
-                    var body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-                    if (!resp.IsSuccessStatusCode)
+                    string body;
+                    int status;
+                    try
                     {
-                        lastDetail = $"{(int)resp.StatusCode}";
+                        using var resp = await Http.Shared.PostAsync("https://oauth2.googleapis.com/token",
+                            new FormUrlEncodedContent(new[]
+                            {
+                                new System.Collections.Generic.KeyValuePair<string, string>("client_id", client.Id),
+                                new System.Collections.Generic.KeyValuePair<string, string>("client_secret", client.Secret),
+                                new System.Collections.Generic.KeyValuePair<string, string>("grant_type", "refresh_token"),
+                                new System.Collections.Generic.KeyValuePair<string, string>("refresh_token", refreshToken)
+                            }), ct).ConfigureAwait(false);
+                        body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                        status = (int)resp.StatusCode;
+                    }
+                    catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                    {
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        sawTransportError = true;
+                        lastDetail = ex.Message;
                         continue;
                     }
 
-                    using var doc = JsonDocument.Parse(body);
-                    if (!doc.RootElement.TryGetProperty("access_token", out var at) || at.GetString() is not { Length: > 0 })
+                    if (status == 200)
                     {
+                        string? newToken;
+                        int expiresIn;
+                        try
+                        {
+                            using var doc = JsonDocument.Parse(body);
+                            newToken = doc.RootElement.TryGetProperty("access_token", out var at) ? at.GetString() : null;
+                            expiresIn = doc.RootElement.TryGetProperty("expires_in", out var ei) && ei.ValueKind == JsonValueKind.Number && ei.TryGetInt32(out var secs)
+                                ? secs : 3600;
+                        }
+                        catch (JsonException)
+                        {
+                            newToken = null;
+                            expiresIn = 3600;
+                        }
+                        if (!string.IsNullOrEmpty(newToken))
+                        {
+                            // Cache the working pair first so later refreshes skip the trial-and-error.
+                            lock (_staticStateLock)
+                            {
+                                _antigravityClientCandidates?.Remove(client);
+                                _antigravityClientCandidates?.Insert(0, client);
+                                _cachedAccessToken = newToken;
+                                _cachedAccessTokenExpiryUtc = DateTime.UtcNow.AddSeconds(Math.Max(60, expiresIn - 120));
+                                _lastTokenRefreshFailureUtc = null;
+                            }
+                            return new TokenRefreshResult(TokenRefreshOutcomeKind.Success, newToken);
+                        }
                         lastDetail = LocalizationManager.Instance.IsChinese ? "响应缺少 access_token" : "missing access_token";
                         continue;
                     }
 
-                    var newToken = at.GetString()!;
-                    var expiresIn = 3600;
-                    if (doc.RootElement.TryGetProperty("expires_in", out var ei) && ei.ValueKind == JsonValueKind.Number && ei.TryGetInt32(out var secs))
-                    {
-                        expiresIn = secs;
-                    }
-
-                    // Cache the working pair first so later refreshes skip the trial-and-error.
-                    lock (_staticStateLock)
-                    {
-                        _antigravityClientCandidates?.Remove(client);
-                        _antigravityClientCandidates?.Insert(0, client);
-                        _cachedAccessToken = newToken;
-                        _cachedAccessTokenExpiryUtc = DateTime.UtcNow.AddSeconds(Math.Max(60, expiresIn - 120));
-                        _lastTokenRefreshFailureUtc = null;
-                    }
-                    return newToken;
+                    // 非 200：解析错误体区分「凭证死了」「配对错了」。invalid_grant 是 refresh_token
+                    // 级的判决（已被轮换/吊销），换候选也救不回来，但仍让循环跑完——万一有别的
+                    // client 真的认它；invalid_client / unauthorized_client 只是当前配对不对。
+                    var code = ParseTokenErrorCode(body);
+                    lastDetail = code == null ? $"{status}" : $"{status} {code}";
+                    if (code == "invalid_grant") sawInvalidGrant = true;
+                    if (code == "invalid_client" || code == "unauthorized_client") sawClientRejection = true;
+                    Log.Error("provider", $"gemini token 刷新候选被拒 status={status} code={code ?? "unknown"}");
                 }
 
-                bool noCandidates;
                 lock (_staticStateLock)
                 {
                     _lastTokenRefreshFailureUtc = DateTime.UtcNow;
-                    noCandidates = _antigravityClientCandidates is { Count: 0 };
                 }
-                Log.Error("provider", "gemini token 刷新失败：所有候选都没能换到 access token");
 
-                var hint = LocalizationManager.Instance.IsChinese
-                    ? $"Google 凭证刷新失败{(noCandidates ? "（未在本机找到 Antigravity/agy 安装，可设置环境变量 ANTIGRAVITY_CLIENT_ID / ANTIGRAVITY_CLIENT_SECRET）" : $"（HTTP {lastDetail}）")}，请重新运行 agy 登录"
-                    : $"Failed to refresh Google credentials{(noCandidates ? " (no local Antigravity/agy installation found; set ANTIGRAVITY_CLIENT_ID / ANTIGRAVITY_CLIENT_SECRET)" : $" (HTTP {lastDetail})")}. Please log in again via agy";
-                throw new Exception(hint);
+                if (sawInvalidGrant)
+                {
+                    Log.Error("provider", "gemini token 刷新失败：refresh_token 已被判 invalid_grant（被轮换或吊销）");
+                    return new TokenRefreshResult(TokenRefreshOutcomeKind.InvalidGrant);
+                }
+                if (sawClientRejection && !sawTransportError)
+                {
+                    Log.Error("provider", "gemini token 刷新失败：全部候选的 id/secret 配不上（Antigravity 组件更新过）");
+                    return new TokenRefreshResult(TokenRefreshOutcomeKind.ClientMismatch);
+                }
+                Log.Error("provider", $"gemini token 刷新失败：所有候选都没能换到 access token（最后细节：{lastDetail ?? "无"}）");
+                return new TokenRefreshResult(TokenRefreshOutcomeKind.Unreachable);
             }
             finally
             {
                 _tokenRefreshSemaphore.Release();
+            }
+        }
+
+        /// <summary>从 Google token 端点的错误响应体里取 OAuth error code。纯函数，供单测。</summary>
+        internal static string? ParseTokenErrorCode(string body)
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(body);
+                if (doc.RootElement.TryGetProperty("error", out var err))
+                {
+                    if (err.ValueKind == JsonValueKind.String)
+                        return err.GetString();
+                    if (err.ValueKind == JsonValueKind.Object &&
+                        err.TryGetProperty("code", out var codeProp) && codeProp.ValueKind == JsonValueKind.String)
+                        return codeProp.GetString();
+                }
+            }
+            catch (JsonException)
+            {
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// 刷新并保证拿到 access token；失败按阶段抛 <see cref="GeminiCredentialException"/>。
+        /// invalid_grant 对外来凭证与自有登录的意义不同（前者=建议自有登录，后者=清掉回退），由调用方指定。
+        /// </summary>
+        private async Task<string> RequireRefreshedTokenAsync(string refreshToken, GeminiCredentialStage invalidGrantStage, CancellationToken ct)
+        {
+            var result = await RefreshAntigravityTokenResultAsync(refreshToken, ct);
+            return result.Kind switch
+            {
+                TokenRefreshOutcomeKind.Success => result.AccessToken!,
+                TokenRefreshOutcomeKind.InvalidGrant => throw new GeminiCredentialException(invalidGrantStage),
+                TokenRefreshOutcomeKind.ClientMismatch => throw new GeminiCredentialException(GeminiCredentialStage.ClientMismatch),
+                TokenRefreshOutcomeKind.Cooldown => throw new GeminiCredentialException(GeminiCredentialStage.RefreshTokenCooldown),
+                TokenRefreshOutcomeKind.NoCandidates => throw new GeminiCredentialException(GeminiCredentialStage.NoCredentials),
+                _ => throw new GeminiCredentialException(GeminiCredentialStage.TokenRefreshUnreachable),
+            };
+        }
+
+        // MARK: - 自有 Google 登录实现
+
+        /// <summary>读取自有登录凭证。凭据管理器暂时读不到时不置 loaded——下一轮刷新自然重试。</summary>
+        public async Task<string?> LoadOwnRefreshTokenAsync()
+        {
+            lock (_ownStateLock)
+            {
+                if (_ownRefreshTokenLoaded) return _ownRefreshTokenCache;
+            }
+            var lookup = await Task.Run(() => CredentialSecretStore.Instance.Lookup(OwnRefreshTokenKey));
+            lock (_ownStateLock)
+            {
+                switch (lookup.Kind)
+                {
+                    case SecretLookupKind.Found:
+                        _ownRefreshTokenCache = lookup.Value;
+                        _ownRefreshTokenLoaded = true;
+                        break;
+                    case SecretLookupKind.Absent:
+                        _ownRefreshTokenCache = null;
+                        _ownRefreshTokenLoaded = true;
+                        break;
+                        // Unavailable：不置 loaded，本轮按「没有」处理，下轮重试
+                }
+                return _ownRefreshTokenCache;
+            }
+        }
+
+        /// <summary>自有登录是否处于有效状态（设置页展示 / 失效后自愈用）</summary>
+        public async Task<bool> HasOwnLoginAsync() => !string.IsNullOrEmpty(await LoadOwnRefreshTokenAsync());
+
+        /// <summary>自有凭证被 Google 判失效时就地清掉；条目删除失败只记日志（内存已清，下次登录会覆盖）。</summary>
+        private void ClearOwnRefreshToken()
+        {
+            lock (_ownStateLock)
+            {
+                _ownRefreshTokenCache = null;
+                _ownRefreshTokenLoaded = true;
+            }
+            _ = Task.Run(() =>
+            {
+                try
+                {
+                    if (!CredentialSecretStore.Instance.Delete(OwnRefreshTokenKey))
+                        Log.Warn("provider", "gemini 自有登录凭据条目删除失败");
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn("provider", $"gemini 自有登录凭据条目删除异常: {ex.Message}");
+                }
+            });
+        }
+
+        /// <summary>「退出登录」：清自有凭证与账号提示，回到本地 Antigravity 凭证链路。</summary>
+        public async Task ClearOwnLoginAsync()
+        {
+            lock (_ownStateLock)
+            {
+                _ownRefreshTokenCache = null;
+                _ownRefreshTokenLoaded = true;
+                _ownAccountHint = null;
+            }
+            await Task.Run(() => CredentialSecretStore.Instance.Delete(OwnRefreshTokenKey));
+        }
+
+        public sealed record GoogleLoginPlan(string AuthorizeUrl, int RedirectPort);
+
+        /// <summary>与 Antigravity 凭证完全相同的 scope 集合（从 agy 刷出的 token 实测得到），
+        /// 保证自有登录换出的 access token 对配额接口有同等权限。</summary>
+        internal static readonly string[] LoginScopes =
+        {
+            "openid",
+            "https://www.googleapis.com/auth/userinfo.email",
+            "https://www.googleapis.com/auth/userinfo.profile",
+            "https://www.googleapis.com/auth/cloud-platform",
+            "https://www.googleapis.com/auth/cclog",
+            "https://www.googleapis.com/auth/aicode",
+            "https://www.googleapis.com/auth/experimentsandconfigs",
+        };
+
+        /// <summary>构造授权页 URL（loopback 重定向，随机端口）。本地找不到任何 OAuth client 时返回 null。</summary>
+        public GoogleLoginPlan? PrepareGoogleLogin()
+        {
+            var candidates = GetAntigravityClientCandidates();
+            if (candidates.Count == 0)
+                return null;
+            var client = candidates[0];
+            _pendingLoginClient = client;
+            int port;
+            lock (LoginPortRandom)
+                port = LoginPortRandom.Next(21000, 60001);
+
+            var items = new System.Collections.Generic.Dictionary<string, string>
+            {
+                ["client_id"] = client.Id,
+                ["redirect_uri"] = $"http://localhost:{port}",
+                ["response_type"] = "code",
+                ["scope"] = string.Join(" ", LoginScopes),
+                // access_type=offline + prompt=consent 确保 Google 一定下发 refresh_token
+                ["access_type"] = "offline",
+                ["prompt"] = "consent",
+            };
+            var query = string.Join("&", items.Select(kv => $"{Uri.EscapeDataString(kv.Key)}={Uri.EscapeDataString(kv.Value)}"));
+            return new GoogleLoginPlan($"https://accounts.google.com/o/oauth2/v2/auth?{query}", port);
+        }
+
+        /// <summary>用授权码换 token 并落库。`redirectPort` 必须与 <see cref="PrepareGoogleLogin"/> 返回的一致。</summary>
+        public async Task<(string Account, string RefreshToken)> ExchangeGoogleLoginCodeAsync(string code, int redirectPort, CancellationToken ct = default)
+        {
+            var client = _pendingLoginClient;
+            if (client == null)
+            {
+                var candidates = GetAntigravityClientCandidates();
+                if (candidates.Count > 0)
+                    client = candidates[0];
+            }
+            if (client == null)
+                throw new GeminiCredentialException(GeminiCredentialStage.NoCredentials);
+
+            using var resp = await Http.Shared.PostAsync("https://oauth2.googleapis.com/token",
+                new FormUrlEncodedContent(new[]
+                {
+                    new System.Collections.Generic.KeyValuePair<string, string>("client_id", client.Value.Id),
+                    new System.Collections.Generic.KeyValuePair<string, string>("client_secret", client.Value.Secret),
+                    new System.Collections.Generic.KeyValuePair<string, string>("grant_type", "authorization_code"),
+                    new System.Collections.Generic.KeyValuePair<string, string>("code", code),
+                    new System.Collections.Generic.KeyValuePair<string, string>("redirect_uri", $"http://localhost:{redirectPort}")
+                }), ct).ConfigureAwait(false);
+            var body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+
+            string? refreshToken = null;
+            string? accessToken = null;
+            string? idToken = null;
+            var expiresIn = 3600;
+            if (resp.IsSuccessStatusCode)
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(body);
+                    if (doc.RootElement.TryGetProperty("refresh_token", out var rt) && rt.ValueKind == JsonValueKind.String)
+                        refreshToken = rt.GetString();
+                    if (doc.RootElement.TryGetProperty("access_token", out var at) && at.ValueKind == JsonValueKind.String)
+                        accessToken = at.GetString();
+                    if (doc.RootElement.TryGetProperty("id_token", out var idt) && idt.ValueKind == JsonValueKind.String)
+                        idToken = idt.GetString();
+                    if (doc.RootElement.TryGetProperty("expires_in", out var ei) && ei.ValueKind == JsonValueKind.Number && ei.TryGetInt32(out var secs))
+                        expiresIn = secs;
+                }
+                catch (JsonException)
+                {
+                }
+            }
+            if (string.IsNullOrEmpty(refreshToken))
+            {
+                var detail = ParseTokenErrorCode(body) ?? $"HTTP {(int)resp.StatusCode}";
+                Log.Error("provider", $"provider=gemini Google 登录 code 交换失败: {detail}");
+                throw new Exception(LocalizationManager.Instance.IsChinese
+                    ? $"Google 登录 code 交换失败：{detail}，请重试"
+                    : $"Google login code exchange failed: {detail}. Please retry");
+            }
+
+            _pendingLoginClient = null;
+            lock (_staticStateLock)
+            {
+                // 交换成功说明这套配对可用，置顶让后续刷新跳过试错
+                _antigravityClientCandidates?.Remove(client.Value);
+                if (_antigravityClientCandidates != null)
+                    _antigravityClientCandidates.Insert(0, client.Value);
+                if (!string.IsNullOrEmpty(accessToken))
+                {
+                    _cachedAccessToken = accessToken;
+                    _cachedAccessTokenExpiryUtc = DateTime.UtcNow.AddSeconds(Math.Max(60, expiresIn - 120));
+                    _lastTokenRefreshFailureUtc = null;
+                }
+            }
+            // 落自有凭据条目：以前只放内存，App 一重启自有登录就丢，又退回 Antigravity 链路。
+            // 写失败也保留内存值（本次运行照常可用），只记 error，别为此让整个登录失败。
+            var persisted = await Task.Run(() => CredentialSecretStore.Instance.Set(OwnRefreshTokenKey, refreshToken!));
+            if (!persisted)
+                Log.Error("provider", "provider=gemini 自有登录 refresh_token 写入凭据管理器失败，重启后需重新登录");
+            lock (_ownStateLock)
+            {
+                _ownRefreshTokenCache = refreshToken;
+                _ownRefreshTokenLoaded = true;
+            }
+
+            _ownAccountHint = EmailFromIdToken(idToken);
+            if (string.IsNullOrEmpty(_ownAccountHint) && !string.IsNullOrEmpty(accessToken))
+                _ownAccountHint = await FetchUserInfoAsync(accessToken!, ct);
+            var account = !string.IsNullOrEmpty(_ownAccountHint)
+                ? _ownAccountHint!
+                : (LocalizationManager.Instance.IsChinese ? "Google 账号" : "Google Account");
+            return (account, refreshToken!);
+        }
+
+        /// <summary>从 Google id_token（JWT）里解出 email。不做签名校验：token 是刚从 Google 的
+        /// TLS 响应体里拿到的，这里只是展示账号，不是鉴权依据。纯函数，供单测。</summary>
+        internal static string? EmailFromIdToken(string? idToken)
+        {
+            if (string.IsNullOrWhiteSpace(idToken))
+                return null;
+            var parts = idToken.Split('.');
+            if (parts.Length != 3)
+                return null;
+            var b64 = parts[1].Replace('-', '+').Replace('_', '/');
+            b64 = b64.PadRight(b64.Length + (4 - b64.Length % 4) % 4, '=');
+            try
+            {
+                var json = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(b64));
+                using var doc = JsonDocument.Parse(json);
+                return doc.RootElement.TryGetProperty("email", out var email) && email.ValueKind == JsonValueKind.String
+                    ? email.GetString()
+                    : null;
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("provider", $"解析 id_token 失败: {ex.Message}");
+                return null;
+            }
+        }
+
+        /// <summary>等待 Google 重定向回 localhost 拿授权码（一次性监听，5 分钟预算）。
+        /// 超时抛带本地化消息的异常；用户在浏览器取消/拒绝时同样抛异常。</summary>
+        public static async Task<string> WaitForGoogleLoginCodeAsync(int port, CancellationToken ct = default)
+        {
+            var zh = LocalizationManager.Instance.IsChinese;
+            System.Net.HttpListener listener;
+            try
+            {
+                listener = new System.Net.HttpListener();
+                listener.Prefixes.Add($"http://localhost:{port}/");
+                listener.Start();
+            }
+            catch (Exception ex)
+            {
+                throw new Exception(zh
+                    ? $"无法启动本地登录回调监听（端口 {port}）：{ex.Message}"
+                    : $"Cannot start the local sign-in callback listener (port {port}): {ex.Message}");
+            }
+            try
+            {
+                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                timeoutCts.CancelAfter(LoginCallbackBudget);
+                System.Net.HttpListenerContext context;
+                try
+                {
+                    context = await listener.GetContextAsync().WaitAsync(timeoutCts.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw new Exception(zh
+                        ? "等待 Google 登录超时（5 分钟），请重新发起登录"
+                        : "Timed out waiting for Google sign-in (5 minutes). Please start the login again");
+                }
+
+                var code = context.Request.QueryString["code"];
+                var error = context.Request.QueryString["error"];
+
+                var html = (zh
+                    ? (string.IsNullOrEmpty(code)
+                        ? "<meta charset=\"utf-8\"><h2>授权未成功，请关闭此页返回 TokenBar 重试</h2>"
+                        : "<meta charset=\"utf-8\"><h2>授权完成！可以关闭此页返回 TokenBar</h2>")
+                    : (string.IsNullOrEmpty(code)
+                        ? "<meta charset=\"utf-8\"><h2>Authorization failed. Close this page and retry in TokenBar</h2>"
+                        : "<meta charset=\"utf-8\"><h2>Authorized! Close this page and return to TokenBar</h2>"));
+                var bytes = System.Text.Encoding.UTF8.GetBytes(html);
+                context.Response.ContentType = "text/html; charset=utf-8";
+                context.Response.ContentLength64 = bytes.Length;
+                await context.Response.OutputStream.WriteAsync(bytes, 0, bytes.Length);
+                context.Response.Close();
+
+                if (!string.IsNullOrEmpty(code))
+                    return code!;
+                throw new Exception(zh
+                    ? $"Google 登录未完成：{error ?? "未收到授权码"}"
+                    : $"Google sign-in did not complete: {error ?? "no authorization code received"}");
+            }
+            finally
+            {
+                listener.Stop();
+                listener.Close();
             }
         }
 

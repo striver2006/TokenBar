@@ -36,6 +36,7 @@ namespace TokenBar.Services
             new(SecretKey.ClaudeToken, s => s.ClaudeToken, (s, v) => s.ClaudeToken = v),
             new(SecretKey.GeminiApiKey, s => s.GeminiApiKey, (s, v) => s.GeminiApiKey = v),
             new(SecretKey.GeminiToken, s => s.GeminiToken, (s, v) => s.GeminiToken = v),
+            new(SecretKey.GeminiRefreshToken, s => s.GeminiRefreshToken, (s, v) => s.GeminiRefreshToken = v),
             new(SecretKey.DeepSeekApiKey, s => s.DeepSeekApiKey, (s, v) => s.DeepSeekApiKey = v),
             new(SecretKey.VolcengineApiKey, s => s.VolcengineApiKey, (s, v) => s.VolcengineApiKey = v),
             new(SecretKey.KimiApiKey, s => s.KimiApiKey, (s, v) => s.KimiApiKey = v),

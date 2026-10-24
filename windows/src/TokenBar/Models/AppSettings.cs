@@ -67,6 +67,11 @@ namespace TokenBar.Models
         public string GeminiApiKey { get; set; } = string.Empty;
         public string GeminiEndpoint { get; set; } = "https://generativelanguage.googleapis.com";
         public string GeminiToken { get; set; } = string.Empty;
+        // 从 ~/.gemini / Antigravity 凭据里快照下来的 refresh_token（值本身进凭据管理器）。
+        // 外部凭证被轮换或 Antigravity 卸载后仍能刷新，与 mac 端 geminiRefreshToken 同名同义。
+        public string GeminiRefreshToken { get; set; } = string.Empty;
+        // TokenBar 自有 Google 登录绑定的账号（仅展示，非凭证）。
+        public string GeminiOwnAccount { get; set; } = string.Empty;
 
         public bool DeepSeekEnabled { get; set; } = false;
         public string DeepSeekApiKey { get; set; } = string.Empty;

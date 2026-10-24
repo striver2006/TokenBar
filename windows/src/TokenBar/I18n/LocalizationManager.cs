@@ -254,6 +254,18 @@ namespace TokenBar.I18n
         public string LabelGetKeyColon => IsChinese ? "获取密钥:" : "Get Key:";
         public string MethodGeminiOAuth => IsChinese ? "方式二：Google 账号授权 / 本地凭证 (Google One / Antigravity)" : "Method 2: Google Account Authorization / Local Credentials (OAuth)";
         public string BtnGoogleWebLogin => IsChinese ? "Google 网站登录授权" : "Google Web Login Authorization";
+        public string BtnGoogleAccountLogin => IsChinese ? "使用 Google 账号登录" : "Sign in with Google Account";
+        public string BtnGoogleRelogin => IsChinese ? "重新登录" : "Sign in Again";
+        public string BtnLogoutGemini => IsChinese ? "退出登录" : "Sign Out";
+        public string LabelGoogleLoginHint => IsChinese
+            ? "登录一次即长期有效：TokenBar 用自己的凭据条目保存凭证，不依赖 Antigravity 的授权与本地文件，额度刷新不再受其影响。"
+            : "Sign in once and it lasts: TokenBar stores the credential in its own entry, independent of Antigravity's authorization or local files.";
+        public string AlertGeminiLoginSuccess => IsChinese ? "Google 账号登录成功，Gemini 额度已切换到自有凭证！" : "Google account signed in; Gemini quota now runs on TokenBar's own credential!";
+        public string AlertGeminiLoginFailed => IsChinese ? "Google 登录完成，但额度查询未成功，请查看卡片上的错误信息。" : "Google sign-in completed, but the quota query failed; check the error on the card.";
+        public string AlertGeminiNoClient => IsChinese
+            ? "本地未找到可用的 Google OAuth client（需要已安装 Antigravity 或 agy CLI）。也可设置 ANTIGRAVITY_CLIENT_ID / ANTIGRAVITY_CLIENT_SECRET 环境变量后重启。"
+            : "No Google OAuth client found locally (Antigravity or the agy CLI must be installed). You can also set ANTIGRAVITY_CLIENT_ID / ANTIGRAVITY_CLIENT_SECRET and relaunch.";
+        public string GeminiWaitingLogin => IsChinese ? "已在浏览器打开 Google 登录页，请在浏览器中完成授权…" : "Google sign-in page opened in your browser. Complete the authorization there…";
         public string BtnReadLocalGeminiConfig => IsChinese ? "读取本地 Gemini / Antigravity 配置" : "Read Local Gemini / Antigravity Credentials";
         public string LabelManualGeminiToken => IsChinese ? "手动输入 Access Token (可选):" : "Manual Access Token (Optional):";
 

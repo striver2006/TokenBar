@@ -32,6 +32,9 @@ namespace TokenBar.Services
         public static readonly SecretKey ClaudeToken = new("claudeToken");
         public static readonly SecretKey GeminiApiKey = new("geminiApiKey");
         public static readonly SecretKey GeminiToken = new("geminiToken");
+        public static readonly SecretKey GeminiRefreshToken = new("geminiRefreshToken");
+        /// <summary>TokenBar 自有 Google 登录的 refresh_token，由 GeminiService 直接托管，不挂设置字段。</summary>
+        public static readonly SecretKey GeminiOwnRefreshToken = new("geminiOwnRefreshToken");
         public static readonly SecretKey DeepSeekApiKey = new("deepseekApiKey");
         public static readonly SecretKey VolcengineApiKey = new("volcengineApiKey");
         public static readonly SecretKey KimiApiKey = new("kimiApiKey");

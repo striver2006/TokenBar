@@ -264,7 +264,9 @@ namespace TokenBar.Views
             BtnTestGeminiKey.Content = i18n.SaveAndTest;
             BtnClearGeminiKey.Content = i18n.ClearKey;
             TxtGeminiMethod2Title.Text = i18n.MethodGeminiOAuth;
-            BtnGeminiWebLogin.Content = i18n.BtnGoogleWebLogin;
+            TxtGeminiLoginHint.Text = i18n.LabelGoogleLoginHint;
+            BtnGeminiLogoutOwn.Content = i18n.BtnLogoutGemini;
+            UpdateGeminiOwnLoginUi();
             BtnImportGeminiLocal.Content = i18n.BtnReadLocalGeminiConfig;
             TxtGeminiManualTokenLabel.Text = i18n.LabelManualGeminiToken;
             BtnSaveGeminiToken.Content = i18n.Save;
@@ -649,6 +651,7 @@ namespace TokenBar.Views
             UpdateOne(ProviderType.OpenAI, TxtOpenAIStatusDot, TxtOpenAIStatus, TxtOpenAIAccount);
             UpdateOne(ProviderType.ClaudeCode, TxtClaudeStatusDot, TxtClaudeStatus, TxtClaudeAccount);
             UpdateOne(ProviderType.Gemini, TxtGeminiStatusDot, TxtGeminiStatus, TxtGeminiAccount);
+            UpdateGeminiOwnLoginUi();
             UpdateOne(ProviderType.DeepSeek, TxtDeepSeekStatusDot, TxtDeepSeekStatus, TxtDeepSeekAccount);
             UpdateOne(ProviderType.Volcengine, TxtVolcengineStatusDot, TxtVolcengineStatus, TxtVolcengineAccount);
             UpdateOne(ProviderType.Kimi, TxtKimiStatusDot, TxtKimiStatus, TxtKimiAccount);
@@ -755,32 +758,84 @@ namespace TokenBar.Views
             await RefreshManager.Instance.RefreshGeminiAsync();
         }
 
+        /// <summary>自有 Google 登录的按钮区状态：未登录=「使用 Google 账号登录」，已登录=「重新登录」+ 账号 + 退出。</summary>
+        private void UpdateGeminiOwnLoginUi()
+        {
+            var i18n = LocalizationManager.Instance;
+            var account = RefreshManager.Instance.Settings.GeminiOwnAccount;
+            var loggedIn = !string.IsNullOrEmpty(account);
+            BtnGeminiWebLogin.Content = loggedIn ? i18n.BtnGoogleRelogin : i18n.BtnGoogleAccountLogin;
+            if (TxtGeminiOwnAccount.Text != i18n.GeminiWaitingLogin)
+                TxtGeminiOwnAccount.Text = loggedIn ? $"✓ {account}" : "";
+            BtnGeminiLogoutOwn.Visibility = loggedIn ? Visibility.Visible : Visibility.Collapsed;
+        }
+
         private async void BtnGeminiWebLogin_Click(object sender, RoutedEventArgs e)
         {
             var i18n = LocalizationManager.Instance;
-            if (RefreshManager.Instance.ImportGeminiFromLocal())
+            var plan = RefreshManager.Instance.GeminiGoogleLoginPlan();
+            if (plan == null)
             {
-                TxtGeminiToken.Text = RefreshManager.Instance.Settings.GeminiToken;
-                await RefreshManager.Instance.RefreshGeminiAsync();
-                UpdateStatuses();
-                var q = RefreshManager.Instance.Quotas[ProviderType.Gemini];
-                MessageBox.Show(i18n.IsChinese ? $"Google 网站登录授权成功！\n已绑定账号: {q.AccountInfo ?? "Google 账号"}" : $"Google web login authorization successful!\nAccount: {q.AccountInfo ?? "Google Account"}", i18n.IsChinese ? "授权成功" : "Authorized", MessageBoxButton.OK, MessageBoxImage.Information);
+                MessageBox.Show(i18n.AlertGeminiNoClient, i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
             }
-            else
+
+            BtnGeminiWebLogin.IsEnabled = false;
+            try
             {
-                var result = MessageBox.Show(i18n.IsChinese ? "未检测到本地 Google 账号凭据。\n\n您可以使用 Antigravity CLI (agy) 完成 Google 登录，或在浏览器中打开 Google 授权页面。\n\n是否立即在浏览器中打开授权页面？" : "No local Google credentials found.\n\nYou can login using Antigravity CLI (agy) or open Google authorization page in browser.\n\nOpen authorization page in browser now?", i18n.AlertNotice, MessageBoxButton.YesNo, MessageBoxImage.Question);
-                if (result == MessageBoxResult.Yes)
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
                 {
-                    try
-                    {
-                        var url = "https://accounts.google.com/o/oauth2/auth?client_id=764086051850-6qr4p6gpi6hn506pt8ejuq83di341hur.apps.googleusercontent.com&redirect_uri=urn:ietf:wg:oauth:2.0:oob&response_type=code&scope=https://www.googleapis.com/auth/cloud-platform%20https://www.googleapis.com/auth/userinfo.email";
-                        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo { FileName = url, UseShellExecute = true });
-                    }
-                    catch (Exception ex)
-                    {
-                        Log.Warn("settings", $"打开 Google 授权页面失败: {ex.Message}");
-                    }
+                    FileName = plan.AuthorizeUrl,
+                    UseShellExecute = true
+                });
+                TxtGeminiOwnAccount.Text = i18n.GeminiWaitingLogin;
+
+                string code;
+                try
+                {
+                    code = await GeminiService.WaitForGoogleLoginCodeAsync(plan.RedirectPort);
                 }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(ex.Message, i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+
+                var ok = await RefreshManager.Instance.CompleteGeminiGoogleLoginAsync(code, plan.RedirectPort);
+                MessageBox.Show(ok ? i18n.AlertGeminiLoginSuccess : i18n.AlertGeminiLoginFailed,
+                    i18n.AlertNotice, MessageBoxButton.OK,
+                    ok ? MessageBoxImage.Information : MessageBoxImage.Warning);
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("settings", $"Google 登录流程失败: {ex.Message}");
+                MessageBox.Show(ex.Message, i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+            finally
+            {
+                BtnGeminiWebLogin.IsEnabled = true;
+                TxtGeminiOwnAccount.Text = "";
+                UpdateGeminiOwnLoginUi();
+                UpdateStatuses();
+            }
+        }
+
+        private async void BtnGeminiLogoutOwn_Click(object sender, RoutedEventArgs e)
+        {
+            BtnGeminiLogoutOwn.IsEnabled = false;
+            try
+            {
+                await RefreshManager.Instance.LogoutGeminiOwnLoginAsync();
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("settings", $"Gemini 退出登录失败: {ex.Message}");
+            }
+            finally
+            {
+                BtnGeminiLogoutOwn.IsEnabled = true;
+                UpdateGeminiOwnLoginUi();
+                UpdateStatuses();
             }
         }
 

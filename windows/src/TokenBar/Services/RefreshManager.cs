@@ -220,8 +220,8 @@ namespace TokenBar.Services
             }
 
             // Auto-detect local Gemini if available
-            var localGemini = GeminiService.Instance.ReadLocalGeminiConfig();
-            if (localGemini.Token != null || localGemini.Account != null)
+            var localGemini = GeminiService.Instance.ReadLocalGeminiConfig(Settings.GeminiRefreshToken);
+            if (localGemini.Token != null || localGemini.Account != null || localGemini.RefreshToken != null)
             {
                 var q = Quotas[ProviderType.Gemini];
                 q.IsAuthorized = true;
@@ -992,8 +992,8 @@ namespace TokenBar.Services
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
                 catch (Exception ex)
                 {
-                    var local = GeminiService.Instance.ReadLocalGeminiConfig();
-                    bool hasOAuth = !string.IsNullOrWhiteSpace(Settings.GeminiToken) || local.Account != null || local.Token != null;
+                    var local = GeminiService.Instance.ReadLocalGeminiConfig(Settings.GeminiRefreshToken);
+                    bool hasOAuth = !string.IsNullOrWhiteSpace(Settings.GeminiToken) || local.Account != null || local.Token != null || local.RefreshToken != null;
                     if (!hasOAuth)
                     {
                         if (IsStaleGeneration(generation, "gemini")) return;
@@ -1011,7 +1011,8 @@ namespace TokenBar.Services
             // 2. OAuth Web Login / Local Credentials Fallback
             try
             {
-                var (fiveHour, weekly, account) = await GeminiService.Instance.FetchQuotaAsync(Settings.GeminiToken, ct);
+                var (fiveHour, weekly, account, usedRefreshToken) = await GeminiService.Instance.FetchQuotaAsync(
+                    Settings.GeminiToken, Settings.GeminiRefreshToken, ct);
                 if (IsStaleGeneration(generation, "gemini")) return;
                 quota.FiveHourWindow = fiveHour;
                 quota.WeeklyWindow = weekly;
@@ -1019,6 +1020,14 @@ namespace TokenBar.Services
                 quota.HadRefreshError = false;
                 if (account != null) quota.AccountInfo = account;
                 quota.LastUpdated = DateTime.Now;
+                PersistGeminiRefreshToken(usedRefreshToken);
+                // 自有登录的 refresh_token 已被服务层自动清掉（被判 invalid_grant）时，
+                // 展示层的账号标记同步撤下，别让设置页显示一个实际已失效的登录。
+                if (!string.IsNullOrEmpty(Settings.GeminiOwnAccount) && !await GeminiService.Instance.HasOwnLoginAsync())
+                {
+                    Settings.GeminiOwnAccount = string.Empty;
+                    SaveSettings();
+                }
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex)
@@ -1028,6 +1037,13 @@ namespace TokenBar.Services
                 quota.HadRefreshError = true;
                 quota.ErrorMessage = DescribeGeminiFailure(ex);
                 Log.Error("provider", $"provider=gemini failed: {DescribeGeminiFailure(ex)}");
+                if (ex is GeminiService.GeminiCredentialException credEx &&
+                    credEx.Stage == GeminiService.GeminiCredentialStage.OwnLoginRevoked &&
+                    !string.IsNullOrEmpty(Settings.GeminiOwnAccount))
+                {
+                    Settings.GeminiOwnAccount = string.Empty;
+                    SaveSettings();
+                }
             }
             finally
             {
@@ -1232,7 +1248,7 @@ namespace TokenBar.Services
 
         public bool ImportGeminiFromLocal()
         {
-            var local = GeminiService.Instance.ReadLocalGeminiConfig();
+            var local = GeminiService.Instance.ReadLocalGeminiConfig(Settings.GeminiRefreshToken);
             if (local.Token != null)
             {
                 Settings.GeminiToken = local.Token;
@@ -1241,6 +1257,52 @@ namespace TokenBar.Services
                 return true;
             }
             return false;
+        }
+
+        /// <summary>把本轮用到的 refresh_token 快照进设置（值本身进凭据管理器）。
+        /// 只在值变化时写：SaveSettings 会走一遍全部凭证的 diff，别每轮刷新都触发。</summary>
+        private void PersistGeminiRefreshToken(string? refreshToken)
+        {
+            if (string.IsNullOrWhiteSpace(refreshToken) || refreshToken == Settings.GeminiRefreshToken)
+                return;
+            Settings.GeminiRefreshToken = refreshToken;
+            SaveSettings();
+        }
+
+        // MARK: - Gemini 自有 Google 登录
+
+        /// <summary>设置页「使用 Google 账号登录」第一步：生成 loopback 授权 URL + 端口。
+        /// 返回 null 表示本地连一个 OAuth client 都找不到（agy / Antigravity 都没装）。</summary>
+        public GeminiService.GoogleLoginPlan? GeminiGoogleLoginPlan() => GeminiService.Instance.PrepareGoogleLogin();
+
+        /// <summary>登录回调拿到授权码后的第二步：换 token、落自有凭据条目、立刻刷一轮。
+        /// 返回 false 时额度仍不可用，具体原因看 Quotas[Gemini].ErrorMessage。</summary>
+        public async Task<bool> CompleteGeminiGoogleLoginAsync(string code, int redirectPort, CancellationToken ct = default)
+        {
+            try
+            {
+                var res = await GeminiService.Instance.ExchangeGoogleLoginCodeAsync(code, redirectPort, ct);
+                Settings.GeminiOwnAccount = res.Account;
+                SaveSettings();
+                await RefreshGeminiAsync(ct);
+                return Quotas[ProviderType.Gemini].IsAuthorized;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                Log.Error("provider", $"provider=gemini Google 登录 code 交换失败: {ex.Message}");
+                await RefreshGeminiAsync(ct);
+                return false;
+            }
+        }
+
+        /// <summary>「退出登录」：清自有凭证，回到本地 Antigravity 凭证链路。</summary>
+        public async Task LogoutGeminiOwnLoginAsync()
+        {
+            await GeminiService.Instance.ClearOwnLoginAsync();
+            Settings.GeminiOwnAccount = string.Empty;
+            SaveSettings();
+            await RefreshGeminiAsync();
         }
 
         public void AddCustomProvider(CustomProviderConfig config)
