@@ -28,6 +28,12 @@ namespace TokenBar.Services
             "https://daily-cloudcode-pa.googleapis.com"
         };
 
+        // 配额后端按 User-Agent 中的客户端版本选择返回分组（2026-10 本机同凭证对照实测）：
+        // 裸 "antigravity" 只回 Claude/GPT 组，带官方 2.25.0 协议版本才回 Gemini 的
+        // weekly/5h 两组桶；裸 UA 会静默退到只产 5h 窗口的模型回退——「没有周额度」的根因。
+        // 与 mac 端 GeminiService.cloudCodeUserAgent 同源；这是接口兼容版本，非应用版本。
+        private const string CloudCodeUserAgent = "antigravity/2.25.0";
+
         // The OAuth client pair used for token refresh is the public "installed app" client that
         // Google ships inside the agy CLI / Antigravity IDE binaries. Nothing is embedded here:
         // candidates are discovered at runtime from the local installation (or the
@@ -1250,7 +1256,7 @@ namespace TokenBar.Services
         {
             using var req = new HttpRequestMessage(HttpMethod.Post, baseUrl + path);
             req.Headers.TryAddWithoutValidation("Authorization", $"Bearer {accessToken}");
-            req.Headers.TryAddWithoutValidation("User-Agent", "antigravity");
+            req.Headers.TryAddWithoutValidation("User-Agent", CloudCodeUserAgent);
             req.Content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
 
             using var resp = await Http.Shared.SendAsync(req, ct);
