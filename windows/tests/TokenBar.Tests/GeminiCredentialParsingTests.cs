@@ -54,5 +54,29 @@ namespace TokenBar.Tests
             var token = MakeIdToken("""{"sub":"123"}""");
             Assert.Null(GeminiService.EmailFromIdToken(token));
         }
+
+        // v1.7.6 回归锚点：授权 URL 的参数集与 scope 集合是「点登录弹 403 restricted_client」
+        // 修复（登录前探测甄别 client）的输入，任何一处被改动都应显式更新这里。
+        [Fact]
+        public void BuildGoogleAuthorizeUrl_ContainsScopeAndLoopback()
+        {
+            var url = GeminiService.BuildGoogleAuthorizeUrl("1234567890-abcdefg.apps.googleusercontent.com", 45678);
+            Assert.StartsWith("https://accounts.google.com/o/oauth2/v2/auth?", url);
+            Assert.Contains("client_id=1234567890-abcdefg.apps.googleusercontent.com", url);
+            Assert.Contains("redirect_uri=http%3A%2F%2Flocalhost%3A45678", url);
+            Assert.Contains("response_type=code", url);
+            Assert.Contains("access_type=offline", url);
+            Assert.Contains("prompt=consent", url);
+        }
+
+        [Fact]
+        public void LoginScopes_IncludeRestrictedAicodeScope()
+        {
+            // aicode 是受限 scope：client 没注册它时授权页直接 403（v1.7.5 现场），
+            // 且配额接口依赖这一整套 scope，缺一个周额度分组就没了。
+            Assert.Contains("https://www.googleapis.com/auth/aicode", GeminiService.LoginScopes);
+            Assert.Contains("https://www.googleapis.com/auth/cloud-platform", GeminiService.LoginScopes);
+            Assert.Contains("openid", GeminiService.LoginScopes);
+        }
     }
 }

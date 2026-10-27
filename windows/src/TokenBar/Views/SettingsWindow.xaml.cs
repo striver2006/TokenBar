@@ -773,14 +773,27 @@ namespace TokenBar.Views
         private async void BtnGeminiWebLogin_Click(object sender, RoutedEventArgs e)
         {
             var i18n = LocalizationManager.Instance;
-            var plan = RefreshManager.Instance.GeminiGoogleLoginPlan();
+            BtnGeminiWebLogin.IsEnabled = false;
+            GeminiService.GoogleLoginPlan? plan;
+            try
+            {
+                // 含授权页探测（跳过没注册 aicode scope 的 client），可能要几百毫秒
+                plan = await RefreshManager.Instance.GeminiGoogleLoginPlanAsync();
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("settings", $"Google 登录准备失败: {ex.Message}");
+                MessageBox.Show(ex.Message, i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Warning);
+                BtnGeminiWebLogin.IsEnabled = true;
+                return;
+            }
             if (plan == null)
             {
                 MessageBox.Show(i18n.AlertGeminiNoClient, i18n.AlertNotice, MessageBoxButton.OK, MessageBoxImage.Warning);
+                BtnGeminiWebLogin.IsEnabled = true;
                 return;
             }
 
-            BtnGeminiWebLogin.IsEnabled = false;
             try
             {
                 System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo

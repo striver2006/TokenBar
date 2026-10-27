@@ -1271,9 +1271,10 @@ namespace TokenBar.Services
 
         // MARK: - Gemini 自有 Google 登录
 
-        /// <summary>设置页「使用 Google 账号登录」第一步：生成 loopback 授权 URL + 端口。
+        /// <summary>设置页「使用 Google 账号登录」第一步：甄别可用 OAuth client 后生成 loopback 授权 URL + 端口。
         /// 返回 null 表示本地连一个 OAuth client 都找不到（agy / Antigravity 都没装）。</summary>
-        public GeminiService.GoogleLoginPlan? GeminiGoogleLoginPlan() => GeminiService.Instance.PrepareGoogleLogin();
+        public async Task<GeminiService.GoogleLoginPlan?> GeminiGoogleLoginPlanAsync(CancellationToken ct = default)
+            => await GeminiService.Instance.PrepareGoogleLoginAsync(ct);
 
         /// <summary>登录回调拿到授权码后的第二步：换 token、落自有凭据条目、立刻刷一轮。
         /// 返回 false 时额度仍不可用，具体原因看 Quotas[Gemini].ErrorMessage。</summary>

@@ -90,9 +90,12 @@ namespace TokenBar.Services
                 foreach (var secret in secrets)
                 {
                     list.Add((id, secret));
-                    if (list.Count >= 8)
+                    // 与 TokenClientCandidateLimit 对齐：截断会像 Take(3) 一样把真配对挡在门外
+                    if (list.Count >= TokenClientCandidateLimit)
                         break;
                 }
+                if (list.Count >= TokenClientCandidateLimit)
+                    break;
             }
 
             lock (_staticStateLock)
@@ -150,7 +153,10 @@ namespace TokenBar.Services
         // 候选循环的总预算。共享 HttpClient 的 Timeout 是 30s，多个候选串行最坏会到分钟级，
         // 远超刷新间隔，会把 RefreshManager 的闸门长时间占住。
         private static readonly TimeSpan TokenRefreshBudget = TimeSpan.FromSeconds(20);
-        private const int TokenClientCandidateLimit = 3;
+        // agy 二进制里嵌着多个 OAuth client（2026-10 本机实测 3 个 ID × 3 个 secret），
+        // 交叉配对共 9 个组合；真正的 Antigravity 登录客户端可能排在第 4 位之后，
+        // 只试前 3 个会永远刷不出 token，必须覆盖全量（每个失败响应都很快，20s 预算兜底）。
+        private const int TokenClientCandidateLimit = 9;
 
         // ---------- 自有 Google 登录（loopback OAuth）----------
         // 与 mac 端 geminiOwnRefreshToken 钥匙串条目同义：TokenBar 自己登录换来的
@@ -897,21 +903,21 @@ namespace TokenBar.Services
             "https://www.googleapis.com/auth/experimentsandconfigs",
         };
 
-        /// <summary>构造授权页 URL（loopback 重定向，随机端口）。本地找不到任何 OAuth client 时返回 null。</summary>
-        public GoogleLoginPlan? PrepareGoogleLogin()
+        /// <summary>探测专用：禁用自动重定向，只看授权端点 302 的 Location 头（几百字节）。
+        /// Http.Shared 会自动跟随到 ~800KB 的登录页/错误页，探测用它太浪费。</summary>
+        private static readonly HttpClient ProbeClient = new(new SocketsHttpHandler
         {
-            var candidates = GetAntigravityClientCandidates();
-            if (candidates.Count == 0)
-                return null;
-            var client = candidates[0];
-            _pendingLoginClient = client;
-            int port;
-            lock (LoginPortRandom)
-                port = LoginPortRandom.Next(21000, 60001);
+            AllowAutoRedirect = false,
+            ConnectTimeout = TimeSpan.FromSeconds(10),
+        })
+        { Timeout = TimeSpan.FromSeconds(15) };
 
+        /// <summary>拼授权页 URL。探测与真实登录必须用完全相同的参数（含端口），行为才一致。</summary>
+        internal static string BuildGoogleAuthorizeUrl(string clientId, int port)
+        {
             var items = new System.Collections.Generic.Dictionary<string, string>
             {
-                ["client_id"] = client.Id,
+                ["client_id"] = clientId,
                 ["redirect_uri"] = $"http://localhost:{port}",
                 ["response_type"] = "code",
                 ["scope"] = string.Join(" ", LoginScopes),
@@ -920,10 +926,75 @@ namespace TokenBar.Services
                 ["prompt"] = "consent",
             };
             var query = string.Join("&", items.Select(kv => $"{Uri.EscapeDataString(kv.Key)}={Uri.EscapeDataString(kv.Value)}"));
-            return new GoogleLoginPlan($"https://accounts.google.com/o/oauth2/v2/auth?{query}", port);
+            return $"https://accounts.google.com/o/oauth2/v2/auth?{query}";
         }
 
-        /// <summary>用授权码换 token 并落库。`redirectPort` 必须与 <see cref="PrepareGoogleLogin"/> 返回的一致。</summary>
+        /// <summary>探测某个 client_id 请求 <see cref="LoginScopes"/> 时 Google 是否放行。
+        /// restricted_client（scope 未在该 client 注册）时 Google 302 到 signin/oauth/error——
+        /// 这正是「点登录弹 403 禁止访问」的页面；正常则 302 到 v3/signin/identifier 登录页。
+        /// 返回 true=可用 / false=明确被拒；网络异常等判不了的情况按可用处理（保持旧行为，交给浏览器兜底）。</summary>
+        private static async Task<bool> AuthorizeScopeAcceptedAsync(string clientId, int port, CancellationToken ct)
+        {
+            try
+            {
+                using var resp = await ProbeClient.GetAsync(BuildGoogleAuthorizeUrl(clientId, port), ct).ConfigureAwait(false);
+                if ((int)resp.StatusCode is 301 or 302 or 303 or 307)
+                {
+                    var location = resp.Headers.Location?.ToString();
+                    if (!string.IsNullOrEmpty(location))
+                    {
+                        var rejected = location.Contains("/signin/oauth/error", StringComparison.OrdinalIgnoreCase);
+                        if (rejected)
+                            Log.Info("provider", $"gemini 登录探测：client {clientId[..13]}… 被拒(重定向到错误页)");
+                        return !rejected;
+                    }
+                    return true;
+                }
+                // 200 等其他状态：无 cookie 的裸请求理论上拿不到，按不拒绝处理
+                return true;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("provider", $"gemini 登录探测失败（按可用处理）: {ex.Message}");
+                return true;
+            }
+        }
+
+        /// <summary>构造授权页 URL（loopback 重定向，随机端口）。
+        /// 候选按序探测：agy 二进制里嵌的多个 client 未必都注册了 aicode 这类受限 scope，
+        /// 盲取第一个会在授权页弹 403 restricted_client（v1.7.5 实测）。全被拒/探测不了时退回第一个候选。
+        /// 本地找不到任何 OAuth client 时返回 null。</summary>
+        public async Task<GoogleLoginPlan?> PrepareGoogleLoginAsync(CancellationToken ct = default)
+        {
+            var candidates = GetAntigravityClientCandidates();
+            if (candidates.Count == 0)
+                return null;
+
+            int port;
+            lock (LoginPortRandom)
+                port = LoginPortRandom.Next(21000, 60001);
+
+            var client = candidates[0];
+            var probedIds = new HashSet<string>();
+            foreach (var c in candidates)
+            {
+                if (!probedIds.Add(c.Id))
+                    continue; // 同 ID 只探一次（secret 不影响授权页）
+                if (await AuthorizeScopeAcceptedAsync(c.Id, port, ct).ConfigureAwait(false))
+                {
+                    client = c;
+                    break;
+                }
+            }
+            _pendingLoginClient = client;
+            return new GoogleLoginPlan(BuildGoogleAuthorizeUrl(client.Id, port), port);
+        }
+
+        /// <summary>用授权码换 token 并落库。`redirectPort` 必须与 <see cref="PrepareGoogleLoginAsync"/> 返回的一致。</summary>
         public async Task<(string Account, string RefreshToken)> ExchangeGoogleLoginCodeAsync(string code, int redirectPort, CancellationToken ct = default)
         {
             var client = _pendingLoginClient;
@@ -936,22 +1007,49 @@ namespace TokenBar.Services
             if (client == null)
                 throw new GeminiCredentialException(GeminiCredentialStage.NoCredentials);
 
-            using var resp = await Http.Shared.PostAsync("https://oauth2.googleapis.com/token",
-                new FormUrlEncodedContent(new[]
+            // 授权码只绑定 client_id，secret 不对时换同 ID 的其他候选重试即可：
+            // 候选表是扫描出的 ID×secret 交叉乘积，排在真实配对前面的组合 secret 未必匹配。
+            var trials = new List<(string Id, string Secret)> { client.Value };
+            foreach (var c in GetAntigravityClientCandidates())
+            {
+                if (trials.Count >= 4)
+                    break;
+                if (c.Id == client.Value.Id && trials.All(t => t.Secret != c.Secret))
+                    trials.Add(c);
+            }
+            var usedClient = client.Value;
+
+            string body = "";
+            var exchangeOk = false;
+            foreach (var trial in trials)
+            {
+                using var resp = await Http.Shared.PostAsync("https://oauth2.googleapis.com/token",
+                    new FormUrlEncodedContent(new[]
+                    {
+                        new System.Collections.Generic.KeyValuePair<string, string>("client_id", trial.Id),
+                        new System.Collections.Generic.KeyValuePair<string, string>("client_secret", trial.Secret),
+                        new System.Collections.Generic.KeyValuePair<string, string>("grant_type", "authorization_code"),
+                        new System.Collections.Generic.KeyValuePair<string, string>("code", code),
+                        new System.Collections.Generic.KeyValuePair<string, string>("redirect_uri", $"http://localhost:{redirectPort}")
+                    }), ct).ConfigureAwait(false);
+                body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                if (resp.IsSuccessStatusCode)
                 {
-                    new System.Collections.Generic.KeyValuePair<string, string>("client_id", client.Value.Id),
-                    new System.Collections.Generic.KeyValuePair<string, string>("client_secret", client.Value.Secret),
-                    new System.Collections.Generic.KeyValuePair<string, string>("grant_type", "authorization_code"),
-                    new System.Collections.Generic.KeyValuePair<string, string>("code", code),
-                    new System.Collections.Generic.KeyValuePair<string, string>("redirect_uri", $"http://localhost:{redirectPort}")
-                }), ct).ConfigureAwait(false);
-            var body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                    exchangeOk = true;
+                    usedClient = trial;
+                    break;
+                }
+                var err = ParseTokenErrorCode(body);
+                if (err != "invalid_client" && err != "unauthorized_client")
+                    break; // invalid_grant 等其他错误换 secret 救不回来
+                Log.Info("provider", $"gemini 登录 code 交换被拒({err})，同 ID 换 secret 重试");
+            }
 
             string? refreshToken = null;
             string? accessToken = null;
             string? idToken = null;
             var expiresIn = 3600;
-            if (resp.IsSuccessStatusCode)
+            if (exchangeOk)
             {
                 try
                 {
@@ -971,7 +1069,7 @@ namespace TokenBar.Services
             }
             if (string.IsNullOrEmpty(refreshToken))
             {
-                var detail = ParseTokenErrorCode(body) ?? $"HTTP {(int)resp.StatusCode}";
+                var detail = ParseTokenErrorCode(body) ?? "HTTP error";
                 Log.Error("provider", $"provider=gemini Google 登录 code 交换失败: {detail}");
                 throw new Exception(LocalizationManager.Instance.IsChinese
                     ? $"Google 登录 code 交换失败：{detail}，请重试"
@@ -982,9 +1080,9 @@ namespace TokenBar.Services
             lock (_staticStateLock)
             {
                 // 交换成功说明这套配对可用，置顶让后续刷新跳过试错
-                _antigravityClientCandidates?.Remove(client.Value);
+                _antigravityClientCandidates?.Remove(usedClient);
                 if (_antigravityClientCandidates != null)
-                    _antigravityClientCandidates.Insert(0, client.Value);
+                    _antigravityClientCandidates.Insert(0, usedClient);
                 if (!string.IsNullOrEmpty(accessToken))
                 {
                     _cachedAccessToken = accessToken;
