@@ -202,15 +202,16 @@ final class GeminiCredentialTests: XCTestCase {
             ]
         ])
 
-        let (fiveHour, weekly) = GeminiService.parseGeminiGroupWindows(summary)
+        let (fiveHour, weekly, scopedWeekly) = GeminiService.parseGeminiGroupWindows(summary)
         XCTAssertEqual(weekly?.titleKind, .weekly)
         XCTAssertEqual(weekly?.usedPercentage ?? 0, 4.45, accuracy: 0.01, "取 Gemini 组的 weekly（4.45% 已用），不是 Claude 组的 0%")
         XCTAssertEqual(fiveHour?.titleKind, .fiveHour)
         XCTAssertEqual(fiveHour?.usedPercentage ?? 0, 50.0, accuracy: 0.001)
+        XCTAssertNil(scopedWeekly)
     }
 
     func testParseGeminiGroupWindowsDailyStyleResponseHasNoGeminiGroup() {
-        // daily-cloudcode-pa 实测形状：只有 Claude/GPT 组 → (nil, nil)，
+        // daily-cloudcode-pa 实测形状：只有 Claude/GPT 组 → (nil, nil, nil)，
         // 让 fetchAntigravityQuota 继续试下一个端点而不是错拿别组的额度
         let summary = quotaSummaryJSON(groups: [
             [
@@ -222,13 +223,15 @@ final class GeminiCredentialTests: XCTestCase {
             ]
         ])
 
-        let (fiveHour, weekly) = GeminiService.parseGeminiGroupWindows(summary)
+        let (fiveHour, weekly, scopedWeekly) = GeminiService.parseGeminiGroupWindows(summary)
         XCTAssertNil(fiveHour)
         XCTAssertNil(weekly)
+        XCTAssertNil(scopedWeekly)
     }
 
     func testParseGeminiGroupWindowsPrefersCanonicalGeminiModelsGroup() {
-        // 变体组（如 IDE 面板里的 "Gemini 4 Argon"）排在前面也不能抢走正主的桶
+        // 变体组（如 IDE 面板里的 "Gemini 4 Argon"）排在前面也不能抢走正主的桶，
+        // 且独立解析为 scopedWeekly 额度
         let summary = quotaSummaryJSON(groups: [
             [
                 "displayName": "Gemini 4 Argon",
@@ -240,9 +243,34 @@ final class GeminiCredentialTests: XCTestCase {
             ]
         ])
 
-        let (fiveHour, weekly) = GeminiService.parseGeminiGroupWindows(summary)
+        let (fiveHour, weekly, scopedWeekly) = GeminiService.parseGeminiGroupWindows(summary)
         XCTAssertNil(fiveHour)
         XCTAssertEqual(weekly?.usedPercentage ?? 0, 10.0, accuracy: 0.001, "正主 Gemini Models（90% 剩余）优先，Argon（93% 已用）不抢")
+        XCTAssertEqual(scopedWeekly?.usedPercentage ?? 0, 93.0, accuracy: 0.001, "Argon 组成功解析出独立周额度")
+        XCTAssertEqual(scopedWeekly?.titleKind, .custom("Gemini 4 Argon"))
+    }
+
+    func testParseGeminiGroupWindowsArgonOnlyOrReversedOrder() {
+        // 正主在前、Argon 在后，两组均有数据
+        let summary = quotaSummaryJSON(groups: [
+            [
+                "displayName": "Gemini Models",
+                "buckets": [
+                    bucket(["window": "5h", "remainingFraction": 0.8, "resetTime": "2030-01-01T00:00:00Z"]),
+                    bucket(["window": "weekly", "remainingFraction": 0.7, "resetTime": "2030-01-01T00:00:00Z"])
+                ]
+            ],
+            [
+                "displayName": "Gemini 4 Argon",
+                "buckets": [bucket(["window": "weekly", "remainingFraction": 0.45, "resetTime": "2030-01-01T00:00:00Z"])]
+            ]
+        ])
+
+        let (fiveHour, weekly, scopedWeekly) = GeminiService.parseGeminiGroupWindows(summary)
+        XCTAssertEqual(fiveHour?.usedPercentage ?? 0, 20.0, accuracy: 0.001)
+        XCTAssertEqual(weekly?.usedPercentage ?? 0, 30.0, accuracy: 0.001)
+        XCTAssertEqual(scopedWeekly?.usedPercentage ?? 0, 55.0, accuracy: 0.001)
+        XCTAssertEqual(scopedWeekly?.titleKind, .custom("Gemini 4 Argon"))
     }
 
     func testParseQuotaBucketWeeklyAndFiveHour() {

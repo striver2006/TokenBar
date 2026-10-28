@@ -981,6 +981,7 @@ namespace TokenBar.Services
                     if (IsStaleGeneration(generation, "gemini")) return;
                     quota.FiveHourWindow = fiveHour;
                     quota.WeeklyWindow = weekly;
+                    quota.ScopedWeeklyWindow = null;
                     quota.IsAuthorized = true;
                     quota.HadRefreshError = false;
                     quota.AccountInfo = account;
@@ -1011,11 +1012,12 @@ namespace TokenBar.Services
             // 2. OAuth Web Login / Local Credentials Fallback
             try
             {
-                var (fiveHour, weekly, account, usedRefreshToken) = await GeminiService.Instance.FetchQuotaAsync(
+                var (fiveHour, weekly, scopedWeekly, account, usedRefreshToken) = await GeminiService.Instance.FetchQuotaAsync(
                     Settings.GeminiToken, Settings.GeminiRefreshToken, ct);
                 if (IsStaleGeneration(generation, "gemini")) return;
                 quota.FiveHourWindow = fiveHour;
                 quota.WeeklyWindow = weekly;
+                quota.ScopedWeeklyWindow = scopedWeekly;
                 quota.IsAuthorized = true;
                 quota.HadRefreshError = false;
                 if (account != null) quota.AccountInfo = account;

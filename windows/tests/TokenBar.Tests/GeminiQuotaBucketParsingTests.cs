@@ -127,7 +127,7 @@ namespace TokenBar.Tests
         [Fact]
         public void GroupParsing_TakesGeminiModelsBuckets_FromCloudCodeStyleResponse()
         {
-            var (fiveHour, weekly) = GeminiService.ParseGeminiGroupWindows(Summary(
+            var (fiveHour, weekly, scopedWeekly) = GeminiService.ParseGeminiGroupWindows(Summary(
                 """
                 {"displayName": "Gemini Models", "buckets": [
                     {"window": "weekly", "remainingFraction": 0.9555, "resetTime": "2030-01-01T00:00:00Z"},
@@ -145,14 +145,15 @@ namespace TokenBar.Tests
             Assert.NotNull(fiveHour);
             Assert.Equal(WindowTitleKind.FiveHour, fiveHour!.Title.Kind);
             Assert.Equal(50.0, fiveHour.UsedPercentage, 3);
+            Assert.Null(scopedWeekly);
         }
 
         [Fact]
         public void GroupParsing_DailyStyleResponseWithoutGeminiGroup_ReturnsBothNull()
         {
-            // daily-cloudcode-pa 实测形状：只有 Claude/GPT 组 → (null, null)，
+            // daily-cloudcode-pa 实测形状：只有 Claude/GPT 组 → (null, null, null)，
             // 让 FetchAntigravityQuotaCoreAsync 继续试下一个端点而不是错拿别组的额度
-            var (fiveHour, weekly) = GeminiService.ParseGeminiGroupWindows(Summary(
+            var (fiveHour, weekly, scopedWeekly) = GeminiService.ParseGeminiGroupWindows(Summary(
                 """
                 {"displayName": "Claude and GPT models", "buckets": [
                     {"window": "weekly", "remainingFraction": 1},
@@ -161,13 +162,15 @@ namespace TokenBar.Tests
 
             Assert.Null(fiveHour);
             Assert.Null(weekly);
+            Assert.Null(scopedWeekly);
         }
 
         [Fact]
         public void GroupParsing_PrefersCanonicalGeminiModelsOverVariants()
         {
-            // 变体组（如 IDE 面板里的 "Gemini 4 Argon"）排在前面也不能抢走正主的桶
-            var (fiveHour, weekly) = GeminiService.ParseGeminiGroupWindows(Summary(
+            // 变体组（如 IDE 面板里的 "Gemini 4 Argon"）排在前面也不能抢走正主的桶，
+            // 且能正确提取出独立周额度
+            var (fiveHour, weekly, scopedWeekly) = GeminiService.ParseGeminiGroupWindows(Summary(
                 """
                 {"displayName": "Gemini 4 Argon", "buckets": [
                     {"window": "weekly", "remainingFraction": 0.07}]}
@@ -180,6 +183,35 @@ namespace TokenBar.Tests
             Assert.Null(fiveHour);
             Assert.NotNull(weekly);
             Assert.Equal(10.0, weekly!.UsedPercentage, 3); // 正主 Gemini Models（90% 剩余）优先
+            Assert.NotNull(scopedWeekly);
+            Assert.Equal(93.0, scopedWeekly!.UsedPercentage, 3);
+            Assert.Equal(WindowTitleKind.Custom, scopedWeekly.Title.Kind);
+            Assert.Equal("Gemini 4 Argon", scopedWeekly.Title.Argument);
+        }
+
+        [Fact]
+        public void GroupParsing_ExtractsScopedWeeklyForArgon_BothOrders()
+        {
+            // 正主在前、Argon 在后，均提取到窗口
+            var (fiveHour, weekly, scopedWeekly) = GeminiService.ParseGeminiGroupWindows(Summary(
+                """
+                {"displayName": "Gemini Models", "buckets": [
+                    {"window": "5h", "remainingFraction": 0.8},
+                    {"window": "weekly", "remainingFraction": 0.7}]}
+                """,
+                """
+                {"displayName": "Gemini 4 Argon", "buckets": [
+                    {"window": "weekly", "remainingFraction": 0.45}]}
+                """));
+
+            Assert.NotNull(fiveHour);
+            Assert.Equal(20.0, fiveHour!.UsedPercentage, 3);
+            Assert.NotNull(weekly);
+            Assert.Equal(30.0, weekly!.UsedPercentage, 3);
+            Assert.NotNull(scopedWeekly);
+            Assert.Equal(55.0, scopedWeekly!.UsedPercentage, 3);
+            Assert.Equal(WindowTitleKind.Custom, scopedWeekly.Title.Kind);
+            Assert.Equal("Gemini 4 Argon", scopedWeekly.Title.Argument);
         }
     }
 }

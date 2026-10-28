@@ -852,7 +852,7 @@ public actor GeminiService {
     /// Antigravity 钥匙串条目 > `~/.gemini` 文件 > 快照。自有登录走通时完全不碰外来
     /// 钥匙串——ACL 授权丢失、Antigravity 重登轮换 token 都与它无关，这是「一劳永逸」
     /// 的那条路；自有凭证被判 invalid_grant 时清掉并当场落到旧链路，额度尽量不失联。
-    public func fetchQuota(token: String?, storedRefreshToken: String? = nil) async throws -> (fiveHour: TokenWindow?, weekly: TokenWindow?, account: String?, refreshToken: String?) {
+    public func fetchQuota(token: String?, storedRefreshToken: String? = nil) async throws -> (fiveHour: TokenWindow?, weekly: TokenWindow?, scopedWeekly: TokenWindow?, account: String?, refreshToken: String?) {
         try Task.checkCancellation()
         if let own = await loadOwnRefreshToken(), !own.isEmpty {
             do {
@@ -896,20 +896,20 @@ public actor GeminiService {
             throw CredentialError(local.keychainDenied ? .keychainACL : .noCredentials)
         }
 
-        let (fiveHour, weekly) = try await legacyQuotaWithAuthRetry(accessToken, refreshToken: refreshToken)
+        let (fiveHour, weekly, scopedWeekly) = try await legacyQuotaWithAuthRetry(accessToken, refreshToken: refreshToken)
 
         if detectedAccount == nil {
             detectedAccount = await fetchUserInfo(token: accessToken)
         }
 
-        return (fiveHour, weekly, detectedAccount ?? (isZh ? "Google 账号" : "Google Account"), refreshToken)
+        return (fiveHour, weekly, scopedWeekly, detectedAccount ?? (isZh ? "Google 账号" : "Google Account"), refreshToken)
     }
 
     /// 自有登录凭证的完整路径：刷新 → 配额 → 账号，任何一环失败都按阶段抛 `CredentialError`。
     ///
     /// 返回值里的 refreshToken 恒为 nil：它供调用方快照进 `geminiRefreshToken`（Antigravity 链路的兜底槽），
     /// 自有 token 已在自己的钥匙串条目里，交出去只会覆盖掉 Antigravity 的快照。
-    private func fetchQuotaWithOwnCredential(_ refreshToken: String) async throws -> (fiveHour: TokenWindow?, weekly: TokenWindow?, account: String?, refreshToken: String?) {
+    private func fetchQuotaWithOwnCredential(_ refreshToken: String) async throws -> (fiveHour: TokenWindow?, weekly: TokenWindow?, scopedWeekly: TokenWindow?, account: String?, refreshToken: String?) {
         let accessToken: String
         if let cached = cachedAccessToken, Date() < cachedAccessTokenExpiry {
             accessToken = cached
@@ -927,12 +927,12 @@ public actor GeminiService {
         }
 
         do {
-            let (fiveHour, weekly) = try await fetchAntigravityQuota(accessToken: accessToken)
+            let (fiveHour, weekly, scopedWeekly) = try await fetchAntigravityQuota(accessToken: accessToken)
             if ownAccountHint == nil, let fetched = await fetchUserInfo(token: accessToken) {
                 ownAccountHint = fetched
             }
             let account = ownAccountHint ?? (isZh ? "Google 账号" : "Google Account")
-            return (fiveHour, weekly, account, nil)
+            return (fiveHour, weekly, scopedWeekly, account, nil)
         } catch is QuotaAuthError {
             // 缓存的 token 刚好跨过过期线：强制刷新一次再试；仍被拒才判 quotaRejected。
             cachedAccessToken = nil
@@ -940,12 +940,12 @@ public actor GeminiService {
             switch await refreshGoogleAccessToken(refreshToken: refreshToken) {
             case .success(let refreshed, _):
                 do {
-                    let (fiveHour, weekly) = try await fetchAntigravityQuota(accessToken: refreshed)
+                    let (fiveHour, weekly, scopedWeekly) = try await fetchAntigravityQuota(accessToken: refreshed)
                     if ownAccountHint == nil, let fetched = await fetchUserInfo(token: refreshed) {
                         ownAccountHint = fetched
                     }
                     let account = ownAccountHint ?? (isZh ? "Google 账号" : "Google Account")
-                    return (fiveHour, weekly, account, nil)
+                    return (fiveHour, weekly, scopedWeekly, account, nil)
                 } catch is QuotaAuthError {
                     throw CredentialError(.quotaRejected)
                 }
@@ -961,7 +961,7 @@ public actor GeminiService {
     }
 
     /// Fetches quota; on auth rejection refreshes the token (when possible) and retries once.
-    private func legacyQuotaWithAuthRetry(_ accessToken: String, refreshToken: String?) async throws -> (fiveHour: TokenWindow?, weekly: TokenWindow?) {
+    private func legacyQuotaWithAuthRetry(_ accessToken: String, refreshToken: String?) async throws -> (fiveHour: TokenWindow?, weekly: TokenWindow?, scopedWeekly: TokenWindow?) {
         do {
             return try await fetchAntigravityQuota(accessToken: accessToken)
         } catch is QuotaAuthError {
@@ -984,13 +984,14 @@ public actor GeminiService {
         }
     }
 
-    /// Maps the "Gemini Models" group's weekly / 5-hour buckets of retrieveUserQuotaSummary to TokenWindows.
+    /// Maps the "Gemini Models" group's weekly / 5-hour buckets of retrieveUserQuotaSummary to TokenWindows,
+    /// alongside any "Gemini 4 Argon" scoped quota bucket.
     ///
     /// 两个配额端点返回的分组集可能不同，所以不能「第一个 2xx 就用」：逐个端点解析，
     /// 直到某个响应里解析出 Gemini 组；全部没有再走按模型聚合的回退。此前 daily 排
     /// 第一且首个 2xx 即返回，Gemini 组永远匹配不上，静默退化到只产 5h 窗口的回退——
     /// 这正是「只有 5 小时额度、没有每周额度」那次线上问题的根因。
-    private func fetchAntigravityQuota(accessToken: String) async throws -> (TokenWindow?, TokenWindow?) {
+    private func fetchAntigravityQuota(accessToken: String) async throws -> (TokenWindow?, TokenWindow?, TokenWindow?) {
         var lastError: Error?
         var sawSuccessfulSummary = false
         for base in Self.cloudCodeEndpoints {
@@ -998,9 +999,9 @@ public actor GeminiService {
             do {
                 let summary = try await postCloudCodeOnce(accessToken: accessToken, path: "/v1internal:retrieveUserQuotaSummary", base: base)
                 sawSuccessfulSummary = true
-                let (fiveHour, weekly) = Self.parseGeminiGroupWindows(summary)
-                if fiveHour != nil || weekly != nil {
-                    return (fiveHour, weekly)
+                let (fiveHour, weekly, scopedWeekly) = Self.parseGeminiGroupWindows(summary)
+                if fiveHour != nil || weekly != nil || scopedWeekly != nil {
+                    return (fiveHour, weekly, scopedWeekly)
                 }
             } catch is QuotaAuthError {
                 // 401/403 是令牌级问题，换端点无意义——抛给上层走刷新重试
@@ -1019,39 +1020,75 @@ public actor GeminiService {
         guard fiveHour != nil || weekly != nil else {
             throw NSError(domain: "GeminiService", code: 0, userInfo: [NSLocalizedDescriptionKey: isZh ? "Antigravity 额度响应中未找到 Gemini 配额数据" : "No Gemini quota data found in the Antigravity response"])
         }
-        return (fiveHour, weekly)
+        return (fiveHour, weekly, nil)
     }
 
-    /// 从 retrieveUserQuotaSummary 响应里挑 Gemini 组并映射成 weekly/5h 窗口。
-    /// 组选择：优先名字含 "gemini models" 的正主组；没有时才退第一个名字含 gemini
-    /// 的组（防将来出现 "Gemini 4 Argon" 之类变体时乱序抢先）。返回 (nil, nil)
-    /// 表示该响应里没有可用的 Gemini 组（daily 端点就只回 Claude/GPT 组）。
-    static func parseGeminiGroupWindows(_ summary: [String: Any]) -> (fiveHour: TokenWindow?, weekly: TokenWindow?) {
-        guard let groups = summary["groups"] as? [[String: Any]] else { return (nil, nil) }
+    /// 从 retrieveUserQuotaSummary 响应里挑 Gemini 组并映射成 weekly/5h 窗口，同时提取 Gemini 4 Argon 额度。
+    /// 组选择：
+    /// - 正主 Gemini Models 组：优先名字含 "gemini models" 的组；没有时退回第一个名字含 gemini 且不含 argon 的组。
+    /// - Gemini 4 Argon 组：优先名字含 "gemini 4 argon" 的组；没有时退回第一个名字含 argon 的组。
+    /// 返回 (fiveHour, weekly, scopedWeekly)，当该响应里没有任何可用的 Gemini 相关组时返回 (nil, nil, nil)。
+    static func parseGeminiGroupWindows(_ summary: [String: Any]) -> (fiveHour: TokenWindow?, weekly: TokenWindow?, scopedWeekly: TokenWindow?) {
+        guard let groups = summary["groups"] as? [[String: Any]] else { return (nil, nil, nil) }
 
         var target: [String: Any]?
         var firstGemini: [String: Any]?
+        var targetArgon: [String: Any]?
+        var firstArgon: [String: Any]?
+
         for group in groups {
             guard let groupName = group["displayName"] as? String else { continue }
             let lower = groupName.lowercased()
+
+            if lower.contains("argon") {
+                if lower.contains("gemini 4 argon") {
+                    targetArgon = group
+                } else if firstArgon == nil {
+                    firstArgon = group
+                }
+                continue
+            }
+
             guard lower.contains("gemini") else { continue }
             if lower.contains("gemini models") {
                 target = group
-                break
+            } else if firstGemini == nil {
+                firstGemini = group
             }
-            if firstGemini == nil { firstGemini = group }
         }
-        guard let group = target ?? firstGemini,
-              let buckets = group["buckets"] as? [[String: Any]] else { return (nil, nil) }
+
+        let mainGroup = target ?? firstGemini
+        let argonGroup = targetArgon ?? firstArgon
 
         var fiveHour: TokenWindow? = nil
         var weekly: TokenWindow? = nil
-        for bucket in buckets {
-            if let (window, isWeekly) = parseQuotaBucket(bucket) {
-                if isWeekly { weekly = window } else { fiveHour = window }
+        if let group = mainGroup, let buckets = group["buckets"] as? [[String: Any]] {
+            for bucket in buckets {
+                if let (window, isWeekly) = parseQuotaBucket(bucket) {
+                    if isWeekly { weekly = window } else { fiveHour = window }
+                }
             }
         }
-        return (fiveHour, weekly)
+
+        var scopedWeekly: TokenWindow? = nil
+        if let group = argonGroup, let buckets = group["buckets"] as? [[String: Any]] {
+            let argonName = (group["displayName"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let titleText = (argonName?.isEmpty == false) ? argonName! : "Gemini 4 Argon"
+            for bucket in buckets {
+                if let (window, isWeekly) = parseQuotaBucket(bucket) {
+                    var w = window
+                    w.titleKind = .custom(titleText)
+                    if isWeekly {
+                        scopedWeekly = w
+                        break
+                    } else if scopedWeekly == nil {
+                        scopedWeekly = w
+                    }
+                }
+            }
+        }
+
+        return (fiveHour, weekly, scopedWeekly)
     }
 
     /// Loops the quota endpoints, first successful response wins. 供响应形状与端点无关的

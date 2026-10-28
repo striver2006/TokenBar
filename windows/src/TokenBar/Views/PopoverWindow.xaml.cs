@@ -237,8 +237,8 @@ namespace TokenBar.Views
                     // 每周/周期窗口
                     new CardRow(quota.WeeklyWindow, i18n.WeeklyWindow,
                         () => (quota.FiveHourWindow != null && quota.BalanceWindow == null) || quota.BalanceWindow != null),
-                    // 按模型圈定的周额度（如 Fable）
-                    new CardRow(quota.ScopedWeeklyWindow, i18n.WeeklyWindow, () => quota.WeeklyWindow != null),
+                    // 按模型圈定的周额度（如 Fable、Gemini 4 Argon）
+                    new CardRow(quota.ScopedWeeklyWindow, i18n.WeeklyWindow, () => quota.WeeklyWindow != null || quota.FiveHourWindow != null || quota.BalanceWindow != null),
                 },
                 quota.LocalCacheNote(DateTime.Now),
                 onConfigure));

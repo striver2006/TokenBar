@@ -136,12 +136,12 @@ public struct ProviderCardView: View {
                     WindowQuotaRow(window: weekly, badgeText: I18n(.weeklyWindow))
                 }
 
-                if quota.weeklyWindow != nil && quota.scopedWeeklyWindow != nil {
+                if quota.scopedWeeklyWindow != nil && (quota.weeklyWindow != nil || quota.balanceWindow != nil || quota.fiveHourWindow != nil) {
                     Divider()
                         .opacity(0.5)
                 }
 
-                // Scoped Weekly Section（按模型圈定的周额度，如 Fable）
+                // Scoped Weekly Section（按模型圈定的周额度，如 Fable、Gemini 4 Argon）
                 if let scoped = quota.scopedWeeklyWindow {
                     WindowQuotaRow(window: scoped, badgeText: I18n(.weeklyWindow))
                 }

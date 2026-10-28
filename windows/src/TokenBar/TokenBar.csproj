@@ -11,7 +11,7 @@
     <AssemblyTitle>TokenBar</AssemblyTitle>
     <Product>TokenBar</Product>
     <Description>TokenBar - 模型额度监控 / Model Quota Monitor</Description>
-    <Version>1.7.6</Version>
+    <Version>1.7.7</Version>
     <Authors>TokenBar Team</Authors>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
   </PropertyGroup>

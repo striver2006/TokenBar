@@ -502,7 +502,7 @@ namespace TokenBar.Services
         /// 返回值带上本轮用到的 refresh_token，调用方据此落快照；自有路径恒为 null
         /// （自有 token 已在自己的凭据条目里，交出去只会覆盖掉 Antigravity 的快照）。
         /// </summary>
-        public async Task<(TokenWindow? FiveHour, TokenWindow? Weekly, string? Account, string? RefreshToken)> FetchQuotaAsync(
+        public async Task<(TokenWindow? FiveHour, TokenWindow? Weekly, TokenWindow? ScopedWeekly, string? Account, string? RefreshToken)> FetchQuotaAsync(
             string? token, string? storedRefreshToken = null, CancellationToken ct = default)
         {
             var own = await LoadOwnRefreshTokenAsync();
@@ -557,21 +557,21 @@ namespace TokenBar.Services
                 throw new GeminiCredentialException(GeminiCredentialStage.NoCredentials);
             }
 
-            var (fiveHour, weekly) = await FetchQuotaWithAuthRetryAsync(accessToken, refreshToken, ct);
+            var (fiveHour, weekly, scopedWeekly) = await FetchQuotaWithAuthRetryAsync(accessToken, refreshToken, ct);
 
             if (string.IsNullOrEmpty(detectedAccount))
             {
                 detectedAccount = await FetchUserInfoAsync(accessToken, ct);
             }
 
-            return (fiveHour, weekly, detectedAccount ?? (LocalizationManager.Instance.IsChinese ? "Google 账号" : "Google Account"), refreshToken);
+            return (fiveHour, weekly, scopedWeekly, detectedAccount ?? (LocalizationManager.Instance.IsChinese ? "Google 账号" : "Google Account"), refreshToken);
         }
 
         /// <summary>
         /// 自有登录凭证的完整路径：刷新 → 配额 → 账号。invalid_grant 抛 OwnLoginRevoked，
         /// 由 FetchQuotaAsync 捕获后清掉自有凭证并当场落到旧链路。
         /// </summary>
-        private async Task<(TokenWindow? FiveHour, TokenWindow? Weekly, string? Account, string? RefreshToken)> FetchQuotaWithOwnCredentialAsync(string refreshToken, CancellationToken ct)
+        private async Task<(TokenWindow? FiveHour, TokenWindow? Weekly, TokenWindow? ScopedWeekly, string? Account, string? RefreshToken)> FetchQuotaWithOwnCredentialAsync(string refreshToken, CancellationToken ct)
         {
             string accessToken;
             string? cached;
@@ -583,8 +583,8 @@ namespace TokenBar.Services
 
             try
             {
-                var (fiveHour, weekly) = await FetchAntigravityQuotaCoreAsync(accessToken, ct);
-                return (fiveHour, weekly, await OwnAccountDisplayAsync(accessToken, ct), null);
+                var (fiveHour, weekly, scopedWeekly) = await FetchAntigravityQuotaCoreAsync(accessToken, ct);
+                return (fiveHour, weekly, scopedWeekly, await OwnAccountDisplayAsync(accessToken, ct), null);
             }
             catch (QuotaAuthException)
             {
@@ -597,8 +597,8 @@ namespace TokenBar.Services
                 var refreshed = await RequireRefreshedTokenAsync(refreshToken, GeminiCredentialStage.OwnLoginRevoked, ct);
                 try
                 {
-                    var (fiveHour, weekly) = await FetchAntigravityQuotaCoreAsync(refreshed, ct);
-                    return (fiveHour, weekly, await OwnAccountDisplayAsync(refreshed, ct), null);
+                    var (fiveHour, weekly, scopedWeekly) = await FetchAntigravityQuotaCoreAsync(refreshed, ct);
+                    return (fiveHour, weekly, scopedWeekly, await OwnAccountDisplayAsync(refreshed, ct), null);
                 }
                 catch (QuotaAuthException)
                 {
@@ -620,7 +620,7 @@ namespace TokenBar.Services
         }
 
         /// <summary>Fetches quota; on auth rejection refreshes the token (when possible) and retries once.</summary>
-        private async Task<(TokenWindow? FiveHour, TokenWindow? Weekly)> FetchQuotaWithAuthRetryAsync(string accessToken, string? refreshToken, CancellationToken ct)
+        private async Task<(TokenWindow? FiveHour, TokenWindow? Weekly, TokenWindow? ScopedWeekly)> FetchQuotaWithAuthRetryAsync(string accessToken, string? refreshToken, CancellationToken ct)
         {
             try
             {
@@ -1201,7 +1201,7 @@ namespace TokenBar.Services
 
         /// <summary>
         /// Fetches the real Antigravity quota (same source as the IDE's usage panel) and maps the
-        /// "Gemini Models" group's weekly / 5-hour buckets to TokenWindows.
+        /// "Gemini Models" group's weekly / 5-hour buckets to TokenWindows, alongside any "Gemini 4 Argon" scoped quota bucket.
         /// Throws QuotaAuthException on 401/403 so the caller can refresh and retry.
         ///
         /// 两个配额端点返回的分组集不同（实测 daily 端点只回 "Claude and GPT models" 组，
@@ -1210,7 +1210,7 @@ namespace TokenBar.Services
         /// 第一且首个 2xx 即返回，Gemini 组永远匹配不上，静默退化到只产 5h 窗口的回退——
         /// 这正是「只有 5 小时额度、没有每周额度」那次线上问题的根因。
         /// </summary>
-        private async Task<(TokenWindow? FiveHour, TokenWindow? Weekly)> FetchAntigravityQuotaCoreAsync(string accessToken, CancellationToken ct)
+        private async Task<(TokenWindow? FiveHour, TokenWindow? Weekly, TokenWindow? ScopedWeekly)> FetchAntigravityQuotaCoreAsync(string accessToken, CancellationToken ct)
         {
             Exception? lastError = null;
             var sawSuccessfulSummary = false;
@@ -1220,9 +1220,9 @@ namespace TokenBar.Services
                 {
                     var summaryBody = await PostCloudCodeOnceAsync(accessToken, "/v1internal:retrieveUserQuotaSummary", baseUrl, ct);
                     sawSuccessfulSummary = true;
-                    var (fiveHour, weekly) = ParseGeminiGroupWindows(summaryBody);
-                    if (fiveHour != null || weekly != null)
-                        return (fiveHour, weekly);
+                    var (fiveHour, weekly, scopedWeekly) = ParseGeminiGroupWindows(summaryBody);
+                    if (fiveHour != null || weekly != null || scopedWeekly != null)
+                        return (fiveHour, weekly, scopedWeekly);
                 }
                 catch (QuotaAuthException)
                 {
@@ -1249,65 +1249,121 @@ namespace TokenBar.Services
                     ? "Antigravity 额度响应中未找到 Gemini 配额数据"
                     : "No Gemini quota data found in the Antigravity response");
             }
-            return (fbFiveHour, fbWeekly);
+            return (fbFiveHour, fbWeekly, null);
         }
 
         /// <summary>
-        /// 从 retrieveUserQuotaSummary 响应里挑 Gemini 组并映射成 weekly/5h 窗口。
-        /// 组选择：优先名字含 "gemini models" 的正主组；没有时才退第一个名字含 gemini
-        /// 的组（防将来出现 "Gemini 4 Argon" 之类变体时乱序抢先）。返回 (null, null)
-        /// 表示该响应里没有可用的 Gemini 组（daily 端点就只回 Claude/GPT 组）。
+        /// 从 retrieveUserQuotaSummary 响应里挑 Gemini 组并映射成 weekly/5h 窗口，同时提取 Gemini 4 Argon 额度。
+        /// 组选择：
+        /// - 正主 Gemini Models 组：优先名字含 "gemini models" 的组；没有时退回第一个名字含 gemini 且不含 argon 的组。
+        /// - Gemini 4 Argon 组：优先名字含 "gemini 4 argon" 的组；没有时退回第一个名字含 argon 的组。
+        /// 返回 (fiveHour, weekly, scopedWeekly)，当该响应里没有任何可用的 Gemini 相关组时返回 (null, null, null)。
         /// 必须在 doc 存活期间调用；TokenWindow 当场物化，返回后 doc 可释放。
         /// </summary>
-        internal static (TokenWindow? FiveHour, TokenWindow? Weekly) ParseGeminiGroupWindows(string summaryBody)
+        internal static (TokenWindow? FiveHour, TokenWindow? Weekly, TokenWindow? ScopedWeekly) ParseGeminiGroupWindows(string summaryBody)
         {
             using var doc = JsonDocument.Parse(summaryBody);
             if (!doc.RootElement.TryGetProperty("groups", out var groups) || groups.ValueKind != JsonValueKind.Array)
-                return (null, null);
+                return (null, null, null);
 
             JsonElement targetGroup = default;
             JsonElement firstGeminiGroup = default;
+            JsonElement targetArgonGroup = default;
+            JsonElement firstArgonGroup = default;
             var haveTarget = false;
             var haveFirstGemini = false;
+            var haveTargetArgon = false;
+            var haveFirstArgon = false;
+
             foreach (var group in groups.EnumerateArray())
             {
                 if (!group.TryGetProperty("displayName", out var gName) || gName.ValueKind != JsonValueKind.String)
                     continue;
-                var name = (gName.GetString() ?? "").ToLowerInvariant();
+                var rawName = gName.GetString() ?? "";
+                var name = rawName.ToLowerInvariant();
+
+                if (name.Contains("argon"))
+                {
+                    if (name.Contains("gemini 4 argon"))
+                    {
+                        targetArgonGroup = group;
+                        haveTargetArgon = true;
+                    }
+                    else if (!haveFirstArgon)
+                    {
+                        firstArgonGroup = group;
+                        haveFirstArgon = true;
+                    }
+                    continue;
+                }
+
                 if (!name.Contains("gemini"))
                     continue;
                 if (name.Contains("gemini models"))
                 {
                     targetGroup = group;
                     haveTarget = true;
-                    break;
                 }
-                if (!haveFirstGemini)
+                else if (!haveFirstGemini)
                 {
                     firstGeminiGroup = group;
                     haveFirstGemini = true;
                 }
             }
-            if (!haveTarget && !haveFirstGemini)
-                return (null, null);
-
-            var chosen = haveTarget ? targetGroup : firstGeminiGroup;
-            if (!chosen.TryGetProperty("buckets", out var buckets) || buckets.ValueKind != JsonValueKind.Array)
-                return (null, null);
 
             TokenWindow? fiveHour = null;
             TokenWindow? weekly = null;
-            foreach (var bucket in buckets.EnumerateArray())
+            if (haveTarget || haveFirstGemini)
             {
-                var window = ParseQuotaBucket(bucket, out var isWeekly);
-                if (window == null)
-                    continue;
-                if (isWeekly)
-                    weekly = window;
-                else
-                    fiveHour = window;
+                var chosen = haveTarget ? targetGroup : firstGeminiGroup;
+                if (chosen.TryGetProperty("buckets", out var buckets) && buckets.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var bucket in buckets.EnumerateArray())
+                    {
+                        var window = ParseQuotaBucket(bucket, out var isWeekly);
+                        if (window == null)
+                            continue;
+                        if (isWeekly)
+                            weekly = window;
+                        else
+                            fiveHour = window;
+                    }
+                }
             }
-            return (fiveHour, weekly);
+
+            TokenWindow? scopedWeekly = null;
+            if (haveTargetArgon || haveFirstArgon)
+            {
+                var argon = haveTargetArgon ? targetArgonGroup : firstArgonGroup;
+                string titleText = "Gemini 4 Argon";
+                if (argon.TryGetProperty("displayName", out var dName) && dName.ValueKind == JsonValueKind.String)
+                {
+                    var s = (dName.GetString() ?? "").Trim();
+                    if (!string.IsNullOrEmpty(s)) titleText = s;
+                }
+
+                if (argon.TryGetProperty("buckets", out var aBuckets) && aBuckets.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var bucket in aBuckets.EnumerateArray())
+                    {
+                        var window = ParseQuotaBucket(bucket, out var isWeekly);
+                        if (window == null)
+                            continue;
+                        window.Title = WindowTitle.Custom(titleText);
+                        if (isWeekly)
+                        {
+                            scopedWeekly = window;
+                            break;
+                        }
+                        else if (scopedWeekly == null)
+                        {
+                            scopedWeekly = window;
+                        }
+                    }
+                }
+            }
+
+            return (fiveHour, weekly, scopedWeekly);
         }
 
         /// <summary>

@@ -1171,6 +1171,7 @@ public final class RefreshManager: ObservableObject {
                 cancelGeminiRetry()
                 quota.fiveHourWindow = res.fiveHour
                 quota.weeklyWindow = res.weekly
+                quota.scopedWeeklyWindow = nil
                 quota.isAuthorized = true
                 quota.hadRefreshError = false
                 quota.accountInfo = res.account
@@ -1207,6 +1208,7 @@ public final class RefreshManager: ObservableObject {
             cancelGeminiRetry()
             quota.fiveHourWindow = res.fiveHour
             quota.weeklyWindow = res.weekly
+            quota.scopedWeeklyWindow = res.scopedWeekly
             quota.isAuthorized = true
             quota.hadRefreshError = false
             if let acc = res.account { quota.accountInfo = acc }

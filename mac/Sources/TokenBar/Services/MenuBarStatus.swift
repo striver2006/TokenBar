@@ -98,7 +98,7 @@ public enum MenuBarStatus {
             guard settings.isEnabled(type), let quota = quotas[type] else { return nil }
             name = type.shortName
             primary = quota.fiveHourWindow
-            secondary = quota.weeklyWindow
+            secondary = quota.weeklyWindow ?? quota.scopedWeeklyWindow
             balance = quota.balanceWindow
             isAuthorized = quota.isAuthorized
             errorMessage = quota.errorMessage
