@@ -213,5 +213,41 @@ namespace TokenBar.Tests
             Assert.Equal(WindowTitleKind.Custom, scopedWeekly.Title.Kind);
             Assert.Equal("Gemini 4 Argon", scopedWeekly.Title.Argument);
         }
+
+        [Fact]
+        public void GroupParsing_WrappedInResponseField_ParsesArgonAndMainGroups()
+        {
+            var json = """
+                {
+                  "response": {
+                    "groups": [
+                      {
+                        "displayName": "Gemini Models",
+                        "buckets": [
+                          {"window": "5h", "remainingFraction": 0.85, "resetTime": "2030-01-01T00:00:00Z"},
+                          {"window": "weekly", "remainingFraction": 0.60, "resetTime": "2030-01-01T00:00:00Z"}
+                        ]
+                      },
+                      {
+                        "displayName": "Gemini 4 Argon",
+                        "buckets": [
+                          {"window": "weekly", "remainingFraction": 0.2859, "resetTime": "2030-01-01T00:00:00Z"}
+                        ]
+                      }
+                    ]
+                  }
+                }
+                """;
+
+            var (fiveHour, weekly, scopedWeekly) = GeminiService.ParseGeminiGroupWindows(json);
+            Assert.NotNull(fiveHour);
+            Assert.Equal(15.0, fiveHour!.UsedPercentage, 3);
+            Assert.NotNull(weekly);
+            Assert.Equal(40.0, weekly!.UsedPercentage, 3);
+            Assert.NotNull(scopedWeekly);
+            Assert.Equal(71.41, scopedWeekly!.UsedPercentage, 2);
+            Assert.Equal(WindowTitleKind.Custom, scopedWeekly.Title.Kind);
+            Assert.Equal("Gemini 4 Argon", scopedWeekly.Title.Argument);
+        }
     }
 }

@@ -495,6 +495,157 @@ namespace TokenBar.Services
             return (fiveHour, weekly, accountDisplay);
         }
 
+        private static (int Port, string CsrfToken)? _cachedLocalServer;
+
+        private static readonly HttpClientHandler _insecureHandler = new()
+        {
+            ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+        };
+        private static readonly HttpClient _localLanguageServerClient = new(_insecureHandler)
+        {
+            Timeout = TimeSpan.FromSeconds(2)
+        };
+
+        /// <summary>
+        /// 探测本地运行的 Antigravity LanguageServer（Connect-RPC 端口）。
+        /// 当用户运行 Antigravity IDE 时，本地 language_server 进程直接提供包含「Gemini 4 Argon」在内的全量实时额度。
+        /// </summary>
+        private async Task<(TokenWindow? FiveHour, TokenWindow? Weekly, TokenWindow? ScopedWeekly)> FetchLocalAntigravityQuotaAsync(CancellationToken ct = default)
+        {
+            try
+            {
+                // 1. 若有缓存的探针，先尝试一次快速请求
+                if (_cachedLocalServer is { } cached)
+                {
+                    var cachedResult = await TryQueryLocalLanguageServerAsync(cached.Port, cached.CsrfToken, ct);
+                    if (cachedResult != null) return cachedResult.Value;
+                    _cachedLocalServer = null;
+                }
+
+                // 2. 查找是否有 language_server 进程
+                var procs = System.Diagnostics.Process.GetProcessesByName("language_server");
+                if (procs.Length == 0) return (null, null, null);
+
+                // 3. 扫描各 language_server 进程的命令行以获取 csrf_token 和监听端口
+                foreach (var proc in procs)
+                {
+                    try
+                    {
+                        var pid = proc.Id;
+                        var (csrfToken, ports) = GetWindowsProcessInfo(pid);
+                        if (string.IsNullOrEmpty(csrfToken) || ports.Count == 0) continue;
+
+                        foreach (var port in ports)
+                        {
+                            var result = await TryQueryLocalLanguageServerAsync(port, csrfToken, ct);
+                            if (result != null)
+                            {
+                                _cachedLocalServer = (port, csrfToken);
+                                return result.Value;
+                            }
+                        }
+                    }
+                    catch
+                    {
+                        // 忽略单个进程探测失败
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Debug("provider", $"本地 Antigravity LanguageServer 探测失败: {ex.Message}");
+            }
+            return (null, null, null);
+        }
+
+        private static async Task<(TokenWindow? FiveHour, TokenWindow? Weekly, TokenWindow? ScopedWeekly)?> TryQueryLocalLanguageServerAsync(int port, string csrfToken, CancellationToken ct)
+        {
+            try
+            {
+                var url = $"https://127.0.0.1:{port}/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary";
+                using var req = new HttpRequestMessage(HttpMethod.Post, url);
+                req.Headers.Add("x-codeium-csrf-token", csrfToken);
+                req.Content = new StringContent("{\"force_refresh\": true}", System.Text.Encoding.UTF8, "application/json");
+
+                using var resp = await _localLanguageServerClient.SendAsync(req, ct);
+                if (!resp.IsSuccessStatusCode) return null;
+                var body = await resp.Content.ReadAsStringAsync(ct);
+                var windows = ParseGeminiGroupWindows(body);
+                if (windows.FiveHour != null || windows.Weekly != null || windows.ScopedWeekly != null)
+                {
+                    return windows;
+                }
+            }
+            catch
+            {
+                // 连接失败或超时
+            }
+            return null;
+        }
+
+        private static (string? CsrfToken, List<int> Ports) GetWindowsProcessInfo(int pid)
+        {
+            string? csrfToken = null;
+            var ports = new List<int>();
+
+            // 1. 获取命令行提取 csrf_token
+            try
+            {
+                using var p = new System.Diagnostics.Process();
+                p.StartInfo.FileName = "powershell";
+                p.StartInfo.Arguments = $"-NoProfile -NonInteractive -Command \"(Get-CimInstance Win32_Process -Filter 'ProcessId = {pid}').CommandLine\"";
+                p.StartInfo.UseShellExecute = false;
+                p.StartInfo.RedirectStandardOutput = true;
+                p.StartInfo.CreateNoWindow = true;
+                p.Start();
+                var cmdLine = p.StandardOutput.ReadToEnd();
+                p.WaitForExit(1000);
+
+                var match = System.Text.RegularExpressions.Regex.Match(cmdLine, @"--csrf_token[=\s]+([a-f0-9-]+)");
+                if (match.Success)
+                {
+                    csrfToken = match.Groups[1].Value.Trim();
+                }
+            }
+            catch { }
+
+            if (string.IsNullOrEmpty(csrfToken)) return (null, ports);
+
+            // 2. 获取该 PID 监听的 TCP 端口
+            try
+            {
+                using var p = new System.Diagnostics.Process();
+                p.StartInfo.FileName = "netstat";
+                p.StartInfo.Arguments = "-ano -p tcp";
+                p.StartInfo.UseShellExecute = false;
+                p.StartInfo.RedirectStandardOutput = true;
+                p.StartInfo.CreateNoWindow = true;
+                p.Start();
+                var output = p.StandardOutput.ReadToEnd();
+                p.WaitForExit(1500);
+
+                foreach (var line in output.Split('\n'))
+                {
+                    if (line.Contains("LISTENING") && line.TrimEnd().EndsWith($" {pid}"))
+                    {
+                        var parts = System.Text.RegularExpressions.Regex.Split(line.Trim(), @"\s+");
+                        if (parts.Length >= 2)
+                        {
+                            var addr = parts[1];
+                            var lastColon = addr.LastIndexOf(':');
+                            if (lastColon >= 0 && int.TryParse(addr[(lastColon + 1)..], out var port) && !ports.Contains(port))
+                            {
+                                ports.Add(port);
+                            }
+                        }
+                    }
+                }
+            }
+            catch { }
+
+            return (csrfToken, ports);
+        }
+
         /// <summary>
         /// 凭证优先级：**TokenBar 自己的 Google 登录**（`geminiOwnRefreshToken`）> 凭据管理器
         /// `gemini:antigravity` 条目 > `~/.gemini` 文件 > 设置里的快照 refresh_token。
@@ -505,6 +656,17 @@ namespace TokenBar.Services
         public async Task<(TokenWindow? FiveHour, TokenWindow? Weekly, TokenWindow? ScopedWeekly, string? Account, string? RefreshToken)> FetchQuotaAsync(
             string? token, string? storedRefreshToken = null, CancellationToken ct = default)
         {
+            // 优先尝试本地正在运行的 Antigravity LanguageServer：
+            // 当用户打开 Antigravity IDE 时，本地服务直接持有最全且权威的实时额度（含 Gemini 4 Argon），
+            // 且无需消耗网络与令牌刷新，零延迟。
+            var localQuota = await FetchLocalAntigravityQuotaAsync(ct);
+            if (localQuota.FiveHour != null || localQuota.Weekly != null || localQuota.ScopedWeekly != null)
+            {
+                var localCfg = ReadLocalGeminiConfig(storedRefreshToken);
+                var acc = localCfg.Account ?? (LocalizationManager.Instance.IsChinese ? "Antigravity 本地" : "Antigravity Local");
+                return (localQuota.FiveHour, localQuota.Weekly, localQuota.ScopedWeekly, acc, localCfg.RefreshToken ?? storedRefreshToken);
+            }
+
             var own = await LoadOwnRefreshTokenAsync();
             if (!string.IsNullOrEmpty(own))
             {
@@ -1263,7 +1425,10 @@ namespace TokenBar.Services
         internal static (TokenWindow? FiveHour, TokenWindow? Weekly, TokenWindow? ScopedWeekly) ParseGeminiGroupWindows(string summaryBody)
         {
             using var doc = JsonDocument.Parse(summaryBody);
-            if (!doc.RootElement.TryGetProperty("groups", out var groups) || groups.ValueKind != JsonValueKind.Array)
+            var root = doc.RootElement.TryGetProperty("response", out var resp) && resp.ValueKind == JsonValueKind.Object
+                ? resp
+                : doc.RootElement;
+            if (!root.TryGetProperty("groups", out var groups) || groups.ValueKind != JsonValueKind.Array)
                 return (null, null, null);
 
             JsonElement targetGroup = default;

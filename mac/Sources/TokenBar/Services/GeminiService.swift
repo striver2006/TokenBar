@@ -844,6 +844,156 @@ public actor GeminiService {
         return CredentialError(ownLogin && stage == .refreshTokenDead ? .ownLoginRevoked : stage, retryAt: retryAt)
     }
 
+    // MARK: - 本地 Antigravity LanguageServer 探测（快速通道，含 Gemini 4 Argon 独立额度）
+
+    private static let localLanguageServerSession: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 2.0
+        config.timeoutIntervalForResource = 3.0
+        config.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        config.urlCache = nil
+        config.waitsForConnectivity = false
+        config.httpShouldSetCookies = false
+        config.httpCookieAcceptPolicy = .never
+        return URLSession(configuration: config, delegate: LocalhostTrustDelegate.shared, delegateQueue: nil)
+    }()
+
+    private static var cachedLocalServerEndpoint: (port: Int, csrfToken: String)?
+
+    struct LocalLanguageServerCandidate: Sendable {
+        let pid: pid_t
+        let csrfToken: String
+        let ports: [Int]
+    }
+
+    /// 探测本地正在运行的 Antigravity LanguageServer（Connect-RPC 端口）。
+    /// 当用户在 Antigravity IDE 中使用时，IDE 启动的 language_server 进程直接提供包含「Gemini 4 Argon」在内的全量实时额度。
+    func fetchLocalAntigravityQuota() async -> (fiveHour: TokenWindow?, weekly: TokenWindow?, scopedWeekly: TokenWindow?)? {
+        // 1. 若有缓存的可用探针，先尝试一次极速请求（通常 <10ms）
+        if let cached = Self.cachedLocalServerEndpoint {
+            if let result = await tryQueryLanguageServerQuota(port: cached.port, csrfToken: cached.csrfToken) {
+                return result
+            }
+            Self.cachedLocalServerEndpoint = nil
+        }
+
+        // 2. 扫描本地 language_server 进程及其监听端口
+        guard let servers = await findLocalLanguageServers() else { return nil }
+        for server in servers {
+            for port in server.ports {
+                if let result = await tryQueryLanguageServerQuota(port: port, csrfToken: server.csrfToken) {
+                    Self.cachedLocalServerEndpoint = (port, server.csrfToken)
+                    return result
+                }
+            }
+        }
+        return nil
+    }
+
+    private func tryQueryLanguageServerQuota(port: Int, csrfToken: String) async -> (fiveHour: TokenWindow?, weekly: TokenWindow?, scopedWeekly: TokenWindow?)? {
+        guard let url = URL(string: "https://127.0.0.1:\(port)/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary") else { return nil }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue(csrfToken, forHTTPHeaderField: "x-codeium-csrf-token")
+        req.httpBody = Data("{\"force_refresh\": true}".utf8)
+        req.timeoutInterval = 2.0
+
+        do {
+            let (data, resp) = try await Self.localLanguageServerSession.data(for: req)
+            guard let http = resp as? HTTPURLResponse, http.statusCode == 200,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return nil
+            }
+            let (fiveHour, weekly, scopedWeekly) = Self.parseGeminiGroupWindows(json)
+            if fiveHour != nil || weekly != nil || scopedWeekly != nil {
+                Log.provider.info("provider=gemini 成功通过本地 Antigravity LanguageServer (port \(port)) 获取最新额度，含 Argon=\(scopedWeekly != nil, privacy: .public)")
+                return (fiveHour, weekly, scopedWeekly)
+            }
+        } catch {
+            return nil
+        }
+        return nil
+    }
+
+    private func findLocalLanguageServers() async -> [LocalLanguageServerCandidate]? {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/bin/ps")
+                process.arguments = ["-A", "-o", "pid,command"]
+                let pipe = Pipe()
+                process.standardOutput = pipe
+                process.standardError = FileHandle.nullDevice
+                do {
+                    try process.run()
+                    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                    process.waitUntilExit()
+                    guard let output = String(data: data, encoding: .utf8) else {
+                        continuation.resume(returning: nil)
+                        return
+                    }
+
+                    var rawCandidates: [(pid: pid_t, csrf: String)] = []
+                    for line in output.components(separatedBy: .newlines) {
+                        guard line.contains("language_server") && line.contains("--csrf_token") else { continue }
+                        let trimmed = line.trimmingCharacters(in: .whitespaces)
+                        let parts = trimmed.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+                        guard let pidStr = parts.first, let pid = Int32(pidStr) else { continue }
+                        guard let range = line.range(of: "--csrf_token") else { continue }
+                        let sub = line[range.upperBound...]
+                        let tokenParts = sub.split(whereSeparator: { $0 == " " || $0 == "=" })
+                        guard let first = tokenParts.first else { continue }
+                        let token = String(first).trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !token.isEmpty {
+                            rawCandidates.append((pid, token))
+                        }
+                    }
+
+                    guard !rawCandidates.isEmpty else {
+                        continuation.resume(returning: nil)
+                        return
+                    }
+
+                    var candidates: [LocalLanguageServerCandidate] = []
+                    for cand in rawCandidates {
+                        let lsof = Process()
+                        lsof.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+                        lsof.arguments = ["-a", "-p", "\(cand.pid)", "-i", "-sTCP:LISTEN", "-n", "-P"]
+                        let lsofPipe = Pipe()
+                        lsof.standardOutput = lsofPipe
+                        lsof.standardError = FileHandle.nullDevice
+                        try lsof.run()
+                        let lsofData = lsofPipe.fileHandleForReading.readDataToEndOfFile()
+                        lsof.waitUntilExit()
+
+                        guard let lsofOutput = String(data: lsofData, encoding: .utf8) else { continue }
+                        var ports: [Int] = []
+                        for line in lsofOutput.components(separatedBy: .newlines) {
+                            guard line.contains("LISTEN") else { continue }
+                            if let colonIdx = line.range(of: ":", options: .backwards) {
+                                let afterColon = line[colonIdx.upperBound...]
+                                if let endIdx = afterColon.range(of: " ") {
+                                    let portStr = String(afterColon[..<endIdx.lowerBound]).trimmingCharacters(in: .whitespaces)
+                                    if let p = Int(portStr), !ports.contains(p) {
+                                        ports.append(p)
+                                    }
+                                }
+                            }
+                        }
+                        if !ports.isEmpty {
+                            candidates.append(LocalLanguageServerCandidate(pid: cand.pid, csrfToken: cand.csrf, ports: ports))
+                        }
+                    }
+
+                    continuation.resume(returning: candidates.isEmpty ? nil : candidates)
+                } catch {
+                    continuation.resume(returning: nil)
+                }
+            }
+        }
+    }
+
     /// Fetch Gemini usage quota and window limits from the Antigravity (Google Code Assist)
     /// quota API — the same source the Antigravity IDE's usage panel displays.
     /// 返回值里带上本轮用到的 refresh_token，调用方据此把它落进自有钥匙串条目做快照。
@@ -854,6 +1004,16 @@ public actor GeminiService {
     /// 的那条路；自有凭证被判 invalid_grant 时清掉并当场落到旧链路，额度尽量不失联。
     public func fetchQuota(token: String?, storedRefreshToken: String? = nil) async throws -> (fiveHour: TokenWindow?, weekly: TokenWindow?, scopedWeekly: TokenWindow?, account: String?, refreshToken: String?) {
         try Task.checkCancellation()
+
+        // 优先尝试本地正在运行的 Antigravity LanguageServer：
+        // 当用户打开 Antigravity IDE 时，本地服务直接持有最全且权威的实时额度（含 Gemini 4 Argon），
+        // 且无需消耗网络与令牌刷新，零延迟。
+        if let localQuota = await fetchLocalAntigravityQuota() {
+            let local = await readLocalGeminiConfig(storedRefreshToken: storedRefreshToken)
+            let account = local.account ?? (isZh ? "Antigravity 本地" : "Antigravity Local")
+            return (localQuota.fiveHour, localQuota.weekly, localQuota.scopedWeekly, account, local.refreshToken ?? storedRefreshToken)
+        }
+
         if let own = await loadOwnRefreshToken(), !own.isEmpty {
             do {
                 return try await fetchQuotaWithOwnCredential(own)
@@ -1029,7 +1189,8 @@ public actor GeminiService {
     /// - Gemini 4 Argon 组：优先名字含 "gemini 4 argon" 的组；没有时退回第一个名字含 argon 的组。
     /// 返回 (fiveHour, weekly, scopedWeekly)，当该响应里没有任何可用的 Gemini 相关组时返回 (nil, nil, nil)。
     static func parseGeminiGroupWindows(_ summary: [String: Any]) -> (fiveHour: TokenWindow?, weekly: TokenWindow?, scopedWeekly: TokenWindow?) {
-        guard let groups = summary["groups"] as? [[String: Any]] else { return (nil, nil, nil) }
+        let root = (summary["response"] as? [String: Any]) ?? summary
+        guard let groups = root["groups"] as? [[String: Any]] else { return (nil, nil, nil) }
 
         var target: [String: Any]?
         var firstGemini: [String: Any]?
@@ -1320,5 +1481,18 @@ public actor GeminiService {
 
         let accountDisplay = "AI Studio (\(maskedKey))"
         return (fiveHour, weekly, accountDisplay)
+    }
+}
+
+private final class LocalhostTrustDelegate: NSObject, URLSessionDelegate, Sendable {
+    static let shared = LocalhostTrustDelegate()
+    func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge, completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        if let host = challenge.protectionSpace.host as String?,
+           (host == "127.0.0.1" || host == "localhost"),
+           let trust = challenge.protectionSpace.serverTrust {
+            completionHandler(.useCredential, URLCredential(trust: trust))
+        } else {
+            completionHandler(.performDefaultHandling, nil)
+        }
     }
 }

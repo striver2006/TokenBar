@@ -273,6 +273,33 @@ final class GeminiCredentialTests: XCTestCase {
         XCTAssertEqual(scopedWeekly?.titleKind, .custom("Gemini 4 Argon"))
     }
 
+    func testParseGeminiGroupWindowsWrappedInResponseField() {
+        // Antigravity 本地 LanguageServer Connect-RPC 响应形状：带有 {"response": {"groups": [...]}} 包装
+        let summary: [String: Any] = [
+            "response": [
+                "groups": [
+                    [
+                        "displayName": "Gemini Models",
+                        "buckets": [
+                            bucket(["window": "5h", "remainingFraction": 0.85, "resetTime": "2030-01-01T00:00:00Z"]),
+                            bucket(["window": "weekly", "remainingFraction": 0.60, "resetTime": "2030-01-01T00:00:00Z"])
+                        ]
+                    ],
+                    [
+                        "displayName": "Gemini 4 Argon",
+                        "buckets": [bucket(["window": "weekly", "remainingFraction": 0.2859, "resetTime": "2030-01-01T00:00:00Z"])]
+                    ]
+                ]
+            ]
+        ]
+
+        let (fiveHour, weekly, scopedWeekly) = GeminiService.parseGeminiGroupWindows(summary)
+        XCTAssertEqual(fiveHour?.usedPercentage ?? 0, 15.0, accuracy: 0.001)
+        XCTAssertEqual(weekly?.usedPercentage ?? 0, 40.0, accuracy: 0.001)
+        XCTAssertEqual(scopedWeekly?.usedPercentage ?? 0, 71.41, accuracy: 0.01)
+        XCTAssertEqual(scopedWeekly?.titleKind, .custom("Gemini 4 Argon"))
+    }
+
     func testParseQuotaBucketWeeklyAndFiveHour() {
         let weekly = GeminiService.parseQuotaBucket(["bucketId": "gemini-weekly", "remainingFraction": 0.25, "resetTime": "2030-01-01T00:00:00Z"])
         XCTAssertTrue(weekly?.isWeekly ?? false)
@@ -285,5 +312,16 @@ final class GeminiCredentialTests: XCTestCase {
 
         XCTAssertNil(GeminiService.parseQuotaBucket(["window": "daily", "remainingFraction": 0.5]), "未知窗口类型不产窗口")
         XCTAssertNil(GeminiService.parseQuotaBucket(["window": "5h"]), "缺 remainingFraction 不产窗口")
+    }
+
+    func testFetchLocalAntigravityQuotaGracefulOrLive() async {
+        let service = GeminiService()
+        let result = await service.fetchLocalAntigravityQuota()
+        if let res = result {
+            XCTAssertTrue(res.fiveHour != nil || res.weekly != nil || res.scopedWeekly != nil)
+            if let argon = res.scopedWeekly {
+                XCTAssertEqual(argon.titleKind, .custom("Gemini 4 Argon"))
+            }
+        }
     }
 }
