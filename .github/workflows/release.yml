@@ -106,6 +106,7 @@ jobs:
       - uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.TAG_NAME }}
+          draft: true
           generate_release_notes: true
           body: |
             ## 安装说明
@@ -117,7 +118,7 @@ jobs:
 
             ### macOS (13+，Intel 与 Apple Silicon 通用)
             - 下载并解压 `TokenBar-${{ env.TAG_NAME }}-macOS-universal.zip`，将 `TokenBar.app` 拖入「应用程序」
-            - 产物未做开发者签名与公证，首次打开若被 Gatekeeper 拦截：系统设置 → 隐私与安全性 → 「仍要打开」，或执行 `xattr -dr com.apple.quarantine /Applications/TokenBar.app`
+            - 发布前需将 CI 构建的 Mac 附件替换为 Developer ID 签名、经 Apple 公证并落票的版本。
 
             ### 校验下载完整性
             - macOS / Linux：`shasum -a 256 -c SHA256SUMS.txt`

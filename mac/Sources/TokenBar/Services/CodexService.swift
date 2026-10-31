@@ -48,6 +48,7 @@ public final class CodexService: @unchecked Sendable {
         process.executableURL = URL(fileURLWithPath: try resolveExecutable(executablePath))
         process.arguments = ["app-server"]
         process.currentDirectoryURL = FileManager.default.temporaryDirectory
+        process.environment = codexEnvironment(ProcessInfo.processInfo.environment, home: FileManager.default.homeDirectoryForCurrentUser.path)
         let input = Pipe(), output = Pipe()
         process.standardInput = input
         process.standardOutput = output
@@ -105,6 +106,17 @@ public final class CodexService: @unchecked Sendable {
         let windows = try parseRateLimits(result)
         let plan = account["planType"] as? String ?? "ChatGPT"
         return (windows.0, windows.1, "Codex · \(plan)")
+    }
+
+    static func codexEnvironment(_ inherited: [String: String], home: String) -> [String: String] {
+        var environment = inherited
+        var paths = (inherited["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin")
+            .split(separator: ":", omittingEmptySubsequences: true).map(String.init)
+        for path in ["/opt/homebrew/bin", "/usr/local/bin", "\(home)/.local/bin"] where !paths.contains(path) {
+            paths.append(path)
+        }
+        environment["PATH"] = paths.joined(separator: ":")
+        return environment
     }
 
     static func parseRateLimits(_ result: [String: Any]) throws -> (TokenWindow?, TokenWindow?) {

@@ -2,6 +2,14 @@ import XCTest
 @testable import TokenBar
 
 final class CodexServiceTests: XCTestCase {
+    func testCodexEnvironmentPreservesInheritedValuesAndAddsStandardPaths() {
+        let env = CodexService.codexEnvironment(["PATH": "/custom/bin:/usr/local/bin:/usr/bin", "CUSTOM": "value"], home: "/Users/example")
+        XCTAssertEqual(env["PATH"], "/custom/bin:/usr/local/bin:/usr/bin:/opt/homebrew/bin:/Users/example/.local/bin")
+        XCTAssertEqual(env["CUSTOM"], "value")
+        let fallback = CodexService.codexEnvironment([:], home: "/Users/example")
+        XCTAssertEqual(fallback["PATH"], "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:/Users/example/.local/bin")
+    }
+
     private func parse(_ json: String) throws -> (TokenWindow?, TokenWindow?) {
         try CodexService.parseRateLimits(JSONSerialization.jsonObject(with: Data(json.utf8)) as! [String: Any])
     }
@@ -61,6 +69,8 @@ final class CodexServiceTests: XCTestCase {
 
     func testRPCHandshakeIgnoresNotificationsAndReadsSubscription() throws {
         try withFakeCodex("""
+        import os
+        assert '/opt/homebrew/bin' in os.environ['PATH'].split(':')
         def read(): return json.loads(sys.stdin.readline())
         def send(o): print(json.dumps(o),flush=True)
         assert read()['method']=='initialize'
