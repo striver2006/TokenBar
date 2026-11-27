@@ -4,6 +4,8 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -18,15 +20,100 @@ namespace TokenBar.Services
         private GeminiService() { }
 
         // Antigravity (Google Code Assist) quota backend endpoints.
-        // 两个端点对 retrieveUserQuotaSummary 的分组返回集不同（2026-10 实测）：
-        // cloudcode-pa 返回 "Gemini Models" + "Claude and GPT models" 两组，
-        // daily-cloudcode-pa 只返回 "Claude and GPT models" 一组——Gemini 组只在
-        // cloudcode-pa 上，所以它排前；daily 保留兜底（fetchAvailableModels 两边都通）。
+        // 分组返回集可能随端点和客户端版本变化，逐端点解析后再决定是否回退。
+        // 两套后端各自记账：官方客户端只往其中一套发请求，另一套上同名的 Gemini 桶恒为满额。
+        // 2026-11-26 对照实测：IDE 把 language_server 钉在 daily 上，真实用量只记在 daily；
+        // cloudcode-pa 回的 weekly/5h remainingFraction 恒为 1。此前 cloudcode-pa 排第一且
+        // 「首个解析出 Gemini 组的响应就用」，Gemini 卡片于是永远 100%。
+        // 默认顺序跟随官方客户端当前的常量（daily 优先）；实际顺序见 OrderedCloudCodeQuotaBases。
         private static readonly string[] CloudCodeQuotaBases = new[]
         {
-            "https://cloudcode-pa.googleapis.com",
-            "https://daily-cloudcode-pa.googleapis.com"
+            "https://daily-cloudcode-pa.googleapis.com",
+            "https://cloudcode-pa.googleapis.com"
         };
+
+        // 官方客户端实际在用的额度端点（本地 language_server 启动参数里的 --cloud_code_endpoint）。
+        // 落盘是为了 IDE 没开的那几轮（含重启后）也跟着官方客户端走；文件缺失或读坏就当没有偏好。
+        // 与 mac 端 UserDefaults 的 geminiCloudCodeEndpoint 同义。
+        private static string PreferredCloudCodeBasePath => Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TokenBar", "gemini_cloud_code_endpoint.txt");
+        private static readonly object _preferredCloudCodeBaseLock = new();
+        private static string? _preferredCloudCodeBase;
+        private static bool _preferredCloudCodeBaseLoaded;
+
+        /// <summary>额度请求的端点顺序：官方客户端在用的那个排第一，其余按默认顺序跟在后面。
+        /// 只在已知端点之间换位——启动参数里出现陌生主机时不跟随，access token 不会被送去别处。</summary>
+        internal static IReadOnlyList<string> OrderCloudCodeQuotaBases(string? preferred, IReadOnlyList<string>? bases = null)
+        {
+            var list = bases ?? CloudCodeQuotaBases;
+            var ordered = new List<string>(list.Count);
+            if (preferred != null && list.Contains(preferred)) ordered.Add(preferred);
+            ordered.AddRange(list.Where(b => b != preferred));
+            return ordered;
+        }
+
+        private static IReadOnlyList<string> OrderedCloudCodeQuotaBases
+        {
+            get
+            {
+                lock (_preferredCloudCodeBaseLock)
+                {
+                    if (!_preferredCloudCodeBaseLoaded)
+                    {
+                        _preferredCloudCodeBase = LoadPreferredCloudCodeBase(PreferredCloudCodeBasePath);
+                        _preferredCloudCodeBaseLoaded = true;
+                    }
+                    return OrderCloudCodeQuotaBases(_preferredCloudCodeBase);
+                }
+            }
+        }
+
+        internal static string? LoadPreferredCloudCodeBase(string path)
+        {
+            try
+            {
+                var value = File.Exists(path) ? File.ReadAllText(path).Trim() : null;
+                return value != null && Array.IndexOf(CloudCodeQuotaBases, value) >= 0 ? value : null;
+            }
+            catch
+            {
+                // 读不到就当没有偏好，走默认顺序
+                return null;
+            }
+        }
+
+        internal static void SavePreferredCloudCodeBase(string path, string baseUrl)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, baseUrl);
+        }
+
+        /// <summary>记下官方客户端实际在用的额度端点（来自 language_server 的 --cloud_code_endpoint）。</summary>
+        private static void NoteOfficialCloudCodeEndpoint(string rawEndpoint)
+        {
+            var baseUrl = rawEndpoint.Trim();
+            if (Array.IndexOf(CloudCodeQuotaBases, baseUrl) < 0) return;
+
+            bool changed;
+            lock (_preferredCloudCodeBaseLock)
+            {
+                changed = _preferredCloudCodeBase != baseUrl;
+                _preferredCloudCodeBase = baseUrl;
+                _preferredCloudCodeBaseLoaded = true;
+            }
+            if (!changed) return;
+
+            try
+            {
+                SavePreferredCloudCodeBase(PreferredCloudCodeBasePath, baseUrl);
+                Log.Notice("provider", $"Gemini 额度端点跟随本地 Antigravity 客户端: {baseUrl}");
+            }
+            catch (Exception ex)
+            {
+                // 落盘失败不影响本次运行：内存里的偏好已经生效
+                Log.Debug("provider", $"Gemini 额度端点偏好落盘失败: {ex.Message}");
+            }
+        }
 
         // 配额后端按 User-Agent 中的客户端版本选择返回分组（2026-10 本机同凭证对照实测）：
         // 裸 "antigravity" 只回 Claude/GPT 组，带官方 2.25.0 协议版本才回 Gemini 的
@@ -532,7 +619,10 @@ namespace TokenBar.Services
                     try
                     {
                         var pid = proc.Id;
-                        var (csrfToken, ports) = GetWindowsProcessInfo(pid);
+                        var (csrfToken, ports, cloudCodeEndpoint) = GetWindowsProcessInfo(pid);
+                        // 官方客户端把额度后端钉在 --cloud_code_endpoint 上；探针查不通也要先记下，
+                        // 让远程链路跟着它走
+                        if (!string.IsNullOrEmpty(cloudCodeEndpoint)) NoteOfficialCloudCodeEndpoint(cloudCodeEndpoint);
                         if (string.IsNullOrEmpty(csrfToken) || ports.Count == 0) continue;
 
                         foreach (var port in ports)
@@ -583,33 +673,38 @@ namespace TokenBar.Services
             return null;
         }
 
-        private static (string? CsrfToken, List<int> Ports) GetWindowsProcessInfo(int pid)
+        /// <summary>
+        /// 取 language_server 进程的 CSRF token、监听端口与额度端点。
+        /// CSRF token 有两种来源：旧版 LS 的 --csrf_token（命令行），新版 LS 的环境变量
+        /// ANTIGRAVITY_SERVER_CSRF_TOKEN（命令行不再带令牌）。两种都要认，否则 IDE 一升级
+        /// 快速通道就静默失效。
+        /// </summary>
+        private static (string? CsrfToken, List<int> Ports, string? CloudCodeEndpoint) GetWindowsProcessInfo(int pid)
         {
             string? csrfToken = null;
             var ports = new List<int>();
 
-            // 1. 获取命令行提取 csrf_token
+            // 1. 获取命令行：--cloud_code_endpoint 与旧版 --csrf_token
+            string? cloudCodeEndpoint;
             try
             {
-                using var p = new System.Diagnostics.Process();
-                p.StartInfo.FileName = "powershell";
-                p.StartInfo.Arguments = $"-NoProfile -NonInteractive -Command \"(Get-CimInstance Win32_Process -Filter 'ProcessId = {pid}').CommandLine\"";
-                p.StartInfo.UseShellExecute = false;
-                p.StartInfo.RedirectStandardOutput = true;
-                p.StartInfo.CreateNoWindow = true;
-                p.Start();
-                var cmdLine = p.StandardOutput.ReadToEnd();
-                p.WaitForExit(1000);
-
-                var match = System.Text.RegularExpressions.Regex.Match(cmdLine, @"--csrf_token[=\s]+([a-f0-9-]+)");
-                if (match.Success)
-                {
-                    csrfToken = match.Groups[1].Value.Trim();
-                }
+                var cmdLine = ReadProcessCommandLine(pid);
+                cloudCodeEndpoint = MatchCommandFlag(cmdLine, "--cloud_code_endpoint", @"https?://[^\s""]+");
+                csrfToken = MatchCommandFlag(cmdLine, "--csrf_token", @"[A-Za-z0-9_\-]+");
             }
-            catch { }
+            catch
+            {
+                cloudCodeEndpoint = null;
+            }
 
-            if (string.IsNullOrEmpty(csrfToken)) return (null, ports);
+            // 2. 新版 LS 的令牌只在环境变量里
+            if (string.IsNullOrEmpty(csrfToken))
+            {
+                try { csrfToken = ReadProcessEnvironmentVariable(pid, LanguageServerCsrfEnvironmentKey); }
+                catch { }
+            }
+
+            if (string.IsNullOrEmpty(csrfToken)) return (null, ports, cloudCodeEndpoint);
 
             // 2. 获取该 PID 监听的 TCP 端口
             try
@@ -643,7 +738,164 @@ namespace TokenBar.Services
             }
             catch { }
 
-            return (csrfToken, ports);
+            return (csrfToken, ports, cloudCodeEndpoint);
+        }
+
+        private static string ReadProcessCommandLine(int pid)
+        {
+            using var p = new System.Diagnostics.Process();
+            p.StartInfo.FileName = "powershell";
+            p.StartInfo.Arguments = $"-NoProfile -NonInteractive -Command \"(Get-CimInstance Win32_Process -Filter 'ProcessId = {pid}').CommandLine\"";
+            p.StartInfo.UseShellExecute = false;
+            p.StartInfo.RedirectStandardOutput = true;
+            p.StartInfo.CreateNoWindow = true;
+            p.Start();
+            var cmdLine = p.StandardOutput.ReadToEnd();
+            p.WaitForExit(1000);
+            return cmdLine;
+        }
+
+        /// <summary>`--flag value` 与 `--flag=value` 两种写法都认；值须匹配 <paramref name="valuePattern"/>，
+        /// `--flag_xxx` 这类更长的参数名不算命中。</summary>
+        internal static string? MatchCommandFlag(string? commandLine, string flag, string valuePattern)
+        {
+            if (string.IsNullOrEmpty(commandLine)) return null;
+            var match = System.Text.RegularExpressions.Regex.Match(
+                commandLine, System.Text.RegularExpressions.Regex.Escape(flag) + @"(?:[=\s]+)(" + valuePattern + ")");
+            return match.Success ? match.Groups[1].Value : null;
+        }
+
+        // ---- 读另一个进程的环境变量 ----
+        // 新版 language_server 不再从命令行读 CSRF token（WMI 对所有用户可见），改读环境变量。
+        // 环境块在目标进程的 PEB 里：NtQueryInformationProcess 取 PEB → ProcessParameters →
+        // Environment 指针，再 ReadProcessMemory。只支持 64 位目标（Antigravity 的
+        // language_server 没有 32 位版本）；任何一步失败都返回 null，调用方照常退回远程链路。
+        internal const string LanguageServerCsrfEnvironmentKey = "ANTIGRAVITY_SERVER_CSRF_TOKEN";
+
+        private const uint PROCESS_QUERY_INFORMATION = 0x0400;
+        private const uint PROCESS_VM_READ = 0x0010;
+        // x64 与 ARM64 在这两处的布局一致
+        private const int ProcessParametersOffset = 0x20;
+        private const int EnvironmentOffset = 0x80;
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct PROCESS_BASIC_INFORMATION
+        {
+            public IntPtr Reserved1;
+            public IntPtr PebBaseAddress;
+            public IntPtr Reserved2_0;
+            public IntPtr Reserved2_1;
+            public IntPtr UniqueProcessId;
+            public IntPtr Reserved3;
+        }
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern IntPtr OpenProcess(uint desiredAccess, bool inheritHandle, int processId);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool ReadProcessMemory(IntPtr hProcess, IntPtr lpBaseAddress, [Out] byte[] lpBuffer, IntPtr nSize, out IntPtr lpNumberOfBytesRead);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool IsWow64Process(IntPtr hProcess, [MarshalAs(UnmanagedType.Bool)] out bool wow64Process);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool CloseHandle(IntPtr hObject);
+
+        [DllImport("ntdll.dll")]
+        private static extern int NtQueryInformationProcess(IntPtr processHandle, int processInformationClass,
+            ref PROCESS_BASIC_INFORMATION processInformation, int processInformationLength, out int returnLength);
+
+        /// <summary>读另一个进程的环境变量；拿不到就返回 null。</summary>
+        internal static string? ReadProcessEnvironmentVariable(int pid, string key)
+        {
+            // 下面的偏移量只对「64 位进程读 64 位目标」这一种布局成立
+            if (!Environment.Is64BitProcess) return null;
+
+            var handle = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, pid);
+            if (handle == IntPtr.Zero) return null;
+            try
+            {
+                if (!IsWow64Process(handle, out var wow64) || wow64) return null;
+
+                var info = new PROCESS_BASIC_INFORMATION();
+                var status = NtQueryInformationProcess(handle, 0, ref info, Marshal.SizeOf<PROCESS_BASIC_INFORMATION>(), out _);
+                if (status != 0 || !TryReadPointer(handle, info.PebBaseAddress + ProcessParametersOffset, out var parameters)) return null;
+                if (!TryReadPointer(handle, parameters + EnvironmentOffset, out var environment) || environment == IntPtr.Zero) return null;
+                if (!TryReadEnvironmentBlock(handle, environment, out var block)) return null;
+                return FindEnvironmentVariable(block, key);
+            }
+            finally
+            {
+                CloseHandle(handle);
+            }
+        }
+
+        private static bool TryReadPointer(IntPtr handle, IntPtr address, out IntPtr value)
+        {
+            var buffer = new byte[IntPtr.Size];
+            value = IntPtr.Zero;
+            if (!ReadProcessMemory(handle, address, buffer, (IntPtr)buffer.Length, out var read) || read != (IntPtr)buffer.Length) return false;
+            value = IntPtr.Size == 8 ? (IntPtr)BitConverter.ToInt64(buffer, 0) : (IntPtr)BitConverter.ToInt32(buffer, 0);
+            return true;
+        }
+
+        /// <summary>按块读环境块（UTF-16，以连续两个 NUL 结尾），最多读 64KB，读到结尾或不可读的页为止。</summary>
+        private static bool TryReadEnvironmentBlock(IntPtr handle, IntPtr address, out string block)
+        {
+            const int maxBytes = 64 * 1024;
+            var bytes = new byte[maxBytes];
+            var total = 0;
+            while (total < bytes.Length)
+            {
+                if (!TryReadChunk(handle, address + total, Math.Min(4096, bytes.Length - total), out var chunk) || chunk.Length == 0) break;
+                Buffer.BlockCopy(chunk, 0, bytes, total, chunk.Length);
+                var from = total;
+                total += chunk.Length;
+                if (HasBlockTerminator(bytes, from, total)) break;
+            }
+
+            block = total > 0 ? Encoding.Unicode.GetString(bytes, 0, total) : "";
+            return total > 0;
+        }
+
+        /// <summary>读一块；整块跨到不可读的页会整块失败，那就对半缩小再试，最小 16 字节。</summary>
+        private static bool TryReadChunk(IntPtr handle, IntPtr address, int size, out byte[] chunk)
+        {
+            for (var attempt = size; attempt >= 16; attempt /= 2)
+            {
+                var buffer = new byte[attempt];
+                if (ReadProcessMemory(handle, address, buffer, (IntPtr)attempt, out var read) && read.ToInt64() > 0)
+                {
+                    var count = (int)Math.Min(read.ToInt64(), attempt);
+                    chunk = count == attempt ? buffer : buffer[..count];
+                    return true;
+                }
+            }
+            chunk = Array.Empty<byte>();
+            return false;
+        }
+
+        /// <summary>环境块末尾的连续两个 NUL（UTF-16 下是 4 个零字节）。</summary>
+        internal static bool HasBlockTerminator(byte[] bytes, int from, int to)
+        {
+            for (var i = Math.Max(0, from) & ~1; i + 4 <= to; i += 2)
+            {
+                if (bytes[i] == 0 && bytes[i + 1] == 0 && bytes[i + 2] == 0 && bytes[i + 3] == 0) return true;
+            }
+            return false;
+        }
+
+        /// <summary>环境块按 NUL 分条、每条 KEY=VALUE；变量名不分大小写。</summary>
+        internal static string? FindEnvironmentVariable(string block, string key)
+        {
+            var prefix = key + "=";
+            foreach (var entry in block.Split('\0'))
+            {
+                if (entry.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return entry[prefix.Length..];
+            }
+            return null;
         }
 
         /// <summary>
@@ -1366,17 +1618,19 @@ namespace TokenBar.Services
         /// "Gemini Models" group's weekly / 5-hour buckets to TokenWindows, alongside any "Gemini 4 Argon" scoped quota bucket.
         /// Throws QuotaAuthException on 401/403 so the caller can refresh and retry.
         ///
-        /// 两个配额端点返回的分组集不同（实测 daily 端点只回 "Claude and GPT models" 组，
-        /// Gemini 组只在 cloudcode-pa 上），所以不能「第一个 2xx 就用」：逐个端点解析，
-        /// 直到某个响应里解析出 Gemini 组；全部没有再走按模型聚合的回退。此前 daily 排
-        /// 第一且首个 2xx 即返回，Gemini 组永远匹配不上，静默退化到只产 5h 窗口的回退——
-        /// 这正是「只有 5 小时额度、没有每周额度」那次线上问题的根因。
+        /// 两个配额端点不能「第一个 2xx 就用」，逐个端点解析，直到某个响应里解析出 Gemini 组；
+        /// 全部没有再走按模型聚合的回退。此前 daily 排第一且首个 2xx 即返回，Gemini 组永远
+        /// 匹配不上，静默退化到只产 5h 窗口的回退——这正是「只有 5 小时额度、没有每周额度」
+        /// 那次线上问题的根因。
+        ///
+        /// 端点顺序必须是官方客户端在用的那个优先（OrderedCloudCodeQuotaBases）：两套后端各自记账，
+        /// 排错顺序时先命中的是另一套上恒为满额的 Gemini 桶，「Gemini 永远 100%」的根因。
         /// </summary>
         private async Task<(TokenWindow? FiveHour, TokenWindow? Weekly, TokenWindow? ScopedWeekly)> FetchAntigravityQuotaCoreAsync(string accessToken, CancellationToken ct)
         {
             Exception? lastError = null;
             var sawSuccessfulSummary = false;
-            foreach (var baseUrl in CloudCodeQuotaBases)
+            foreach (var baseUrl in OrderedCloudCodeQuotaBases)
             {
                 try
                 {
@@ -1539,7 +1793,7 @@ namespace TokenBar.Services
         private async Task<string> PostCloudCodeAsync(string accessToken, string path, CancellationToken ct)
         {
             Exception? lastEx = null;
-            foreach (var baseUrl in CloudCodeQuotaBases)
+            foreach (var baseUrl in OrderedCloudCodeQuotaBases)
             {
                 try
                 {

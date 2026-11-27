@@ -19,10 +19,16 @@ public actor GeminiService {
 
     // Antigravity (Google Code Assist) quota backend endpoints.
     // 分组返回集可能随端点和客户端版本变化，逐端点解析后再决定是否回退。
+    // 两套后端各自记账：官方客户端只往其中一套发请求，另一套上同名的 Gemini 桶恒为满额。
+    // 2026-11-26 对照实测：IDE 把 language_server 钉在 daily 上，真实用量只记在 daily；
+    // cloudcode-pa 回的 weekly/5h remainingFraction 恒为 1。此前 cloudcode-pa 排第一且
+    // 「首个解析出 Gemini 组的响应就用」，Gemini 卡片于是永远 100%。
+    // 默认顺序跟随官方客户端当前的常量（daily 优先）；实际顺序见 orderedCloudCodeEndpoints。
     private static let cloudCodeEndpoints = [
-        "https://cloudcode-pa.googleapis.com",
-        "https://daily-cloudcode-pa.googleapis.com"
+        "https://daily-cloudcode-pa.googleapis.com",
+        "https://cloudcode-pa.googleapis.com"
     ]
+    static let preferredCloudCodeEndpointKey = "geminiCloudCodeEndpoint"
 
     // 配额后端按 User-Agent 中的客户端版本选择返回分组。2026-10-22 对照实测：
     // 裸 "antigravity" 和 1.0.0 仅返回 Claude/GPT 组；官方 2.25.0 协议版本
@@ -179,7 +185,8 @@ public actor GeminiService {
     }
     private var lastTokenRefreshFailure: RefreshFailure?
 
-    // 测试仅替换令牌刷新边界，不访问真实账号、钥匙串或已安装二进制。
+    // 测试仅替换网络与令牌刷新边界（令牌端点与 CloudCode 额度请求都走 send），
+    // 不访问真实账号、钥匙串或已安装二进制。
     struct TokenRefreshEnvironment: Sendable {
         var candidates: @Sendable () async -> [(id: String, secret: String)]
         var send: @Sendable (URLRequest) async throws -> (Data, URLResponse)
@@ -866,6 +873,17 @@ public actor GeminiService {
         let ports: [Int]
     }
 
+    /// 一次进程扫描的结果。`cloudCodeEndpoint` 只要看到启动参数就带上，与探针能否查通无关——
+    /// 查不通时远程链路仍然要跟着官方客户端的端点走。
+    struct LocalLanguageServerScan: Sendable {
+        var candidates: [LocalLanguageServerCandidate] = []
+        var cloudCodeEndpoint: String?
+    }
+
+    /// 新版 language_server 不再从 argv 读 CSRF token（argv 对所有用户可见），改读环境变量；
+    /// 旧版仍是 `--csrf_token`。两种来源都要认，否则 IDE 一升级快速通道就静默失效。
+    static let languageServerCsrfEnvironmentKey = "ANTIGRAVITY_SERVER_CSRF_TOKEN"
+
     /// 探测本地正在运行的 Antigravity LanguageServer（Connect-RPC 端口）。
     /// 当用户在 Antigravity IDE 中使用时，IDE 启动的 language_server 进程直接提供包含「Gemini 4 Argon」在内的全量实时额度。
     func fetchLocalAntigravityQuota() async -> (fiveHour: TokenWindow?, weekly: TokenWindow?, scopedWeekly: TokenWindow?)? {
@@ -878,8 +896,9 @@ public actor GeminiService {
         }
 
         // 2. 扫描本地 language_server 进程及其监听端口
-        guard let servers = await findLocalLanguageServers() else { return nil }
-        for server in servers {
+        let scan = await findLocalLanguageServers()
+        if let endpoint = scan.cloudCodeEndpoint { noteOfficialCloudCodeEndpoint(endpoint) }
+        for server in scan.candidates {
             for port in server.ports {
                 if let result = await tryQueryLanguageServerQuota(port: port, csrfToken: server.csrfToken) {
                     Self.cachedLocalServerEndpoint = (port, server.csrfToken)
@@ -916,82 +935,142 @@ public actor GeminiService {
         return nil
     }
 
-    private func findLocalLanguageServers() async -> [LocalLanguageServerCandidate]? {
+    private func findLocalLanguageServers() async -> LocalLanguageServerScan {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: "/bin/ps")
-                process.arguments = ["-A", "-o", "pid,command"]
-                let pipe = Pipe()
-                process.standardOutput = pipe
-                process.standardError = FileHandle.nullDevice
-                do {
-                    try process.run()
-                    let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                    process.waitUntilExit()
-                    guard let output = String(data: data, encoding: .utf8) else {
-                        continuation.resume(returning: nil)
-                        return
-                    }
-
-                    var rawCandidates: [(pid: pid_t, csrf: String)] = []
-                    for line in output.components(separatedBy: .newlines) {
-                        guard line.contains("language_server") && line.contains("--csrf_token") else { continue }
-                        let trimmed = line.trimmingCharacters(in: .whitespaces)
-                        let parts = trimmed.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
-                        guard let pidStr = parts.first, let pid = Int32(pidStr) else { continue }
-                        guard let range = line.range(of: "--csrf_token") else { continue }
-                        let sub = line[range.upperBound...]
-                        let tokenParts = sub.split(whereSeparator: { $0 == " " || $0 == "=" })
-                        guard let first = tokenParts.first else { continue }
-                        let token = String(first).trimmingCharacters(in: .whitespacesAndNewlines)
-                        if !token.isEmpty {
-                            rawCandidates.append((pid, token))
-                        }
-                    }
-
-                    guard !rawCandidates.isEmpty else {
-                        continuation.resume(returning: nil)
-                        return
-                    }
-
-                    var candidates: [LocalLanguageServerCandidate] = []
-                    for cand in rawCandidates {
-                        let lsof = Process()
-                        lsof.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
-                        lsof.arguments = ["-a", "-p", "\(cand.pid)", "-i", "-sTCP:LISTEN", "-n", "-P"]
-                        let lsofPipe = Pipe()
-                        lsof.standardOutput = lsofPipe
-                        lsof.standardError = FileHandle.nullDevice
-                        try lsof.run()
-                        let lsofData = lsofPipe.fileHandleForReading.readDataToEndOfFile()
-                        lsof.waitUntilExit()
-
-                        guard let lsofOutput = String(data: lsofData, encoding: .utf8) else { continue }
-                        var ports: [Int] = []
-                        for line in lsofOutput.components(separatedBy: .newlines) {
-                            guard line.contains("LISTEN") else { continue }
-                            if let colonIdx = line.range(of: ":", options: .backwards) {
-                                let afterColon = line[colonIdx.upperBound...]
-                                if let endIdx = afterColon.range(of: " ") {
-                                    let portStr = String(afterColon[..<endIdx.lowerBound]).trimmingCharacters(in: .whitespaces)
-                                    if let p = Int(portStr), !ports.contains(p) {
-                                        ports.append(p)
-                                    }
-                                }
-                            }
-                        }
-                        if !ports.isEmpty {
-                            candidates.append(LocalLanguageServerCandidate(pid: cand.pid, csrfToken: cand.csrf, ports: ports))
-                        }
-                    }
-
-                    continuation.resume(returning: candidates.isEmpty ? nil : candidates)
-                } catch {
-                    continuation.resume(returning: nil)
-                }
+                continuation.resume(returning: Self.scanLocalLanguageServers(
+                    processList: Self.runSystemTool("/bin/ps", ["-ww", "-A", "-o", "pid,command"]),
+                    // ps eww 只对本人进程显示环境变量。输出里还有该进程的其它环境变量，
+                    // 只取要的那一个，用完即弃，绝不落日志。
+                    environment: { Self.runSystemTool("/bin/ps", ["eww", "-o", "command=", "-p", "\($0)"]) },
+                    listeningPorts: Self.listeningPorts
+                ))
             }
         }
+    }
+
+    /// 纯扫描逻辑：从 `ps -A -o pid,command` 的输出里挑出 language_server 进程，
+    /// 取 CSRF token（argv 或环境变量）与额度端点（`--cloud_code_endpoint`）。
+    /// 三个输入都注入，单测用 fixture 喂，不依赖本机装没装 Antigravity。
+    static func scanLocalLanguageServers(
+        processList: String?,
+        environment: (pid_t) -> String?,
+        listeningPorts: (pid_t) -> [Int]
+    ) -> LocalLanguageServerScan {
+        var scan = LocalLanguageServerScan()
+        guard let processList else { return scan }
+        for line in processList.components(separatedBy: .newlines) {
+            guard line.contains("language_server") else { continue }
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard let pidStr = trimmed.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true).first,
+                  let pid = Int32(pidStr) else { continue }
+
+            if scan.cloudCodeEndpoint == nil, let endpoint = commandFlag(line, name: "--cloud_code_endpoint") {
+                scan.cloudCodeEndpoint = endpoint
+            }
+
+            let csrfToken = commandFlag(line, name: "--csrf_token")
+                ?? environment(pid).flatMap { environmentValue($0, key: languageServerCsrfEnvironmentKey) }
+            guard let csrfToken, !csrfToken.isEmpty else { continue }
+
+            let ports = listeningPorts(pid)
+            guard !ports.isEmpty else { continue }
+            scan.candidates.append(LocalLanguageServerCandidate(pid: pid, csrfToken: csrfToken, ports: ports))
+        }
+        return scan
+    }
+
+    /// `--flag value` 与 `--flag=value` 两种写法都认；`--flag_xxx` 这类更长的参数名不算命中。
+    static func commandFlag(_ line: String, name: String) -> String? {
+        var searchRange = line.startIndex..<line.endIndex
+        while let range = line.range(of: name, range: searchRange) {
+            var after = line[range.upperBound...]
+            if after.first == "=" {
+                after = after.dropFirst()
+            } else if let next = after.first, next != " " {
+                searchRange = range.upperBound..<line.endIndex
+                continue
+            }
+            return after.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true).first.map(String.init)
+        }
+        return nil
+    }
+
+    /// `ps eww` 把环境变量以 `KEY=VALUE` 追加在命令行后面，取指定的一项。
+    static func environmentValue(_ psOutput: String, key: String) -> String? {
+        var searchRange = psOutput.startIndex..<psOutput.endIndex
+        while let range = psOutput.range(of: key + "=", range: searchRange) {
+            // 必须是一项的开头，不能是别的值里恰好包含的片段
+            let startsEntry = range.lowerBound == psOutput.startIndex
+                || psOutput[psOutput.index(before: range.lowerBound)].isWhitespace
+            let after = psOutput[range.upperBound...]
+            if startsEntry,
+               let value = after.split(maxSplits: 1, omittingEmptySubsequences: true, whereSeparator: { $0.isWhitespace }).first,
+               !value.isEmpty {
+                return String(value)
+            }
+            searchRange = range.upperBound..<psOutput.endIndex
+        }
+        return nil
+    }
+
+    /// 跑一个系统工具取标准输出；启动失败返回 nil，标准错误一律丢弃。
+    private static func runSystemTool(_ path: String, _ arguments: [String]) -> String? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: path)
+        process.arguments = arguments
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            return String(data: data, encoding: .utf8)
+        } catch {
+            return nil
+        }
+    }
+
+    /// 该进程正在监听的 TCP 端口（lsof -n -P：不解析主机名与服务名）。
+    private static func listeningPorts(pid: pid_t) -> [Int] {
+        guard let lsofOutput = runSystemTool("/usr/sbin/lsof", ["-a", "-p", "\(pid)", "-i", "-sTCP:LISTEN", "-n", "-P"]) else { return [] }
+        var ports: [Int] = []
+        for line in lsofOutput.components(separatedBy: .newlines) {
+            guard line.contains("LISTEN"),
+                  let colonIdx = line.range(of: ":", options: .backwards) else { continue }
+            let afterColon = line[colonIdx.upperBound...]
+            guard let endIdx = afterColon.range(of: " ") else { continue }
+            let portStr = String(afterColon[..<endIdx.lowerBound]).trimmingCharacters(in: .whitespaces)
+            if let port = Int(portStr), !ports.contains(port) {
+                ports.append(port)
+            }
+        }
+        return ports
+    }
+
+    /// 远程链路优先命中的额度端点：本地 language_server 启动参数里的 --cloud_code_endpoint。
+    /// 落盘是为了 IDE 没开的那几轮（含重启后）也跟着官方客户端走。
+    private(set) var preferredCloudCodeEndpoint: String? = UserDefaults.standard.string(forKey: preferredCloudCodeEndpointKey)
+
+    /// 额度请求的端点顺序：官方客户端在用的那个排第一，其余按默认顺序跟在后面。
+    /// 只在已知端点之间换位——启动参数里出现陌生主机时不跟随，access token 不会被送去别处。
+    static func orderedCloudCodeEndpoints(preferred: String?, defaults: [String] = cloudCodeEndpoints) -> [String] {
+        guard let preferred, let index = defaults.firstIndex(of: preferred), index != 0 else { return defaults }
+        return [defaults[index]] + defaults[0..<index] + defaults[(index + 1)...]
+    }
+
+    private var orderedCloudCodeEndpoints: [String] {
+        Self.orderedCloudCodeEndpoints(preferred: preferredCloudCodeEndpoint)
+    }
+
+    /// 记下官方客户端实际在用的额度端点（来自 language_server 的 --cloud_code_endpoint）。
+    func noteOfficialCloudCodeEndpoint(_ rawEndpoint: String) {
+        let endpoint = rawEndpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard Self.cloudCodeEndpoints.contains(endpoint), endpoint != preferredCloudCodeEndpoint else { return }
+        preferredCloudCodeEndpoint = endpoint
+        UserDefaults.standard.set(endpoint, forKey: Self.preferredCloudCodeEndpointKey)
+        Log.provider.notice("provider=gemini 额度端点跟随本地 Antigravity 客户端：\(endpoint, privacy: .public)")
     }
 
     /// Fetch Gemini usage quota and window limits from the Antigravity (Google Code Assist)
@@ -1147,14 +1226,17 @@ public actor GeminiService {
     /// Maps the "Gemini Models" group's weekly / 5-hour buckets of retrieveUserQuotaSummary to TokenWindows,
     /// alongside any "Gemini 4 Argon" scoped quota bucket.
     ///
-    /// 两个配额端点返回的分组集可能不同，所以不能「第一个 2xx 就用」：逐个端点解析，
-    /// 直到某个响应里解析出 Gemini 组；全部没有再走按模型聚合的回退。此前 daily 排
-    /// 第一且首个 2xx 即返回，Gemini 组永远匹配不上，静默退化到只产 5h 窗口的回退——
-    /// 这正是「只有 5 小时额度、没有每周额度」那次线上问题的根因。
-    private func fetchAntigravityQuota(accessToken: String) async throws -> (TokenWindow?, TokenWindow?, TokenWindow?) {
+    /// 两个配额端点不能「第一个 2xx 就用」，逐个端点解析，直到某个响应里解析出 Gemini 组；
+    /// 全部没有再走按模型聚合的回退。此前 daily 排第一且首个 2xx 即返回，Gemini 组永远
+    /// 匹配不上，静默退化到只产 5h 窗口的回退——这正是「只有 5 小时额度、没有每周额度」
+    /// 那次线上问题的根因。
+    ///
+    /// 端点顺序必须是官方客户端在用的那个优先（orderedCloudCodeEndpoints）：两套后端各自记账，
+    /// 排错顺序时先命中的是另一套上恒为满额的 Gemini 桶，「Gemini 永远 100%」的根因。
+    func fetchAntigravityQuota(accessToken: String) async throws -> (TokenWindow?, TokenWindow?, TokenWindow?) {
         var lastError: Error?
         var sawSuccessfulSummary = false
-        for base in Self.cloudCodeEndpoints {
+        for base in orderedCloudCodeEndpoints {
             try Task.checkCancellation()
             do {
                 let summary = try await postCloudCodeOnce(accessToken: accessToken, path: "/v1internal:retrieveUserQuotaSummary", base: base)
@@ -1257,7 +1339,7 @@ public actor GeminiService {
     /// 必须走 fetchAntigravityQuota 的逐端点解析。
     private func postCloudCode(accessToken: String, path: String) async throws -> [String: Any] {
         var lastError: Error?
-        for base in Self.cloudCodeEndpoints {
+        for base in orderedCloudCodeEndpoints {
             try Task.checkCancellation()
             do {
                 return try await postCloudCodeOnce(accessToken: accessToken, path: path, base: base)
@@ -1289,7 +1371,12 @@ public actor GeminiService {
         req.httpBody = Data("{}".utf8)
         req.timeoutInterval = 15
 
-        let (data, resp) = try await HTTPClient.data(for: req)
+        let (data, resp): (Data, URLResponse)
+        if let environment = tokenRefreshEnvironment {
+            (data, resp) = try await environment.send(req)
+        } else {
+            (data, resp) = try await HTTPClient.data(for: req)
+        }
         try Task.checkCancellation()
         guard let http = resp as? HTTPURLResponse else { throw URLError(.badServerResponse) }
         if http.statusCode == 401 || http.statusCode == 403 {

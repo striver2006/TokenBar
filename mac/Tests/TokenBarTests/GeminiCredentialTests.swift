@@ -2,7 +2,31 @@ import XCTest
 import SwiftUI
 @testable import TokenBar
 
+/// retrieveUserQuotaSummary 的假端点：按 host 回响应体，没登记的 host 当作连不上。
+private actor GeminiQuotaEndpointFixture {
+    private(set) var requestedHosts: [String] = []
+    private let responses: [String: String]
+    init(_ responses: [String: String]) { self.responses = responses }
+    func send(_ request: URLRequest) throws -> (Data, URLResponse) {
+        let url = request.url!
+        requestedHosts.append(url.host ?? "")
+        guard let body = responses[url.host ?? ""] else { throw URLError(.cannotConnectToHost) }
+        return (Data(body.utf8), HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+    }
+}
+
 final class GeminiCredentialTests: XCTestCase {
+    override func tearDown() {
+        // 官方端点的偏好会落盘；测试进程里不能让用例之间串味
+        UserDefaults.standard.removeObject(forKey: GeminiService.preferredCloudCodeEndpointKey)
+        super.tearDown()
+    }
+
+    private func quotaService(_ fixture: GeminiQuotaEndpointFixture) -> GeminiService {
+        UserDefaults.standard.removeObject(forKey: GeminiService.preferredCloudCodeEndpointKey)
+        return GeminiService(tokenRefreshEnvironment: .init(candidates: { [] }, send: { try await fixture.send($0) }))
+    }
+
     func testGeminiLocalFilesParserFromFixture() throws {
         // 临时目录充当 home，三个文件全部用 fixture，不依赖本机 ~/.gemini
         let home = FileManager.default.temporaryDirectory.appendingPathComponent("tokenbar-gemini-\(UUID().uuidString)")
@@ -323,5 +347,185 @@ final class GeminiCredentialTests: XCTestCase {
                 XCTAssertEqual(argon.titleKind, .custom("Gemini 4 Argon"))
             }
         }
+    }
+
+    // MARK: - 本地 LanguageServer 进程扫描
+
+    /// Antigravity 2.35.2 实测启动参数：argv 里没有 --csrf_token（ps 对同机所有用户可见），
+    /// CSRF token 改经环境变量 ANTIGRAVITY_SERVER_CSRF_TOKEN 传入。只认 argv 的话，
+    /// IDE 一升级快速通道就静默失效，退回远程链路。
+    private static let currentLanguageServerLine = """
+    23335 /Applications/Antigravity.app/Contents/Resources/bin/language_server --standalone --override_ide_name antigravity --subclient_type hub --override_ide_version 2.35.2 --override_user_agent_name antigravity --https_server_port 0 --app_data_dir antigravity --api_server_url https://generativelanguage.googleapis.com --cloud_code_endpoint https://daily-cloudcode-pa.googleapis.com --enable_sidecars --host_bridge_url=http://127.0.0.1:58058 --read_host_bridge_token_from_stdin
+    """
+    private static let legacyLanguageServerLine = """
+    4242 /Applications/Antigravity.app/Contents/Resources/app/extensions/language_server_macos --api_server_url https://server.codeium.com --csrf_token 11111111-2222-3333-4444-555555555555 --cloud_code_endpoint https://cloudcode-pa.googleapis.com
+    """
+    private static let psEnvironmentDump = """
+    /Applications/Antigravity.app/Contents/Resources/bin/language_server --standalone HOME=/Users/demo PATH=/usr/bin:/bin ANTIGRAVITY_SERVER_CSRF_TOKEN=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee AGY_REQUIRE_AUTHENTICATED_UI_BOOTSTRAP=1
+    """
+
+    func testScanReadsCsrfTokenFromEnvironmentWhenArgvNoLongerCarriesIt() {
+        var environmentProbes: [pid_t] = []
+        let scan = GeminiService.scanLocalLanguageServers(
+            processList: "  100 /Applications/Safari.app/Contents/MacOS/Safari\n\(Self.currentLanguageServerLine)\n",
+            environment: { pid in environmentProbes.append(pid); return Self.psEnvironmentDump },
+            listeningPorts: { _ in [58071, 58072] }
+        )
+
+        XCTAssertEqual(scan.cloudCodeEndpoint, "https://daily-cloudcode-pa.googleapis.com")
+        XCTAssertEqual(scan.candidates.map(\.pid), [23335])
+        XCTAssertEqual(scan.candidates.first?.csrfToken, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+        XCTAssertEqual(scan.candidates.first?.ports, [58071, 58072])
+        XCTAssertEqual(environmentProbes, [23335], "只为 language_server 进程读环境")
+    }
+
+    func testScanKeepsLegacyArgvTokenWithoutReadingEnvironment() {
+        var environmentProbes = 0
+        let scan = GeminiService.scanLocalLanguageServers(
+            processList: Self.legacyLanguageServerLine,
+            environment: { _ in environmentProbes += 1; return nil },
+            listeningPorts: { _ in [41234] }
+        )
+
+        XCTAssertEqual(scan.candidates.first?.csrfToken, "11111111-2222-3333-4444-555555555555")
+        XCTAssertEqual(scan.cloudCodeEndpoint, "https://cloudcode-pa.googleapis.com")
+        XCTAssertEqual(environmentProbes, 0, "argv 里有 token 就不必再读环境")
+    }
+
+    func testScanRecordsOfficialEndpointEvenWithoutReadableToken() {
+        let scan = GeminiService.scanLocalLanguageServers(
+            processList: Self.currentLanguageServerLine,
+            environment: { _ in "HOME=/Users/demo" },
+            listeningPorts: { _ in [58071] }
+        )
+
+        XCTAssertTrue(scan.candidates.isEmpty, "拿不到 token 就没有可查询的探针")
+        XCTAssertEqual(scan.cloudCodeEndpoint, "https://daily-cloudcode-pa.googleapis.com", "端点仍要带回：远程链路靠它跟随官方客户端")
+    }
+
+    func testScanWithoutProcessListYieldsNothing() {
+        let scan = GeminiService.scanLocalLanguageServers(processList: nil, environment: { _ in nil }, listeningPorts: { _ in [] })
+        XCTAssertNil(scan.cloudCodeEndpoint)
+        XCTAssertTrue(scan.candidates.isEmpty)
+    }
+
+    func testCommandFlagAcceptsBothArgumentForms() {
+        let line = "--csrf_token 1111-2222 --host_bridge_url=http://127.0.0.1:58058"
+        XCTAssertEqual(GeminiService.commandFlag(line, name: "--csrf_token"), "1111-2222")
+        XCTAssertEqual(GeminiService.commandFlag(line, name: "--host_bridge_url"), "http://127.0.0.1:58058")
+        XCTAssertNil(GeminiService.commandFlag("ls --csrf_token", name: "--csrf_token"), "有参数名没有值")
+        XCTAssertNil(GeminiService.commandFlag("ls --csrf_token_file=/tmp/x", name: "--csrf_token"), "更长的参数名不算命中")
+    }
+
+    func testEnvironmentValueRequiresWholeEntry() {
+        let dump = Self.psEnvironmentDump
+        XCTAssertEqual(GeminiService.environmentValue(dump, key: "ANTIGRAVITY_SERVER_CSRF_TOKEN"), "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+        XCTAssertNil(GeminiService.environmentValue(dump, key: "MISSING_KEY"))
+        XCTAssertNil(GeminiService.environmentValue("XANTIGRAVITY_SERVER_CSRF_TOKEN=nope", key: "ANTIGRAVITY_SERVER_CSRF_TOKEN"))
+        // 环境从下一行开始也算一项的开头
+        XCTAssertEqual(GeminiService.environmentValue("ls --standalone\nANTIGRAVITY_SERVER_CSRF_TOKEN=next-line\n", key: "ANTIGRAVITY_SERVER_CSRF_TOKEN"), "next-line")
+    }
+
+    // MARK: - 额度端点选择（两套后端各自记账）
+
+    /// 守的是「Gemini 永远 100%」那次线上事故：官方客户端在 daily 上消费，另一套后端上
+    /// 同名的 Gemini 桶没人动过、恒为满额。旧逻辑 cloudcode-pa 排第一，且首个解析出
+    /// Gemini 组的响应就用，于是拿到的是那套满额的桶。
+    private let dailyHost = "daily-cloudcode-pa.googleapis.com"
+    private let prodHost = "cloudcode-pa.googleapis.com"
+
+    private func geminiSummaryBody(weeklyRemaining: Double, fiveHourRemaining: Double) throws -> String {
+        let summary = quotaSummaryJSON(groups: [[
+            "displayName": "Gemini Models",
+            "buckets": [
+                bucket(["bucketId": "gemini-weekly", "window": "weekly", "remainingFraction": weeklyRemaining, "resetTime": "2030-01-01T00:00:00Z"]),
+                bucket(["bucketId": "gemini-5h", "window": "5h", "remainingFraction": fiveHourRemaining, "resetTime": "2030-01-01T00:00:00Z"])
+            ]
+        ]])
+        return String(data: try JSONSerialization.data(withJSONObject: summary), encoding: .utf8)!
+    }
+
+    func testQuotaSummaryDefaultsToTheEndpointTheOfficialClientUses() async throws {
+        // 2026-11-26 实测读数：daily 上有真实用量，prod 上恒为 1
+        let fixture = GeminiQuotaEndpointFixture([
+            dailyHost: try geminiSummaryBody(weeklyRemaining: 0.9689531, fiveHourRemaining: 0.89581203),
+            prodHost: try geminiSummaryBody(weeklyRemaining: 1, fiveHourRemaining: 1)
+        ])
+        let service = quotaService(fixture)
+
+        let (fiveHour, weekly, _) = try await service.fetchAntigravityQuota(accessToken: "fixture-access")
+
+        let hosts = await fixture.requestedHosts
+        XCTAssertEqual(hosts, [dailyHost], "默认 daily 优先，解析出 Gemini 组后不再碰另一套")
+        XCTAssertEqual(weekly?.remainingPercentage ?? 0, 96.89531, accuracy: 0.001)
+        XCTAssertEqual(fiveHour?.remainingPercentage ?? 0, 89.581203, accuracy: 0.001)
+    }
+
+    func testQuotaSummaryFollowsObservedOfficialEndpointWhenItIsProd() async throws {
+        let fixture = GeminiQuotaEndpointFixture([
+            dailyHost: try geminiSummaryBody(weeklyRemaining: 1, fiveHourRemaining: 1),
+            prodHost: try geminiSummaryBody(weeklyRemaining: 0.54, fiveHourRemaining: 0.72)
+        ])
+        let service = quotaService(fixture)
+        await service.noteOfficialCloudCodeEndpoint("https://\(prodHost)")
+
+        let (fiveHour, weekly, _) = try await service.fetchAntigravityQuota(accessToken: "fixture-access")
+
+        let hosts = await fixture.requestedHosts
+        XCTAssertEqual(hosts, [prodHost], "官方客户端钉在哪套后端，就先问哪套")
+        XCTAssertEqual(weekly?.remainingPercentage ?? 0, 54.0, accuracy: 0.001)
+        XCTAssertEqual(fiveHour?.remainingPercentage ?? 0, 72.0, accuracy: 0.001)
+    }
+
+    func testQuotaSummaryFallsThroughToNextEndpointWithoutGeminiGroup() async throws {
+        // daily 只回 Claude/GPT 组（2026-10 的 daily 形状）→ 继续试下一个端点，不能错拿别组的额度
+        let claudeOnly = String(data: try JSONSerialization.data(withJSONObject: quotaSummaryJSON(groups: [[
+            "displayName": "Claude and GPT models",
+            "buckets": [
+                bucket(["window": "weekly", "remainingFraction": 1]),
+                bucket(["window": "5h", "remainingFraction": 1])
+            ]
+        ]])), encoding: .utf8)!
+        let fixture = GeminiQuotaEndpointFixture([
+            dailyHost: claudeOnly,
+            prodHost: try geminiSummaryBody(weeklyRemaining: 0.54, fiveHourRemaining: 0.72)
+        ])
+        let service = quotaService(fixture)
+
+        let (fiveHour, weekly, _) = try await service.fetchAntigravityQuota(accessToken: "fixture-access")
+
+        let hosts = await fixture.requestedHosts
+        XCTAssertEqual(hosts, [dailyHost, prodHost])
+        XCTAssertEqual(weekly?.remainingPercentage ?? 0, 54.0, accuracy: 0.001)
+        XCTAssertEqual(fiveHour?.remainingPercentage ?? 0, 72.0, accuracy: 0.001)
+    }
+
+    func testQuotaEndpointOrderOnlyReordersKnownEndpoints() {
+        let defaults = ["a-daily", "b-prod", "c-other"]
+        XCTAssertEqual(GeminiService.orderedCloudCodeEndpoints(preferred: nil, defaults: defaults), defaults, "没观察到官方端点就用默认顺序")
+        XCTAssertEqual(GeminiService.orderedCloudCodeEndpoints(preferred: "b-prod", defaults: defaults), ["b-prod", "a-daily", "c-other"])
+        XCTAssertEqual(GeminiService.orderedCloudCodeEndpoints(preferred: "c-other", defaults: defaults), ["c-other", "a-daily", "b-prod"])
+        XCTAssertEqual(GeminiService.orderedCloudCodeEndpoints(preferred: "a-daily", defaults: defaults), defaults)
+        XCTAssertEqual(GeminiService.orderedCloudCodeEndpoints(preferred: "https://untrusted.example", defaults: defaults), defaults, "陌生主机不跟随：access token 不送去别处")
+        XCTAssertEqual(
+            GeminiService.orderedCloudCodeEndpoints(preferred: nil),
+            ["https://\(dailyHost)", "https://\(prodHost)"],
+            "默认顺序跟随官方客户端当前的常量"
+        )
+    }
+
+    func testOfficialEndpointPreferenceIsTrimmedPersistedAndIgnoresUnknownHosts() async {
+        let service = quotaService(GeminiQuotaEndpointFixture([:]))
+        var preferred = await service.preferredCloudCodeEndpoint
+        XCTAssertNil(preferred, "初始没有偏好")
+
+        await service.noteOfficialCloudCodeEndpoint(" https://\(prodHost) \n")
+        preferred = await service.preferredCloudCodeEndpoint
+        XCTAssertEqual(preferred, "https://\(prodHost)")
+        XCTAssertEqual(UserDefaults.standard.string(forKey: GeminiService.preferredCloudCodeEndpointKey), "https://\(prodHost)", "落盘：IDE 没开的那几轮也跟着走")
+
+        await service.noteOfficialCloudCodeEndpoint("https://untrusted.example")
+        preferred = await service.preferredCloudCodeEndpoint
+        XCTAssertEqual(preferred, "https://\(prodHost)", "陌生主机不改偏好")
     }
 }
